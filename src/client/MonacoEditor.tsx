@@ -37,10 +37,29 @@ function monacoColor(value: string, fallback: string): string {
 }
 
 /**
+ * VS Code 官方 Dark+ / Light+ 的语法色。
+ * 之前 rules 是空的、只靠 inherit 吃 Monaco 内置 vs/vs-dark 的规则，而内置规则比 VS Code
+ * 的默认主题少得多，多数 token 直接落到前景色，代码整体显得灰。这里按官方配色补齐。
+ * 注意 Monaco 的 foreground 不带 '#'。
+ */
+const SYNTAX_DARK: Record<string, string> = {
+  comment: '6a9955', string: 'ce9178', keyword: '569cd6', 'keyword.control': 'c586c0',
+  number: 'b5cea8', type: '4ec9b0', 'type.identifier': '4ec9b0', function: 'dcdcaa',
+  variable: '9cdcfe', 'variable.predefined': '4fc1ff', constant: '4fc1ff',
+  regexp: 'd16969', tag: '569cd6', attribute: '9cdcfe', delimiter: 'd4d4d4', operator: 'd4d4d4'
+}
+const SYNTAX_LIGHT: Record<string, string> = {
+  comment: '008000', string: 'a31515', keyword: '0000ff', 'keyword.control': 'af00db',
+  number: '098658', type: '267f99', 'type.identifier': '267f99', function: '795e26',
+  variable: '001080', 'variable.predefined': '0070c1', constant: '0070c1',
+  regexp: '811f3f', tag: '800000', attribute: 'e50000', delimiter: '000000', operator: '000000'
+}
+
+/**
  * 注册跟随 DSH 主题的 Monaco 主题并返回主题名。
  * Monaco 内置的 vs / vs-dark 用的是固定底色（#fffffe / #1e1e1e），与 DSH 的
  * --dsw-alias-bg-layer-1 不一致，暗色下编辑区会比周边暗一档；这里把底色、
- * 行号、选区、光标、控件与滚动条统一接到 DSH 令牌上。
+ * 行号、选区、光标、控件与滚动条统一接到 DSH 令牌上，语法色则按 VS Code 官方配色补齐。
  * 注册失败时回落到内置主题，绝不让异常冒到 slot 层。
  */
 export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string {
@@ -51,7 +70,7 @@ export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string 
     monaco.editor.defineTheme(name, {
       base: dark ? 'vs-dark' : 'vs',
       inherit: true,
-      rules: [],
+      rules: Object.entries(dark ? SYNTAX_DARK : SYNTAX_LIGHT).map(([token, foreground]) => ({ token, foreground })),
       colors: {
         'editor.background': color('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
         'editor.foreground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
