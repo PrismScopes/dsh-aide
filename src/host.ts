@@ -328,6 +328,15 @@ export function monacoAsset(raw: string): { path: string; type: string } {
 }
 
 /**
+ * Resolve vscode-oniguruma's WASM binary —— TextMate 语法背后的正则引擎。
+ * 走 HTTP 提供，客户端用 fetch + WebAssembly 加载。
+ */
+export function onigWasmAsset(): { path: string; type: string } {
+  const packageRoot = dirname(require.resolve('vscode-oniguruma/package.json'))
+  return { path: resolve(packageRoot, 'release', 'onig.wasm'), type: 'application/wasm' }
+}
+
+/**
  * Resolve one file-type icon from material-icon-theme (the theme VS Code ships by default).
  * The explorer renders these as <img>, so only the SVG files are served; the name→file mapping
  * lives in the client bundle (see scripts/generate-file-icons.mjs).

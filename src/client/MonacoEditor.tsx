@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import darkPlus from '@shikijs/themes/dark-plus'
+import lightPlus from '@shikijs/themes/light-plus'
+import { installTextMate } from './textmateHighlight.ts'
 
 type Monaco = typeof import('monaco-editor')
 declare global { interface Window { require?: { (ids: string[], done: () => void): void; config(value: unknown): void }; monaco?: Monaco } }
@@ -37,33 +40,31 @@ function monacoColor(value: string, fallback: string): string {
 }
 
 /**
- * VS Code 官方 Dark+ / Light+ 的语法色。
- * 之前 rules 是空的、只靠 inherit 吃 Monaco 内置 vs/vs-dark 的规则，而内置规则比 VS Code
- * 的默认主题少得多，多数 token 直接落到前景色，代码整体显得灰。这里按官方配色补齐。
- * 注意 Monaco 的 foreground 不带 '#'。
+ * 把 VS Code 官方主题的 tokenColors 原样转成 Monaco 的 rules。
+ * 两者都按 TextMate scope 命名，所以不需要映射表 —— 前提是分词器也换成 TextMate
+ * （见 textmateHighlight.ts），否则 Monaco 内置分词产出的 token 名与这些 scope 对不上。
  */
-const SYNTAX_DARK: Record<string, string> = {
-  comment: '6a9955', string: 'ce9178', keyword: '569cd6', 'keyword.control': 'c586c0',
-  number: 'b5cea8', type: '4ec9b0', 'type.identifier': '4ec9b0', function: 'dcdcaa',
-  variable: '9cdcfe', 'variable.predefined': '4fc1ff', constant: '4fc1ff',
-  // Monaco 把变量与函数统一归到 identifier，不像 VS Code 那样分开着色。给 identifier 上 VS Code 的
-  // 变量色，至少让标识符不再与普通文本同色 —— 这是当前分词粒度下最接近 VS Code 的做法。
-  identifier: '9cdcfe',
-  regexp: 'd16969', tag: '569cd6', attribute: '9cdcfe', delimiter: 'd4d4d4', operator: 'd4d4d4'
-}
-const SYNTAX_LIGHT: Record<string, string> = {
-  comment: '008000', string: 'a31515', keyword: '0000ff', 'keyword.control': 'af00db',
-  number: '098658', type: '267f99', 'type.identifier': '267f99', function: '795e26',
-  variable: '001080', 'variable.predefined': '0070c1', constant: '0070c1',
-  identifier: '001080',
-  regexp: '811f3f', tag: '800000', attribute: 'e50000', delimiter: '000000', operator: '000000'
+interface ThemeTokenColor { scope?: string | string[]; settings?: { foreground?: string; fontStyle?: string } }
+function themeRules(theme: { tokenColors?: ThemeTokenColor[] }): { token: string; foreground: string }[] {
+  const rules: { token: string; foreground: string }[] = []
+  for (const entry of theme.tokenColors ?? []) {
+    const foreground = entry.settings?.foreground
+    if (foreground === undefined) continue
+    const scopes = entry.scope === undefined ? [] : Array.isArray(entry.scope) ? entry.scope : [entry.scope]
+    for (const scope of scopes) {
+      // VS Code 的 scope 允许写成空格分隔的多级限定（如 "source.js meta.function"），取首段。
+      const token = scope.trim().split(/\s+/)[0] ?? ''
+      if (token !== '') rules.push({ token, foreground: foreground.replace(/^#/, '') })
+    }
+  }
+  return rules
 }
 
 /**
  * 注册跟随 DSH 主题的 Monaco 主题并返回主题名。
  * Monaco 内置的 vs / vs-dark 用的是固定底色（#fffffe / #1e1e1e），与 DSH 的
  * --dsw-alias-bg-layer-1 不一致，暗色下编辑区会比周边暗一档；这里把底色、
- * 行号、选区、光标、控件与滚动条统一接到 DSH 令牌上，语法色则按 VS Code 官方配色补齐。
+ * 行号、选区、光标、控件与滚动条统一接到 DSH 令牌上，语法色直接用 VS Code 官方主题。
  * 注册失败时回落到内置主题，绝不让异常冒到 slot 层。
  */
 export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string {
@@ -74,7 +75,7 @@ export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string 
     monaco.editor.defineTheme(name, {
       base: dark ? 'vs-dark' : 'vs',
       inherit: true,
-      rules: Object.entries(dark ? SYNTAX_DARK : SYNTAX_LIGHT).map(([token, foreground]) => ({ token, foreground })),
+      rules: themeRules(dark ? darkPlus : lightPlus),
       colors: {
         'editor.background': color('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
         'editor.foreground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
@@ -132,7 +133,7 @@ export function loadMonaco(): Promise<Monaco> {
 
 export function MonacoDiffEditor(props: { uri: string; original: string; modified: string; mode: 'inline' | 'split'; theme: 'dark' | 'light' }) {
   const root=useRef<HTMLDivElement>(null);const editor=useRef<import('monaco-editor').editor.IStandaloneDiffEditor>();const models=useRef<{original:import('monaco-editor').editor.ITextModel;modified:import('monaco-editor').editor.ITextModel}>();const [error,setError]=useState<string>()
-  useEffect(()=>{let disposed=false;void loadMonaco().then(monaco=>{if(disposed||root.current===null)return;const safe=props.uri.replace(/^\/+/, '');const original=monaco.editor.createModel(props.original,undefined,monaco.Uri.parse(`dvw-diff-original:///${safe}`));const modified=monaco.editor.createModel(props.modified,undefined,monaco.Uri.parse(`dvw-diff-modified:///${safe}`));models.current={original,modified};const instance=monaco.editor.createDiffEditor(root.current,{automaticLayout:true,readOnly:true,renderSideBySide:props.mode==='split',theme:dshMonacoTheme(monaco,props.theme),fontSize:14,...WORKBENCH_EDITOR_CHROME,originalEditable:false,ignoreTrimWhitespace:false});instance.setModel({original,modified});editor.current=instance}).catch(error=>setError(error instanceof Error?error.message:String(error)));return()=>{disposed=true;editor.current?.dispose();editor.current=undefined;models.current?.original.dispose();models.current?.modified.dispose();models.current=undefined}},[props.uri])
+  useEffect(()=>{let disposed=false;void loadMonaco().then(async monaco=>{if(disposed||root.current===null)return;const safe=props.uri.replace(/^\/+/, '');const original=monaco.editor.createModel(props.original,undefined,monaco.Uri.parse(`dvw-diff-original:///${safe}`));const modified=monaco.editor.createModel(props.modified,undefined,monaco.Uri.parse(`dvw-diff-modified:///${safe}`));models.current={original,modified};await installTextMate(monaco,[original.getLanguageId()]).catch(()=>undefined);if(disposed||root.current===null)return;const instance=monaco.editor.createDiffEditor(root.current,{automaticLayout:true,readOnly:true,renderSideBySide:props.mode==='split',theme:dshMonacoTheme(monaco,props.theme),fontSize:14,...WORKBENCH_EDITOR_CHROME,originalEditable:false,ignoreTrimWhitespace:false});instance.setModel({original,modified});editor.current=instance}).catch(error=>setError(error instanceof Error?error.message:String(error)));return()=>{disposed=true;editor.current?.dispose();editor.current=undefined;models.current?.original.dispose();models.current?.modified.dispose();models.current=undefined}},[props.uri])
   useEffect(()=>{const value=models.current;if(value===undefined)return;if(value.original.getValue()!==props.original)value.original.setValue(props.original);if(value.modified.getValue()!==props.modified)value.modified.setValue(props.modified)},[props.original,props.modified])
   useEffect(()=>{editor.current?.updateOptions({renderSideBySide:props.mode==='split'})},[props.mode])
   useEffect(()=>{if(window.monaco!==undefined)window.monaco.editor.setTheme(dshMonacoTheme(window.monaco,props.theme))},[props.theme])
@@ -147,11 +148,16 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
   const [error, setError] = useState<string>()
   useEffect(() => {
     let disposed = false; let model: import('monaco-editor').editor.ITextModel | undefined
-    void loadMonaco().then((monaco) => {
+    void loadMonaco().then(async (monaco) => {
       if (disposed || root.current === null) return
       const uri = monaco.Uri.parse(`file:///${props.uri.replace(/^\/+/, '')}`)
       model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(props.value, undefined, uri)
       if (model.getValue() !== props.value) model.setValue(props.value)
+      // 换成 TextMate 分词器，让高亮与 VS Code 同源；失败则继续用 Monaco 内置分词。
+      await installTextMate(monaco, [model.getLanguageId()]).catch((failure) => {
+        console.warn('[dvw] TextMate 分词器装载失败，该文件回退 Monaco 内置分词：', failure)
+      })
+      if (disposed || root.current === null) return
       const instance = monaco.editor.create(root.current, { model, automaticLayout: true, theme: dshMonacoTheme(monaco, props.theme), fontSize: 14, ...WORKBENCH_EDITOR_CHROME, wordWrap: 'off' })
       editor.current = instance
       const change = instance.onDidChangeModelContent(() => callbacks.current.onChange(instance.getValue()))

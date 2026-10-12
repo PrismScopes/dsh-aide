@@ -62,6 +62,8 @@
     "pack:plugin": "pnpm build && node scripts/clean.mjs dist && pnpm pack --pack-destination dist"
   },
   "dependencies": {
+    "@shikijs/langs": "^4.5.0",
+    "@shikijs/themes": "^4.5.0",
     "@vscode/codicons": "^0.0.36",
     "@vscode/ripgrep": "^1.15.14",
     "@xterm/addon-fit": "^0.11.0",
@@ -76,6 +78,8 @@
     "monaco-editor": "^0.52.2",
     "node-pty": "^1.1.0",
     "pdfjs-dist": "4.10.38",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2",
     "ws": "^8.18.0"
   },
   "peerDependencies": {
