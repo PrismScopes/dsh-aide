@@ -126,18 +126,29 @@ interface LayoutLike { selectPanel(id: string | null): void }
  * 它的行位于 (10, 948)–(270, 990)，伸进工作台活动栏（x 0–48）的区域。被 overlay 盖住之后
  * 它既收不到点击（命中测试落在活动栏上，实测点击不打开设置），图标又会从活动栏与侧栏的
  * 缝隙里透出来 —— 表现为「两个图标重叠、其中一个点了没反应」。工作台活动栏的设置按钮
- * 提供的是同一个入口（都打开 DSH 设置面板），所以这里把这个被盖住的藏掉，关闭工作台时还原。
+ * 提供的是同一个入口（都打开 DSH 设置面板），所以这里把这个被盖住的收掉，关闭工作台时还原。
+ *
+ * 两件事都做：
+ *   1. 行的 display 置 none —— 它不该接收点击（命中层归活动栏）；
+ *   2. 真正**移除**行里的 svg —— 只是隐藏的话元素仍在 DOM 里，用户明确要求删除这个箭头而不是留着。
+ * 移除的节点连同其原位置一起记下，工作台关闭时原位插回。
  *
  * 以 triggerRow 类名定位（DSH 的 CSS Module 类，前缀哈希但不影响后缀匹配）。
  */
 function useHideShadowedSettingsEntry(visible: boolean): void {
   useEffect(() => {
-    // 只在工作台显示期间隐藏：关掉工作台就要把入口还给 DSH，否则用户从侧栏进不去设置。
+    // 只在工作台显示期间收起：关掉工作台就要把入口还给 DSH，否则用户从侧栏进不去设置。
     if (!visible) return
     const rows = [...document.querySelectorAll<HTMLElement>('[class*=_triggerRow]')]
-    const saved = rows.map((row) => ({ row, display: row.style.display }))
-    for (const { row } of saved) row.style.display = 'none'
-    return () => { for (const { row, display } of saved) row.style.display = display }
+    const savedRows = rows.map((row) => ({ row, display: row.style.display }))
+    const icons = rows.flatMap((row) => [...row.querySelectorAll<SVGElement>('svg')])
+      .map((icon) => ({ icon, parent: icon.parentElement, next: icon.nextSibling }))
+    for (const { row } of savedRows) row.style.display = 'none'
+    for (const { icon } of icons) icon.remove()
+    return () => {
+      for (const { icon, parent, next } of icons) parent?.insertBefore(icon, next)
+      for (const { row, display } of savedRows) row.style.display = display
+    }
   }, [visible])
 }
 
