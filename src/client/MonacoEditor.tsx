@@ -20,33 +20,57 @@ function tokenOf(name: string, fallback: string): string {
 }
 
 /**
+ * 归一化为 Monaco 接受的颜色格式。
+ * DSH 令牌大量使用 3/4 位简写 hex（例如 --dsw-alias-bg-base 在浅色下就是 #fff），
+ * 而 monaco.editor.defineTheme 只认 6/8 位 hex 或 rgb()/rgba()，遇到简写会抛
+ * "Illegal value for token color"；该异常冒到 slot 层会让整个工作台无法渲染。
+ */
+function monacoColor(value: string, fallback: string): string {
+  const v = value.trim()
+  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(v)
+  if (short) return `#${short[1]!}${short[1]!}${short[2]!}${short[2]!}${short[3]!}${short[3]!}`
+  const shortAlpha = /^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(v)
+  if (shortAlpha) return `#${shortAlpha[1]!.repeat(2)}${shortAlpha[2]!.repeat(2)}${shortAlpha[3]!.repeat(2)}${shortAlpha[4]!.repeat(2)}`
+  if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(v)) return v
+  if (/^(rgb|rgba|hsl|hsla)\(/i.test(v)) return v
+  return fallback
+}
+
+/**
  * 注册跟随 DSH 主题的 Monaco 主题并返回主题名。
  * Monaco 内置的 vs / vs-dark 用的是固定底色（#fffffe / #1e1e1e），与 DSH 的
  * --dsw-alias-bg-layer-1 不一致，暗色下编辑区会比周边暗一档；这里把底色、
  * 行号、选区、光标、控件与滚动条统一接到 DSH 令牌上。
+ * 注册失败时回落到内置主题，绝不让异常冒到 slot 层。
  */
 export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string {
   const dark = theme === 'dark'
   const name = dark ? 'dsh-dark' : 'dsh-light'
-  monaco.editor.defineTheme(name, {
-    base: dark ? 'vs-dark' : 'vs',
-    inherit: true,
-    rules: [],
-    colors: {
-      'editor.background': tokenOf('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
-      'editor.foreground': tokenOf('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
-      'editorGutter.background': tokenOf('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
-      'editorLineNumber.foreground': tokenOf('--dsw-alias-label-tertiary', dark ? '#adb2b8' : '#81858c'),
-      'editorLineNumber.activeForeground': tokenOf('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
-      'editor.lineHighlightBackground': tokenOf('--dsw-alias-interactive-bg-hover', dark ? '#ffffff14' : '#2631480f'),
-      'editor.selectionBackground': tokenOf('--dsw-alias-interactive-bg-active', dark ? '#ffffff24' : '#2631481a'),
-      'editorCursor.foreground': tokenOf('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
-      'editorWidget.background': tokenOf('--dsw-alias-bg-layer-2', dark ? '#2c2c2e' : '#ffffff'),
-      'editorWidget.border': tokenOf('--dsw-alias-border-l2', dark ? '#ffffff1f' : '#0000001a'),
-      'scrollbarSlider.background': tokenOf('--dsw-alias-scrollbar-bg-l1', dark ? '#3c3c3d' : '#e5e5e5'),
-      'scrollbarSlider.hoverBackground': tokenOf('--dsw-alias-scrollbar-bg-l2', dark ? '#545557' : '#e5e5e5')
-    }
-  })
+  const color = (token: string, fallback: string): string => monacoColor(tokenOf(token, fallback), fallback)
+  try {
+    monaco.editor.defineTheme(name, {
+      base: dark ? 'vs-dark' : 'vs',
+      inherit: true,
+      rules: [],
+      colors: {
+        'editor.background': color('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
+        'editor.foreground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
+        'editorGutter.background': color('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
+        'editorLineNumber.foreground': color('--dsw-alias-label-tertiary', dark ? '#adb2b8' : '#81858c'),
+        'editorLineNumber.activeForeground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
+        'editor.lineHighlightBackground': color('--dsw-alias-interactive-bg-hover', dark ? '#ffffff14' : '#2631480f'),
+        'editor.selectionBackground': color('--dsw-alias-interactive-bg-active', dark ? '#ffffff24' : '#2631481a'),
+        'editorCursor.foreground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
+        'editorWidget.background': color('--dsw-alias-bg-layer-2', dark ? '#2c2c2e' : '#ffffff'),
+        'editorWidget.border': color('--dsw-alias-border-l2', dark ? '#ffffff1f' : '#0000001a'),
+        'scrollbarSlider.background': color('--dsw-alias-scrollbar-bg-l1', dark ? '#3c3c3d' : '#e5e5e5'),
+        'scrollbarSlider.hoverBackground': color('--dsw-alias-scrollbar-bg-l2', dark ? '#545557' : '#e5e5e5')
+      }
+    })
+  } catch (error) {
+    console.warn('dsh monaco theme registration failed, falling back to builtin theme', error)
+    return dark ? 'vs-dark' : 'vs'
+  }
   return name
 }
 
