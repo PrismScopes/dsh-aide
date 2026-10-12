@@ -74,11 +74,30 @@ export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string 
   return name
 }
 
+/**
+ * 让 Monaco 的语言 worker 能解析自己的地址。
+ * Monaco 默认在 blob worker 内以相对路径加载语言 worker，而 blob 上下文没有可用的
+ * base URL，会抛 "Failed to parse URL from /dsh-vscode/monaco/vs/language/json/jsonWorker.js"，
+ * 使 JSON 等语言的校验与补全失效。这里显式给出绝对 baseUrl。
+ */
+function installWorkerEnvironment(): void {
+  const win = window as typeof window & { MonacoEnvironment?: unknown }
+  if (win.MonacoEnvironment !== undefined) return
+  const base = new URL('/dsh-vscode/monaco/vs', location.href).href
+  win.MonacoEnvironment = {
+    getWorkerUrl: () => URL.createObjectURL(new Blob(
+      [`self.MonacoEnvironment={baseUrl:'${base}/'};importScripts('${base}/base/worker/workerMain.js');`],
+      { type: 'text/javascript' }
+    ))
+  }
+}
+
 export function loadMonaco(): Promise<Monaco> {
   loading ??= new Promise((resolve, reject) => {
     const start = () => {
       const loader = window.require
       if (loader === undefined) return reject(new Error('Monaco AMD loader unavailable'))
+      installWorkerEnvironment()
       loader.config({ paths: { vs: '/dsh-vscode/monaco/vs' } })
       loader(['vs/editor/editor.main'], () => window.monaco === undefined ? reject(new Error('Monaco failed to initialize')) : resolve(window.monaco))
     }
