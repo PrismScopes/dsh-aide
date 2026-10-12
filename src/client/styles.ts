@@ -9,6 +9,11 @@ const CSS = String.raw`
    padding-top:var(--dsh-windows-titlebar-height) 避让（见 dsh-client-ui-settings-account）。
    插件原先从 y=0 铺起，会盖住标题栏与窗口控制按钮。 */
 [data-windows-titlebar] .dvw-overlay{padding-top:var(--dsh-windows-titlebar-height,0px)}
+/* 这两处用 position:fixed 且把 top 写死为 36px（对齐对话栏头部），基准是视口而非
+   overlay，因此不会随上面的 padding-top 下移。标题栏环境下需同步补偿，否则宿主
+   对话面板会与对话栏头部重叠。 */
+[data-windows-titlebar] .dvw-chat-resizer{top:calc(36px + var(--dsh-windows-titlebar-height,0px))}
+[data-windows-titlebar] [data-dvw-conversation-panel]{top:calc(36px + var(--dsh-windows-titlebar-height,0px))!important}
 html[data-ds-theme-source=dark] .dvw-overlay,.dvw-overlay[data-dvw-theme=dark]{color-scheme:dark}
 .dvw-overlay[data-dvw-theme=dark]{--dvw-base:#151517;--dvw-surface-1:#232324;--dvw-surface-2:#2c2c2e;--dvw-surface-3:#353638;--dvw-text:#f9fafb;--dvw-text-2:#cfd3d6;--dvw-text-3:#adb2b8;--dvw-border:#ffffff1f;--dvw-border-soft:#ffffff29;--dvw-hover:#ffffff14;--dvw-active:#ffffff24;--dvw-accent:#7aaaff;--dvw-error:#f25a5a;--dvw-success:#22c55e;--dvw-warn:#f59e0b}
 .dvw-overlay[data-dvw-theme=light]{--dvw-base:#fff;--dvw-surface-1:#fff;--dvw-surface-2:#fff;--dvw-surface-3:#fff;--dvw-text:#0f1115;--dvw-text-2:#61666b;--dvw-text-3:#81858c;--dvw-border:#0000001a;--dvw-border-soft:#0000001f;--dvw-hover:#2631480f;--dvw-active:#2631481a;--dvw-accent:#4176e6;--dvw-error:#ec1313;--dvw-success:#22c55e;--dvw-warn:#f59e0b;color-scheme:light}
