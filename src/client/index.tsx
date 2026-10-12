@@ -88,17 +88,32 @@ function findDshSettingsTrigger(): HTMLElement | undefined {
  */
 function openDshSettings(): void {
   for (const { row, parent, next } of detachedEntryRows) parent?.insertBefore(row, next)
-  findDshSettingsTrigger()?.click()
+  const trigger = findDshSettingsTrigger()
+  // 记下点击前已有的元素，之后只在「新增」的节点里找菜单项 —— 这样不必依赖菜单的 role 或 class。
+  const before = new Set<Element>(document.querySelectorAll('*'))
+  trigger?.click()
   for (const { row } of detachedEntryRows) row.remove()
 
   // 已登录时上一步只打开了账户菜单，这里把它里面的「设置」点掉。
   const deadline = performance.now() + MENU_WAIT_MS
   const tick = () => {
-    const item = findSettingsMenuItem()
+    const item = findNewSettingsItem(before)
     if (item !== undefined) { item.click(); return }
     if (performance.now() < deadline) requestAnimationFrame(tick)
   }
   requestAnimationFrame(tick)
+}
+
+/**
+ * 点击入口之后**新出现**的、文本恰为「设置」的可点元素。
+ *
+ * 不绑定 role 或 class：账户菜单由 primitives 的 Menu 渲染、portal 到 body，其 class 是
+ * CSS Module 哈希、role 也未保证是 menu。用「新增节点」这个信号来限定范围，既避开页面上
+ * 别处的同名文本，也不受菜单实现变化影响。
+ */
+function findNewSettingsItem(before: Set<Element>): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>('button, [role=menuitem], [role=button], li')]
+    .find((el) => !before.has(el) && /^(设置|Settings)$/.test((el.textContent ?? '').trim()))
 }
 
 /**
@@ -109,17 +124,6 @@ let detachedEntryRows: { row: HTMLElement; parent: Element | null; next: Node | 
 
 /** 账户菜单是异步挂载的，等它的上限。 */
 const MENU_WAIT_MS = 2000
-
-/** 账户菜单里的「设置」项。只在菜单容器内找，避免命中别处的同名文本。 */
-function findSettingsMenuItem(): HTMLElement | undefined {
-  const scopes = document.querySelectorAll<HTMLElement>('[role=menu], [role=listbox]')
-  for (const scope of scopes) {
-    const item = [...scope.querySelectorAll<HTMLElement>('[role=menuitem], button, [role=button]')]
-      .find((el) => /^(设置|Settings)$/.test((el.textContent ?? '').trim()))
-    if (item !== undefined) return item
-  }
-  return undefined
-}
 
 /** layout 服务的最小结构面（不 import 官方类型；旧版缺失时降级为 no-op）。 */
 interface LayoutLike { selectPanel(id: string | null): void }
