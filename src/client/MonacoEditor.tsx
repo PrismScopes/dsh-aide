@@ -40,6 +40,30 @@ function monacoColor(value: string, fallback: string): string {
 }
 
 /**
+ * 语义 token 的颜色。TextMate 只做词法分析，函数与变量的区分要靠语言服务；VS Code 用语义
+ * 高亮补这一层，Monaco 内置的 TS worker 同样提供（需显式开启，见 enableSemanticHighlighting）。
+ * 命名沿用 VS Code / LSP 的语义 token 类型，取值对齐 VS Code Dark+ / Light+。
+ * 官方主题自带的 semanticTokenColors 只有 customLiteral / newOperator / numberLiteral /
+ * stringLiteral 四条，函数、变量这些主要靠这里。
+ */
+const SEMANTIC_DARK: Record<string, string> = {
+  namespace: '4ec9b0', class: '4ec9b0', interface: '4ec9b0', enum: '4ec9b0', type: '4ec9b0',
+  typeParameter: '4ec9b0', struct: '4ec9b0',
+  function: 'dcdcaa', method: 'dcdcaa',
+  variable: '9cdcfe', parameter: '9cdcfe', property: '9cdcfe', macro: '9cdcfe',
+  enumMember: '4fc1ff',
+  keyword: '569cd6', comment: '6a9955', string: 'ce9178', number: 'b5cea8', regexp: 'd16969', operator: 'd4d4d4'
+}
+const SEMANTIC_LIGHT: Record<string, string> = {
+  namespace: '267f99', class: '267f99', interface: '267f99', enum: '267f99', type: '267f99',
+  typeParameter: '267f99', struct: '267f99',
+  function: '795e26', method: '795e26',
+  variable: '001080', parameter: '001080', property: '001080', macro: '001080',
+  enumMember: '0070c1',
+  keyword: '0000ff', comment: '008000', string: 'a31515', number: '098658', regexp: '811f3f', operator: '000000'
+}
+
+/**
  * 把 VS Code 官方主题的 tokenColors 原样转成 Monaco 的 rules。
  * 两者都按 TextMate scope 命名，所以不需要映射表 —— 前提是分词器也换成 TextMate
  * （见 textmateHighlight.ts），否则 Monaco 内置分词产出的 token 名与这些 scope 对不上。
@@ -72,10 +96,21 @@ export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string 
   const name = dark ? 'dsh-dark' : 'dsh-light'
   const color = (token: string, fallback: string): string => monacoColor(tokenOf(token, fallback), fallback)
   try {
-    monaco.editor.defineTheme(name, {
+    // semanticHighlighting 是运行时支持的字段（editor.semanticHighlighting.enabled 的取值
+    // configuredByTheme 就是读它），但没进 IStandaloneThemeData 的类型声明，用交叉类型补上，
+    // 这样其余字段仍然受类型检查。
+    const theme: import('monaco-editor').editor.IStandaloneThemeData & { semanticHighlighting: boolean } = {
       base: dark ? 'vs-dark' : 'vs',
       inherit: true,
-      rules: themeRules(dark ? darkPlus : lightPlus),
+      // 语义高亮的开关属于主题：Monaco 的 editor.semanticHighlighting.enabled 默认为
+      // configuredByTheme，所以必须在这里声明，否则 TS / JS 只拿得到 TextMate 的词法结果，
+      // 函数与变量区分不出来。
+      semanticHighlighting: true,
+      rules: [
+        ...themeRules(dark ? darkPlus : lightPlus),
+        // 语义 token 规则放在后面：同一 token 名以最后一条为准，语义高亮的结果优先于词法。
+        ...Object.entries(dark ? SEMANTIC_DARK : SEMANTIC_LIGHT).map(([token, foreground]) => ({ token, foreground }))
+      ],
       colors: {
         'editor.background': color('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
         'editor.foreground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
@@ -90,7 +125,8 @@ export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string 
         'scrollbarSlider.background': color('--dsw-alias-scrollbar-bg-l1', dark ? '#3c3c3d' : '#e5e5e5'),
         'scrollbarSlider.hoverBackground': color('--dsw-alias-scrollbar-bg-l2', dark ? '#545557' : '#e5e5e5')
       }
-    })
+    }
+    monaco.editor.defineTheme(name, theme)
   } catch (error) {
     console.warn('dsh monaco theme registration failed, falling back to builtin theme', error)
     return dark ? 'vs-dark' : 'vs'
