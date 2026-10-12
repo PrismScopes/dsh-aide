@@ -5,7 +5,21 @@ import { Icon } from './Icon.tsx'
 import type { BottomPanelProps } from './service.ts'
 import { isTerminalProtocolReply, TerminalWorkspaceController } from './terminal.ts'
 
-function terminalTheme(colorScheme: 'dark' | 'light') { return colorScheme === 'dark' ? { background: '#131417', foreground: '#f1f3f5', cursor: '#c2c6cc', selectionBackground: '#355d94' } : { background: '#ffffff', foreground: '#1d2025', cursor: '#4b515b', selectionBackground: '#add6ff' } }
+/** 终端配色接入 DSH 主题令牌（渲染期从 body 读；无 document 时回落到原固定值）。 */
+function terminalTheme(colorScheme: 'dark' | 'light') {
+  const dark = colorScheme === 'dark'
+  const token = (name: string, fallback: string) => {
+    if (typeof document === 'undefined') return fallback
+    const value = getComputedStyle(document.body).getPropertyValue(name).trim()
+    return value || fallback
+  }
+  return {
+    background: token('--dsw-alias-markdown-code-block', dark ? '#131417' : '#ffffff'),
+    foreground: token('--dsw-alias-label-primary', dark ? '#f1f3f5' : '#1d2025'),
+    cursor: token('--dsw-alias-label-secondary', dark ? '#c2c6cc' : '#4b515b'),
+    selectionBackground: token('--dsw-alias-bg-document-selection', dark ? '#355d94' : '#add6ff')
+  }
+}
 
 function XtermView({ workspace, id, colorScheme }: { workspace: TerminalWorkspaceController; id: string; colorScheme: 'dark' | 'light' }) {
   const root = useRef<HTMLDivElement>(null)
