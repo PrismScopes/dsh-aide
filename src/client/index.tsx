@@ -51,8 +51,10 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
 const PanelIcon = () => <Icon name="code" />
 
 /**
- * 面板行被点击后 DSH 会把主区域切到本组件。工作台是全屏 overlay，
- * 主区域不需要留内容，因此挂载后立刻把主区域交还会话视图。
+ * 面板行被点击后 DSH 会把主区域切到本组件。工作台是全屏 overlay、会盖住主区域，
+ * 所以主区域不需要留内容——但**不能**在这里立刻切回会话：那会让每次打开都多一次
+ * 主区域往返（切到空面板、再切回会话），会话越长代价越大。
+ * 改成等用户关闭工作台后再交还主区域，打开路径只剩一次切换。
  *
  * layout 取 unknown：插件绑定的旧类型里 ILayout 还没有 selectPanel（0.2.0 才加），
  * 声明成具体形状会与 slot 推导出的 ILayout 不兼容，因此运行时收窄后再调用。
@@ -60,8 +62,12 @@ const PanelIcon = () => <Icon name="code" />
 const PanelPage = ({ service, layout }: { service: VscodeWorkbench; layout?: unknown }) => {
   useEffect(() => {
     service.show()
-    const select = (layout as LayoutLike | undefined)?.selectPanel
-    if (typeof select === 'function') select.call(layout, null)
+    const release = () => {
+      const select = (layout as LayoutLike | undefined)?.selectPanel
+      if (typeof select === 'function') select.call(layout, null)
+    }
+    // 工作台关闭后主区域仍停在空白面板上，这一刻才把会话视图交还回去。
+    return service.subscribe(() => { if (!service.getSnapshot().visible) release() })
   }, [service, layout])
   return null
 }
