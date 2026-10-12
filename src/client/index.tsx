@@ -46,6 +46,26 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
+/**
+ * 打开 DSH 自己的设置面板。
+ *
+ * 不能用 layout.selectPanel('settings')：DSH 的设置是**模态对话框**，不是 main 面板，
+ * 那个 id 压根没有对应的 main panel，切过去只会把主区域换成一片空白 —— 这正是
+ * 「设置按钮点了是空的」的原因。
+ *
+ * 设置面板的开关状态由 dsh-client-ui-settings-general 内部的 store 持有（它注册
+ * settings.trigger 时 inject 出 openSettings: actions.open），插件拿不到那个 store，
+ * 也没有别的公开入口，所以直接触发侧栏的入口按钮：同一文档，模态会正常弹出。
+ * 按钮以 aria-label 定位，中英文两种本地化文案都覆盖。
+ */
+function openDshSettings(): void {
+  const trigger = [...document.querySelectorAll<HTMLElement>('button, [role=button]')].find((button) => {
+    const label = (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
+    return label === '设置' || label === 'Settings'
+  })
+  trigger?.click()
+}
+
 /** layout 服务的最小结构面（不 import 官方类型；旧版缺失时降级为 no-op）。 */
 interface LayoutLike { selectPanel(id: string | null): void }
 
@@ -117,11 +137,8 @@ export const inject = ['slots', 'layout']
 export function apply(ctx: ClientContext): void {
   const service = new WorkbenchController()
   const layout = ctx.layout
-  // 工作台里的设置按钮要跳到 DSH 自己的设置面板（布局偏好已迁到那里），而 layout 只在插件
-  // 作用域可见，所以在这里把入口注入 service。绑定的官方类型停在 0.1.1-rc.2、尚无 selectPanel，
-  // 因此按运行时形状收窄，缺失时保持 no-op。
-  const selectPanel = (layout as unknown as LayoutLike).selectPanel
-  if (typeof selectPanel === 'function') service.setSettingsOpener(() => { selectPanel.call(layout, 'settings') })
+  // 工作台里的设置按钮要打开 DSH 自己的设置面板（布局偏好已迁到那里）。
+  service.setSettingsOpener(openDshSettings)
   ctx.effect(() => installStyles(), 'dsh-vscode-workbench: styles')
   ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-vscode-workbench: service')
   ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-vscode-workbench: terminal panel')
