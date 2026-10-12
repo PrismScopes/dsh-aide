@@ -68,11 +68,15 @@ const PanelIcon = ({ service }: { service: VscodeWorkbench }) => {
     event.preventDefault()
     service.show()
   }
-  return <span ref={hit} className="dvw-panel-hit" role="button" tabIndex={0} title="VS Code 工作台"
-    onClick={open}
-    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') open(event) }}>
-    <Icon name="code"/>
-  </span>
+  return <>
+    {/* 图标必须是正常的 flex 项：宿主 glyph 席位是 display:contents，绝对定位的子元素会脱离流，
+        那样图标不占位，行文字会顶到行首把图标压住。 */}
+    <span className="dvw-panel-icon"><Icon name="code"/></span>
+    {/* 命中层单独一个绝对定位元素：铺满整行，在冒泡阶段吃掉点击。 */}
+    <span ref={hit} className="dvw-panel-hit" role="button" tabIndex={0} title="VS Code 工作台"
+      onClick={open}
+      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') open(event) }}/>
+  </>
 }
 
 /**
