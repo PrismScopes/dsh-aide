@@ -77,9 +77,14 @@ function findDshSettingsTrigger(): HTMLElement | undefined {
  * 工作台**不收起**：设置面板是 z-index 1000、工作台 overlay 是 100，设置会浮在工作台之上，
  * 两者可以共存（用户要的就是这个）。
  *
- * 但工作台显示期间那个入口被 useHideShadowedSettingsEntry 设成了 display: none（避免与
- * 活动栏按钮视觉重叠）。display:none 的元素其实仍收得到 click，这里还是先把它临时恢复显示、
- * 点完再还原 —— 不依赖那个边缘行为。
+ * 那个入口的行为**取决于是否已登录**：
+ *   - 未登录：点一下直接打开设置；
+ *   - 已登录：先弹出账户菜单（设置 / 意见反馈 / 退出登录），要再点其中的「设置」。
+ * 两种都要走通，所以点完之后还要等菜单出现并点它的「设置」项（未登录时菜单不会出现，
+ * 这一轮探询自然结束）。菜单是异步挂载的，用 rAF 轮询等到出现或超时，不能只等固定帧数。
+ *
+ * 另外工作台显示期间入口被 useHideShadowedSettingsEntry 设成了 display: none（避免与活动栏
+ * 按钮视觉重叠）。display:none 的元素其实仍收得到 click，这里还是先临时恢复显示、点完再还原。
  */
 function openDshSettings(): void {
   const rows = [...document.querySelectorAll<HTMLElement>('[class*=_triggerRow]')]
@@ -87,6 +92,29 @@ function openDshSettings(): void {
   for (const { row } of saved) row.style.removeProperty('display')
   findDshSettingsTrigger()?.click()
   for (const { row, display } of saved) row.style.display = display
+
+  // 已登录时上一步只打开了账户菜单，这里把它里面的「设置」点掉。
+  const deadline = performance.now() + MENU_WAIT_MS
+  const tick = () => {
+    const item = findSettingsMenuItem()
+    if (item !== undefined) { item.click(); return }
+    if (performance.now() < deadline) requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
+/** 账户菜单是异步挂载的，等它的上限。 */
+const MENU_WAIT_MS = 2000
+
+/** 账户菜单里的「设置」项。只在菜单容器内找，避免命中别处的同名文本。 */
+function findSettingsMenuItem(): HTMLElement | undefined {
+  const scopes = document.querySelectorAll<HTMLElement>('[role=menu], [role=listbox]')
+  for (const scope of scopes) {
+    const item = [...scope.querySelectorAll<HTMLElement>('[role=menuitem], button, [role=button]')]
+      .find((el) => /^(设置|Settings)$/.test((el.textContent ?? '').trim()))
+    if (item !== undefined) return item
+  }
+  return undefined
 }
 
 /** layout 服务的最小结构面（不 import 官方类型；旧版缺失时降级为 no-op）。 */
