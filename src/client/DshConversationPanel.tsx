@@ -4,7 +4,9 @@ import { useLayoutEffect } from 'react'
 export function findDshConversationRoot(documentRoot: Document = document): HTMLElement | null {
   const scroller = documentRoot.querySelector<HTMLElement>('[data-conversation-scroll]')
   const root = scroller?.parentElement
-  return root instanceof HTMLElement && root.dataset.phase !== undefined ? root : null
+  // DSH 0.2.0 把阶段标记为 data-content-phase；旧版是 data-phase。两者都认，
+  // 否则宿主对话栏搬不进工作台右列，会与工作台的第四列大面积重叠。
+  return root instanceof HTMLElement && (root.dataset.phase !== undefined || root.dataset.contentPhase !== undefined) ? root : null
 }
 
 /** Keep the official conversation mounted while presenting it in the workbench's right column. */
