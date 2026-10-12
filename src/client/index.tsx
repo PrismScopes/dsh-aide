@@ -47,83 +47,27 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /**
- * 找到 DSH 侧栏底部的设置入口按钮。
- *
- * 优先按结构定位：那个入口是 `[class*=_triggerRow]` 里的 button。类前缀是 CSS Module 哈希、
- * 会随构建变化，但后缀稳定，而且不依赖界面语言 —— 先前只按 aria-label 匹配「设置」/「Settings」，
- * 在文案不同或存在别的同名元素时会点错。
- */
-function findDshSettingsTrigger(): HTMLElement | undefined {
-  const byRow = document.querySelector<HTMLElement>('[class*=_triggerRow] button')
-  if (byRow !== null) return byRow
-  const byClass = document.querySelector<HTMLElement>('button[class*=_trigger]')
-  if (byClass !== null) return byClass
-  return [...document.querySelectorAll<HTMLElement>('button, [role=button]')].find((button) => {
-    const label = (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
-    return label === '设置' || label === 'Settings'
-  })
-}
-
-/**
  * 打开 DSH 自己的设置面板，工作台保持打开。
  *
- * 不能用 layout.selectPanel('settings')：DSH 的设置是**模态对话框**，不是 main 面板，
- * 那个 id 压根没有对应的 main panel，切过去只会把主区域换成一片空白。
+ * 不再去点侧栏那个入口：它在**已登录时是个二级菜单**（账户菜单：设置 / 意见反馈 / 退出登录），
+ * 结构由 primitives 的 Menu 渲染并 portal 到 body，role、class、可点元素都不是稳定的契约，
+ * 两段式点击（先开菜单、再点其中一项）在实践中一直断。
  *
- * 设置面板的开关状态由 dsh-client-ui-settings-general 内部的 store 持有（它注册
- * settings.trigger 时 inject 出 openSettings: actions.open），插件拿不到那个 store，
- * 也没有别的公开入口，所以直接触发侧栏的入口按钮。
+ * 改用 DSH 自己注册的快捷键 `settings.open`（dsh-client-ui-settings-general 里
+ * ctx.shortcuts.register，regions 含 page/editable/terminal）：
+ *   desktop:windows → Ctrl+,      web:windows → Ctrl+Alt+,
+ * 两个都派发一次，由 DSH 的快捷键系统按当前平台认领其中一个。
  *
- * 工作台**不收起**：设置面板是 z-index 1000、工作台 overlay 是 100，设置会浮在工作台之上，
- * 两者可以共存（用户要的就是这个）。
- *
- * 那个入口的行为**取决于是否已登录**：
- *   - 未登录：点一下直接打开设置；
- *   - 已登录：先弹出账户菜单（设置 / 意见反馈 / 退出登录），要再点其中的「设置」。
- * 两种都要走通，所以点完之后还要等菜单出现并点它的「设置」项（未登录时菜单不会出现，
- * 这一轮探询自然结束）。菜单是异步挂载的，用 rAF 轮询等到出现或超时，不能只等固定帧数。
- *
- * 那一行在工作台显示期间被 useHideShadowedSettingsEntry 从 DOM 里移除了，所以先临时插回、
- * 点完再摘掉 —— 否则根本没有可点的入口。
+ * 工作台**不收起**：设置面板是 z-index 1000（wCInkW_overlay）、工作台 overlay 是 100，
+ * 设置会浮在工作台之上，两者共存 —— 用户要的就是这个。
  */
 function openDshSettings(): void {
-  for (const { row, parent, next } of detachedEntryRows) parent?.insertBefore(row, next)
-  const trigger = findDshSettingsTrigger()
-  // 记下点击前已有的元素，之后只在「新增」的节点里找菜单项 —— 这样不必依赖菜单的 role 或 class。
-  const before = new Set<Element>(document.querySelectorAll('*'))
-  trigger?.click()
-  for (const { row } of detachedEntryRows) row.remove()
-
-  // 已登录时上一步只打开了账户菜单，这里把它里面的「设置」点掉。
-  const deadline = performance.now() + MENU_WAIT_MS
-  const tick = () => {
-    const item = findNewSettingsItem(before)
-    if (item !== undefined) { item.click(); return }
-    if (performance.now() < deadline) requestAnimationFrame(tick)
+  for (const altKey of [false, true]) {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: ',', code: 'Comma', ctrlKey: true, altKey, bubbles: true, cancelable: true
+    }))
   }
-  requestAnimationFrame(tick)
 }
-
-/**
- * 点击入口之后**新出现**的、文本恰为「设置」的可点元素。
- *
- * 不绑定 role 或 class：账户菜单由 primitives 的 Menu 渲染、portal 到 body，其 class 是
- * CSS Module 哈希、role 也未保证是 menu。用「新增节点」这个信号来限定范围，既避开页面上
- * 别处的同名文本，也不受菜单实现变化影响。
- */
-function findNewSettingsItem(before: Set<Element>): HTMLElement | undefined {
-  return [...document.querySelectorAll<HTMLElement>('button, [role=menuitem], [role=button], li')]
-    .find((el) => !before.has(el) && /^(设置|Settings)$/.test((el.textContent ?? '').trim()))
-}
-
-/**
- * 被工作台移出 DOM 的 DSH 侧栏入口行，连同原位置。
- * openDshSettings 需要临时把它插回来才点得到那个入口；关闭工作台时也会插回。
- */
-let detachedEntryRows: { row: HTMLElement; parent: Element | null; next: Node | null }[] = []
-
-/** 账户菜单是异步挂载的，等它的上限。 */
-const MENU_WAIT_MS = 2000
 
 /** layout 服务的最小结构面（不 import 官方类型；旧版缺失时降级为 no-op）。 */
 interface LayoutLike { selectPanel(id: string | null): void }
@@ -137,7 +81,7 @@ interface LayoutLike { selectPanel(id: string | null): void }
  *
  * 为什么移除整行而不是隐藏、也不是只删 svg：那一行里放什么取决于登录状态 ——
  * 未登录时是 IconEllipsisOutlineMedium（省略号），已登录时是 AccountAvatar（可能是 <img>）。
- * 只删 svg 会在已登录时漏掉头像，所以整行一起摘掉。节点连同原位置记下，关闭工作台时插回。
+ * 只删 svg 会在已登录时漏掉头像，所以整行一起摘掉；关闭工作台时按原位插回。
  *
  * 以 triggerRow 类名定位（DSH 的 CSS Module 类，前缀哈希但不影响后缀匹配）。
  */
@@ -147,12 +91,8 @@ function useHideShadowedSettingsEntry(visible: boolean): void {
     if (!visible) return
     const rows = [...document.querySelectorAll<HTMLElement>('[class*=_triggerRow]')]
       .map((row) => ({ row, parent: row.parentElement, next: row.nextSibling }))
-    detachedEntryRows = rows
     for (const { row } of rows) row.remove()
-    return () => {
-      for (const { row, parent, next } of rows) parent?.insertBefore(row, next)
-      detachedEntryRows = []
-    }
+    return () => { for (const { row, parent, next } of rows) parent?.insertBefore(row, next) }
   }, [visible])
 }
 
