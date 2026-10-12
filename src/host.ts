@@ -328,6 +328,19 @@ export function monacoAsset(raw: string): { path: string; type: string } {
 }
 
 /**
+ * Resolve one file-type icon from material-icon-theme (the theme VS Code ships by default).
+ * The explorer renders these as <img>, so only the SVG files are served; the name→file mapping
+ * lives in the client bundle (see scripts/generate-file-icons.mjs).
+ */
+export function fileIconAsset(raw: string): { path: string; type: string } {
+  const packageRoot = dirname(require.resolve('material-icon-theme/package.json'))
+  const path = resolve(packageRoot, 'icons', raw)
+  const root = resolve(packageRoot, 'icons')
+  if (!inside(root, path)) throw new WorkbenchError('asset-invalid', 'invalid file icon path', 403)
+  return { path, type: extname(path) === '.svg' ? 'image/svg+xml' : 'application/octet-stream' }
+}
+
+/**
  * Resolve KaTeX's stylesheet and web fonts. katex.min.css references its fonts with the
  * relative url "fonts/…", so the stylesheet and the font directory must be served under one
  * prefix for the browser to resolve them.

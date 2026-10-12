@@ -1,5 +1,6 @@
-export type CodiconName =
-  | 'add' | 'check' | 'check-all' | 'chevron-down' | 'chevron-right' | 'close' | 'close-all' | 'cloud-upload' | 'code' | 'color-mode' | 'edit'
+import { ICON_BY_EXTENSION, ICON_BY_NAME, ICON_FILES } from './fileIcons.ts'
+
+export type CodiconName =  | 'add' | 'check' | 'check-all' | 'chevron-down' | 'chevron-right' | 'close' | 'close-all' | 'cloud-upload' | 'code' | 'color-mode' | 'edit'
   | 'diff' | 'diff-sidebyside' | 'diff-single' | 'discard' | 'file' | 'file-code' | 'file-media' | 'file-pdf' | 'file-zip'
   | 'files' | 'folder' | 'folder-opened' | 'git-branch' | 'git-commit' | 'graph' | 'home' | 'list-tree' | 'new-file'
   | 'layout-sidebar-right' | 'layout-sidebar-right-off' | 'new-folder' | 'preview' | 'refresh' | 'remove' | 'search' | 'settings' | 'source-control' | 'sparkle' | 'split-horizontal' | 'terminal' | 'trash'
@@ -80,4 +81,21 @@ export function fileTone(name: string): string | undefined {
   if (lower.startsWith('makefile')) return FILE_NAME_TONES['makefile']
   const extension = lower.includes('.') ? lower.split('.').at(-1) ?? '' : ''
   return FILE_TONES[extension]
+}
+
+/**
+ * 彩色文件类型图标的 URL，数据与匹配顺序都取自 material-icon-theme（VS Code 默认的文件图标主题）：
+ * 先按完整文件名匹配，再按扩展名匹配。没有匹配项时返回 undefined，调用方回落到 codicon 字形。
+ * SVG 本身由宿主路由 /dsh-vscode/file-icons/ 提供，不进 bundle。
+ */
+export function fileIconUrl(name: string): string | undefined {
+  const lower = name.toLowerCase()
+  const byName = ICON_BY_NAME[lower]
+  const icon = byName ?? (() => {
+    const dot = lower.lastIndexOf('.')
+    return dot > 0 ? ICON_BY_EXTENSION[lower.slice(dot + 1)] : undefined
+  })()
+  if (icon === undefined) return undefined
+  const file = ICON_FILES[icon]
+  return file === undefined ? undefined : `/dsh-vscode/file-icons/${file}`
 }
