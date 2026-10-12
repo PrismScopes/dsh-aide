@@ -1,5 +1,5 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -47,8 +47,33 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
   return <Workbench key={sessionId ?? 'no-session'} service={service} useSessions={useSessions as never}/>
 }
 
-/** 侧栏面板行的图标（renderSlot 只取这一处作为 glyph）。 */
-const PanelIcon = () => <Icon name="code" />
+/**
+ * 侧栏面板行的图标。renderSlot 只把它渲染进行内的 glyph 位置，但这里额外铺满整行作为命中层：
+ * DSH 的面板行被点击会调 layout.selectPanel，把主区域换成插件注册的空面板；那一次切换会卸载
+ * 整个会话视图——连同 dsh-context、dsh-recall-plugin 这类挂在 conversation slot 上的组件一起——
+ * 再重新挂载。每次打开工作台都要付这个代价（在装了这类插件的实例上是约 1 秒的整屏冻结）。
+ * 在冒泡阶段吃掉点击，selectPanel 就不会执行，主区域保持原样。
+ */
+const PanelIcon = ({ service }: { service: VscodeWorkbench }) => {
+  const hit = useRef<HTMLSpanElement>(null)
+  useLayoutEffect(() => {
+    // 面板行本身是 static 定位，命中层要铺满它，得先给它一个定位上下文。
+    const row = hit.current?.closest('button') ?? null
+    if (row === null) return
+    row.style.position = 'relative'
+    return () => { row.style.removeProperty('position') }
+  }, [])
+  const open = (event: { stopPropagation: () => void; preventDefault: () => void }) => {
+    event.stopPropagation()
+    event.preventDefault()
+    service.show()
+  }
+  return <span ref={hit} className="dvw-panel-hit" role="button" tabIndex={0} title="VS Code 工作台"
+    onClick={open}
+    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') open(event) }}>
+    <Icon name="code"/>
+  </span>
+}
 
 /**
  * 面板行被点击后 DSH 会把主区域切到本组件。工作台是全屏 overlay、会盖住主区域，
@@ -85,7 +110,7 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-vscode-workbench-overlay', inject: () => ({ service }) }, Overlay))
   // 侧栏“全局面板”入口：与下方 main 面板成对注册。
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, inject: () => ({ service, layout }) }, PanelPage))
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: 'VS Code 工作台' }, PanelIcon))
+  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: 'VS Code 工作台', inject: () => ({ service }) }, PanelIcon))
   ctx.effect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (handleTerminalShortcut(event, service)) return
