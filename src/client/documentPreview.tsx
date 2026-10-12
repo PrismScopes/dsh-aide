@@ -64,7 +64,10 @@ function PdfPreview({ src, path }: { src: string; path: string }) {
     setPage(1); setPages(0); setError(undefined)
     void (async () => {
       try {
-        const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+        // 用现代压缩版：legacy 是为旧浏览器准备的，而这里跑在 Electron / Chrome 上，
+        // 不需要那层兼容；两者 API 等价，现代压缩版让这份依赖从 783KB 降到 344KB。
+        // 压缩版没有自己的类型声明，借 legacy 那份（同一套 API）。
+        const pdfjs = await import('pdfjs-dist/build/pdf.min.mjs') as typeof import('pdfjs-dist/legacy/build/pdf.mjs')
         pdfjs.GlobalWorkerOptions.workerSrc = '/dsh-vscode/pdfjs/worker.mjs'
         document = await pdfjs.getDocument(src).promise as PdfDocument
         if (cancelled) { document.destroy(); return }

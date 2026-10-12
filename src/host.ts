@@ -135,7 +135,7 @@ export async function workspacePreviewFile(cwd:string,path:string):Promise<{path
 
 /** Resolve the PDF.js worker shipped with this plugin's runtime dependency. */
 export function pdfWorkerAsset(): { path: string; type: string } {
-  return { path: require.resolve('pdfjs-dist/legacy/build/pdf.worker.min.mjs'), type: 'text/javascript; charset=utf-8' }
+  return { path: require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'), type: 'text/javascript; charset=utf-8' }
 }
 
 interface ProcessResult { stdout: string; stderr: string; code: number }
