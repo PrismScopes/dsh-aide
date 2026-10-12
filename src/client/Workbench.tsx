@@ -15,6 +15,7 @@ import { resetWorkspaceDocuments, WorkspaceRequestScope } from './workspaceState
 import { useDshDarkTheme } from './theme.ts'
 import { Git } from './GitPanel.tsx'
 import { useDebouncedCallback } from './hooks.ts'
+import { preloadTextMate } from './textmateHighlight.ts'
 
 // 从 GitPanel 拆出后重新导出，保持既有引用（含单测）不变。
 export { graphRows, graphTrackPath } from './GitPanel.tsx'
@@ -230,6 +231,9 @@ export function Workbench({ service, useSessions }: { service: VscodeWorkbench; 
   useEffect(()=>localStorage.setItem('dvw:primary-side-visible',primarySideVisible?'open':'closed'),[primarySideVisible])
   useEffect(()=>localStorage.setItem('dvw:status-visible',statusVisible?'open':'closed'),[statusVisible])
   useEffect(()=>{if(!snapshot.visible)return;const onKey=(event:KeyboardEvent)=>{if(event.isComposing||!event.ctrlKey||!event.altKey||event.shiftKey||event.code!=='KeyB')return;event.preventDefault();setChatVisible(value=>!value)};window.addEventListener('keydown',onKey,true);return()=>window.removeEventListener('keydown',onKey,true)},[snapshot.visible])
+  // 打开工作台时预热 TextMate：首次装分词器约 100ms（WASM 加载 + 语法编译），
+  // 放在这里就挪到用户不敏感的时刻，点开文件时不再卡那一下。
+  useEffect(() => { if (snapshot.visible) preloadTextMate(['typescript','javascript','json','markdown']) }, [snapshot.visible])
   /**
    * 打开文件，按 VS Code 的标签语义：未固定的标签是“预览标签”，只会占用同一个槽位——
    * 再点别的文件时把它替换掉，而不是每次都新开一个。双击（pin=true）或在编辑器里改动过

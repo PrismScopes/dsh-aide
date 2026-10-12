@@ -192,6 +192,28 @@ async function grammarFor(languageId: string): Promise<GrammarLike | undefined> 
 interface TextMateToken { startIndex: number; scopes: string[] }
 
 /**
+ * 预热 TextMate：提前加载 oniguruma WASM、建立 registry，并（可选）编译若干语言的语法。
+ *
+ * 首次装分词器要花约 100ms（实测），主要是 WASM 加载与语法编译。这次开销如果落在用户点开
+ * 文件的时刻，就表现为「点开卡一下」。工作台打开时调用本函数，把这段开销挪到用户不敏感的时刻。
+ *
+ * 刻意不 await、也不抛错：预热失败不影响后续流程，真正装分词器时还会再走一遍同样的路径。
+ */
+export function preloadTextMate(languageIds: string[] = []): void {
+  void (async () => {
+    try {
+      const registry = getRegistry()
+      await loadOnigLib()
+      for (const languageId of languageIds) {
+        const grammar = await grammarFor(languageId)
+        if (grammar === undefined) continue
+        await registry.loadGrammar(grammar.scopeName)
+      }
+    } catch { /* 预热失败无所谓，installTextMate 会再试 */ }
+  })()
+}
+
+/**
  * 为指定语言装上 TextMate 分词器，替换 Monaco 内置实现。
  * 语言不在支持表内、或 WASM / 语法加载失败时静默跳过 —— 该语言继续用内置分词，
  * 高亮会退回上一版的近似配色，而不是让编辑器报错。
