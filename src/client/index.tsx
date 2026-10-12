@@ -47,6 +47,24 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /**
+ * 找到 DSH 侧栏底部的设置入口按钮。
+ *
+ * 优先按结构定位：那个入口是 `[class*=_triggerRow]` 里的 button。类前缀是 CSS Module 哈希、
+ * 会随构建变化，但后缀稳定，而且不依赖界面语言 —— 先前只按 aria-label 匹配「设置」/「Settings」，
+ * 在文案不同或存在别的同名元素时会点错。
+ */
+function findDshSettingsTrigger(): HTMLElement | undefined {
+  const byRow = document.querySelector<HTMLElement>('[class*=_triggerRow] button')
+  if (byRow !== null) return byRow
+  const byClass = document.querySelector<HTMLElement>('button[class*=_trigger]')
+  if (byClass !== null) return byClass
+  return [...document.querySelectorAll<HTMLElement>('button, [role=button]')].find((button) => {
+    const label = (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
+    return label === '设置' || label === 'Settings'
+  })
+}
+
+/**
  * 打开 DSH 自己的设置面板。
  *
  * 不能用 layout.selectPanel('settings')：DSH 的设置是**模态对话框**，不是 main 面板，
@@ -57,20 +75,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  * 也没有别的公开入口，所以直接触发侧栏的入口按钮。
  *
  * 先收起工作台再触发。DSH 设置面板本身是 z-index 1000、工作台 overlay 是 100，层级上并没有
- * 被盖住（实测设置面板中心命中它自己的元素、不在 overlay 内），但收起工作台可以免掉层级与命中
- * 上的任何疑问，也符合「进设置就是离开工作台」的直觉；收起后侧栏入口恢复显示，按钮才点得到。
+ * 被盖住，但收起工作台可以免掉层级与命中上的疑问，也符合「进设置就是离开工作台」的直觉。
  */
 function openDshSettings(service: VscodeWorkbench): void {
   service.hide()
-  // 等工作台卸载、侧栏入口恢复显示之后（隐藏逻辑由 visible 状态驱动）再触发它。
+  // 等两帧让工作台卸载、被我隐藏的侧栏入口恢复显示（隐藏由 visible 状态驱动）。
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      const trigger = [...document.querySelectorAll<HTMLElement>('button, [role=button]')].find((button) => {
-        const label = (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
-        return label === '设置' || label === 'Settings'
-      })
-      trigger?.click()
-    })
+    requestAnimationFrame(() => { findDshSettingsTrigger()?.click() })
   })
 }
 
