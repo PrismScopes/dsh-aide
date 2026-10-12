@@ -1,5 +1,5 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -69,11 +69,35 @@ function openDshSettings(): void {
 /** layout 服务的最小结构面（不 import 官方类型；旧版缺失时降级为 no-op）。 */
 interface LayoutLike { selectPanel(id: string | null): void }
 
+/**
+ * 工作台显示期间，把 DSH 侧栏底部那个设置入口藏起来。
+ *
+ * 它的行位于 (10, 948)–(270, 990)，伸进工作台活动栏（x 0–48）的区域。被 overlay 盖住之后
+ * 它既收不到点击（命中测试落在活动栏上，实测点击不打开设置），图标又会从活动栏与侧栏的
+ * 缝隙里透出来 —— 表现为「两个图标重叠、其中一个点了没反应」。工作台活动栏的设置按钮
+ * 提供的是同一个入口（都打开 DSH 设置面板），所以这里把这个被盖住的藏掉，关闭工作台时还原。
+ *
+ * 以 triggerRow 类名定位（DSH 的 CSS Module 类，前缀哈希但不影响后缀匹配）。
+ */
+function useHideShadowedSettingsEntry(service: VscodeWorkbench): void {
+  const [visible, setVisible] = useState(() => service.getSnapshot().visible)
+  useEffect(() => service.subscribe(() => setVisible(service.getSnapshot().visible)), [service])
+  useEffect(() => {
+    // 只在工作台显示期间隐藏：关掉工作台就要把入口还给 DSH，否则用户从侧栏进不去设置。
+    if (!visible) return
+    const rows = [...document.querySelectorAll<HTMLElement>('[class*=_triggerRow]')]
+    const saved = rows.map((row) => ({ row, display: row.style.display }))
+    for (const { row } of saved) row.style.display = 'none'
+    return () => { for (const { row, display } of saved) row.style.display = display }
+  }, [visible])
+}
+
 const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { service: VscodeWorkbench }) => {
   // DSH 0.2.0 起 sessions store 不再提供 state.current。官方在 shell 层的取法是
   // 在 state.byId 里找 retainedBy.mainView > 0 的会话（对齐 dsh-client-ui-layout 的 DocumentTitle
   // 与 dsh-client-ui-cordis 的 current 取法）。state.current 读取保留，用于兼容 0.1.x。
   const sessionId = useSessions((state: any) => state.current ?? (Object.values(state.byId ?? {}) as any[]).find((session: any) => (session.retainedBy?.mainView ?? 0) > 0)?.id) as string | undefined
+  useHideShadowedSettingsEntry(service)
   return <Workbench key={sessionId ?? 'no-session'} service={service} useSessions={useSessions as never}/>
 }
 
