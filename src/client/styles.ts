@@ -25,6 +25,24 @@ html[data-ds-theme-source=dark] .dvw-overlay{color-scheme:dark}
 .dvw-tabs{overflow:hidden}.dvw-tab[data-pinned] .dvw-tab-name{font-style:normal}.dvw-tab:not([data-pinned]) .dvw-tab-name{font-style:italic}.dvw-tab-list{display:flex;min-width:0;flex:1;overflow-x:auto}.dvw-tab-actions{flex:none;display:flex;align-items:center;gap:2px;padding:0 6px;background:var(--dvw-base)}.dvw-close-all{border:1px solid var(--dvw-border);background:var(--dvw-base)}.dvw-chat-action[data-active]{background:var(--dvw-active);color:var(--dvw-accent)}
 /* 资源管理器的彩色类型图标（material-icon-theme 的 SVG）。尺寸与 codicon 的 .dvw-file-icon 对齐。 */
 .dvw-file-icon-img{flex:none;width:16px;height:16px;object-fit:contain;pointer-events:none}
+/* 设置页（注册进 DSH 设置里「插件」分区的一个标签）。这里渲染在 DSH 设置面板的内容列内，
+   所以颜色一律取 --dsw-alias-* 令牌，不写死色值，深浅色交给 DSH 自己切换。 */
+.dvw-settings-panel{display:flex;flex-direction:column;gap:22px;padding:4px 2px 20px}
+.dvw-set-group{display:flex;flex-direction:column}
+.dvw-set-group-title{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}
+.dvw-set-row{display:flex;align-items:center;gap:16px;min-height:44px;padding:6px 2px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+.dvw-set-row:last-child{border-bottom:0}
+.dvw-set-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.dvw-set-title{color:var(--dsw-alias-label-primary);font-size:13px}
+.dvw-set-desc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
+.dvw-set-control{flex:none;display:flex;align-items:center}
+.dvw-set-switch{position:relative;flex:none;width:34px;height:20px;border:0;border-radius:10px;padding:0;cursor:pointer;background:var(--dsw-alias-interactive-bg-active);transition:background .15s}
+.dvw-set-switch[aria-checked=true]{background:var(--dsw-alias-state-business-primary)}
+.dvw-set-knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
+.dvw-set-switch[aria-checked=true] .dvw-set-knob{transform:translateX(14px)}
+.dvw-set-range{display:flex;align-items:center;gap:10px}
+.dvw-set-range input[type=range]{width:150px;accent-color:var(--dsw-alias-state-business-primary)}
+.dvw-set-range output{min-width:52px;text-align:right;color:var(--dsw-alias-label-secondary);font-size:12px;font-variant-numeric:tabular-nums}
 /* 侧栏面板行：图标占一个正常 flex 位，命中层另用绝对定位铺满整行并在冒泡阶段吃掉点击，
    避免 DSH 把主区域切到空面板（那会卸载整个会话视图，是打开工作台时整屏卡顿的来源）。 */
 .dvw-panel-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px}
@@ -66,12 +84,12 @@ html[data-ds-theme-source=dark] .dvw-overlay{color-scheme:dark}
 .dvw-terminal-rename{width:100%;min-width:0;height:22px;border:1px solid var(--dvw-accent);border-radius:var(--dvw-radius-xs);background:var(--dvw-base);color:var(--dvw-text);padding:0 4px;font:inherit;outline:0}.dvw-terminal-menu{position:fixed;z-index:60;min-width:140px;padding:4px;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-sm);background:var(--dvw-surface-3);box-shadow:var(--dvw-shadow-3)}.dvw-terminal-menu button{display:block;width:100%;height:28px;border:0;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text);padding:0 10px;text-align:left;font:inherit;cursor:pointer}.dvw-terminal-menu button:hover{background:var(--dvw-hover)}.dvw-terminal-menu .dvw-terminal-menu-danger{color:var(--dvw-error)}
 .dvw-terminal-panes{flex:1;min-height:0;display:flex}.dvw-terminal-panes>.dvw-terminal-host{flex:1;min-width:0}.dvw-terminal-panes[data-split=true]>.dvw-terminal-host+.dvw-terminal-host{border-left:1px solid var(--dvw-border)}.dvw-terminal-resizer{width:4px;flex:none;cursor:ew-resize;position:relative;z-index:1}.dvw-terminal-resizer:hover{background:var(--dvw-accent)}.dvw-terminal-entry{position:relative;display:flex;align-items:center;min-width:0}.dvw-terminal-entry .dvw-terminal-tab{padding-right:58px}.dvw-terminal-entry-actions{position:absolute;right:4px;top:1px;height:28px;display:none;align-items:center;background:var(--dvw-active)}.dvw-terminal-entry:hover .dvw-terminal-entry-actions,.dvw-terminal-entry:focus-within .dvw-terminal-entry-actions{display:flex}.dvw-terminal-entry-actions button{width:25px;height:28px;display:grid;place-items:center;border:0;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text-2);cursor:pointer}.dvw-terminal-entry-actions button:hover{background:var(--dvw-hover);color:var(--dvw-text)}
 .dvw-terminal-list,.dvw-terminal-host .xterm-viewport{scrollbar-width:none}.dvw-terminal-list::-webkit-scrollbar,.dvw-terminal-host .xterm-viewport::-webkit-scrollbar{display:none}
-.dvw-settings-backdrop{position:absolute;inset:0;z-index:30;display:grid;place-items:center;padding:24px;background:var(--dvw-mask);backdrop-filter:blur(2px)}
-.dvw-settings{width:min(720px,calc(100vw - 48px));max-height:min(720px,calc(100vh - 48px));display:flex;flex-direction:column;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-md);background:var(--dvw-surface-1);box-shadow:var(--dvw-shadow-3);overflow:hidden}
-.dvw-settings>header{height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 14px;border-bottom:1px solid var(--dvw-border);font-size:14px;font-weight:600}.dvw-settings>header>span{display:flex;align-items:center;gap:8px}
-.dvw-settings-body{overflow:auto;padding:8px 20px 20px}.dvw-settings-body section+section{margin-top:20px;padding-top:12px;border-top:1px solid var(--dvw-border-soft)}.dvw-settings-body h3{margin:8px 0 12px;font-size:13px}.dvw-settings-body>section>label:not(.dvw-setting-check):not(.dvw-setting-range){display:block;margin-bottom:7px;color:var(--dvw-text-2);font-size:12px}
 
-.dvw-setting-check{height:36px;display:flex;align-items:center;gap:9px;border-bottom:1px solid var(--dvw-border-soft);cursor:pointer}.dvw-setting-check input{accent-color:var(--dvw-accent)}.dvw-setting-range{display:grid;grid-template-columns:145px 1fr 52px;align-items:center;gap:10px;min-height:42px}.dvw-setting-range input{accent-color:var(--dvw-accent)}.dvw-setting-range output{text-align:right;color:var(--dvw-text-3);font-variant-numeric:tabular-nums}
+
+
+
+
+
 @media(max-width:900px){.dvw-overlay[data-dvw-chat=true]{grid-template-columns:44px min(210px,var(--dvw-side-width)) minmax(0,1fr) min(400px,var(--dvw-chat-width))}[data-dvw-conversation-panel]{width:min(400px,var(--dvw-chat-width))!important}}
 `
 

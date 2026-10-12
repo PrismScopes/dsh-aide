@@ -7,6 +7,7 @@ import { Icon } from './Icon.tsx'
 import type { VscodeWorkbench } from './service.ts'
 import { WorkbenchController } from './service.ts'
 import { TerminalPanel } from './TerminalPanel.tsx'
+import { SettingsPanel } from './SettingsPanel.tsx'
 import { Workbench } from './Workbench.tsx'
 import { installStyles } from './styles.ts'
 import { handleTerminalShortcut } from './shortcuts.ts'
@@ -33,6 +34,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'sidebar.panellist': { kind: 'list'; scope: 'root'; owner: { size: number; active: boolean } }
     /** 主区域面板：entryKey 即 activePanelId。 */
     'main': { kind: 'keyed'; scope: 'root'; keyProps: Record<string, object> }
+    /**
+     * DSH 设置导航里的一项（kind: list，scope: root）。owner 由 shell 提供 close()，
+     * 这里不消费它。工作台的布局偏好放在这一页，取代插件自建的设置面板。
+     *
+     * 原先注册的是 settings.plugins.tab，但那个 slot 由「插件市场」页在挂载期间才声明，
+     * 页面没打开就不存在，注册会一直等下去；settings.section 始终存在，且 order 能让这一页
+     * 正好落在「插件市场」下面。
+     */
+    'settings.section': { kind: 'list'; scope: 'root'; owner: { close: () => void } }
   }
 }
 
@@ -107,6 +117,11 @@ export const inject = ['slots', 'layout']
 export function apply(ctx: ClientContext): void {
   const service = new WorkbenchController()
   const layout = ctx.layout
+  // 工作台里的设置按钮要跳到 DSH 自己的设置面板（布局偏好已迁到那里），而 layout 只在插件
+  // 作用域可见，所以在这里把入口注入 service。绑定的官方类型停在 0.1.1-rc.2、尚无 selectPanel，
+  // 因此按运行时形状收窄，缺失时保持 no-op。
+  const selectPanel = (layout as unknown as LayoutLike).selectPanel
+  if (typeof selectPanel === 'function') service.setSettingsOpener(() => { selectPanel.call(layout, 'settings') })
   ctx.effect(() => installStyles(), 'dsh-vscode-workbench: styles')
   ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-vscode-workbench: service')
   ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-vscode-workbench: terminal panel')
@@ -115,6 +130,8 @@ export function apply(ctx: ClientContext): void {
   // 侧栏“全局面板”入口：与下方 main 面板成对注册。
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, inject: () => ({ service, layout }) }, PanelPage))
   ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: 'VS Code 工作台', inject: () => ({ service }) }, PanelIcon))
+  // DSH 设置导航里的「VS Code 工作台」页。order 取较大值，排在「插件市场」下面。
+  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: PANEL_ID, order: 1000, label: 'VS Code 工作台', inject: () => ({ service }) }, SettingsPanel))
   ctx.effect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (handleTerminalShortcut(event, service)) return
