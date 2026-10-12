@@ -326,3 +326,22 @@ export function monacoAsset(raw: string): { path: string; type: string } {
   const type = extname(path) === '.css' ? 'text/css' : extname(path) === '.js' ? 'text/javascript' : extname(path) === '.ttf' ? 'font/ttf' : 'application/octet-stream'
   return { path, type }
 }
+
+/**
+ * Resolve KaTeX's stylesheet and web fonts. katex.min.css references its fonts with the
+ * relative url "fonts/…", so the stylesheet and the font directory must be served under one
+ * prefix for the browser to resolve them.
+ */
+export function katexAsset(raw: string): { path: string; type: string } {
+  const packageRoot = dirname(require.resolve('katex/package.json'))
+  const path = resolve(packageRoot, 'dist', raw)
+  const root = resolve(packageRoot, 'dist')
+  if (!inside(root, path)) throw new WorkbenchError('asset-invalid', 'invalid KaTeX asset path', 403)
+  const extension = extname(path)
+  const type = extension === '.css' ? 'text/css'
+    : extension === '.woff2' ? 'font/woff2'
+      : extension === '.woff' ? 'font/woff'
+        : extension === '.ttf' ? 'font/ttf'
+          : 'application/octet-stream'
+  return { path, type }
+}
