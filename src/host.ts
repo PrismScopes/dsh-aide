@@ -8,6 +8,9 @@ import type { HostContext } from './context.ts'
 import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchRequest } from './types.ts'
 import { WorkbenchError } from './wire.ts'
 
+// 静态资源解析已拆到 assets.ts；从这里重新导出，保持既有引用（含路由与单测）不变。
+export { codiconAsset, fileIconAsset, katexAsset, monacoAsset, onigWasmAsset } from './assets.ts'
+
 const require = createRequire(import.meta.url)
 const TEXT_LIMIT = 5 * 1024 * 1024
 const PROCESS_TIMEOUT = 30_000
@@ -19,7 +22,8 @@ export function cwdFor(ctx: HostContext, sessionId: string): string {
   return normalize(cwd)
 }
 
-function inside(root: string, target: string): boolean {
+/** target 是否落在 root 之内（含 root 本身）。assets.ts 也用它守卫包目录。 */
+export function inside(root: string, target: string): boolean {
   const rel = relative(root, target)
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
 }
@@ -310,58 +314,3 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
   return {diff:result.stdout,original,modified} satisfies GitDiff
 }
 
-/** Resolve the official VS Code Codicon font shipped by @vscode/codicons. */
-export function codiconAsset(): { path: string; type: string } {
-  const packageRoot = dirname(require.resolve('@vscode/codicons/package.json'))
-  return { path: resolve(packageRoot, 'dist', 'codicon.ttf'), type: 'font/ttf' }
-}
-
-export function monacoAsset(raw: string): { path: string; type: string } {
-  const packageRoot = dirname(require.resolve('monaco-editor/package.json'))
-  const path = resolve(packageRoot, 'min', raw)
-  const root = resolve(packageRoot, 'min')
-  if (!inside(root, path)) throw new WorkbenchError('asset-invalid', 'invalid Monaco asset path', 403)
-  const type = extname(path) === '.css' ? 'text/css' : extname(path) === '.js' ? 'text/javascript' : extname(path) === '.ttf' ? 'font/ttf' : 'application/octet-stream'
-  return { path, type }
-}
-
-/**
- * Resolve vscode-oniguruma's WASM binary —— TextMate 语法背后的正则引擎。
- * 走 HTTP 提供，客户端用 fetch + WebAssembly 加载。
- */
-export function onigWasmAsset(): { path: string; type: string } {
-  const packageRoot = dirname(require.resolve('vscode-oniguruma/package.json'))
-  return { path: resolve(packageRoot, 'release', 'onig.wasm'), type: 'application/wasm' }
-}
-
-/**
- * Resolve one file-type icon from material-icon-theme (the theme VS Code ships by default).
- * The explorer renders these as <img>, so only the SVG files are served; the name→file mapping
- * lives in the client bundle (see scripts/generate-file-icons.mjs).
- */
-export function fileIconAsset(raw: string): { path: string; type: string } {
-  const packageRoot = dirname(require.resolve('material-icon-theme/package.json'))
-  const path = resolve(packageRoot, 'icons', raw)
-  const root = resolve(packageRoot, 'icons')
-  if (!inside(root, path)) throw new WorkbenchError('asset-invalid', 'invalid file icon path', 403)
-  return { path, type: extname(path) === '.svg' ? 'image/svg+xml' : 'application/octet-stream' }
-}
-
-/**
- * Resolve KaTeX's stylesheet and web fonts. katex.min.css references its fonts with the
- * relative url "fonts/…", so the stylesheet and the font directory must be served under one
- * prefix for the browser to resolve them.
- */
-export function katexAsset(raw: string): { path: string; type: string } {
-  const packageRoot = dirname(require.resolve('katex/package.json'))
-  const path = resolve(packageRoot, 'dist', raw)
-  const root = resolve(packageRoot, 'dist')
-  if (!inside(root, path)) throw new WorkbenchError('asset-invalid', 'invalid KaTeX asset path', 403)
-  const extension = extname(path)
-  const type = extension === '.css' ? 'text/css'
-    : extension === '.woff2' ? 'font/woff2'
-      : extension === '.woff' ? 'font/woff'
-        : extension === '.ttf' ? 'font/ttf'
-          : 'application/octet-stream'
-  return { path, type }
-}
