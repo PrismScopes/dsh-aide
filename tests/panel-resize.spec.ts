@@ -16,12 +16,19 @@ describe('resizedPanelWidth', () => {
     expect(resizedPanelWidth(420, 500, -500, -1, 400, 720)).toBe(720)
   })
 
-  it('uses matching narrow visual lines with an accessible drag target', () => {
+  it('uses transparent drag targets with no visual feedback, leaving the divider to the panels', () => {
     const styles = readFileSync(new URL('../src/client/styles.ts', import.meta.url), 'utf8')
+    // 命中区做宽是为了好抓，但完全透明。
     expect(styles).toContain('.dvw-side-resizer,.dvw-chat-resizer{width:10px;cursor:ew-resize;touch-action:none;background:transparent}')
-    expect(styles).toContain('.dvw-side{border-right-color:transparent}.dvw-chat,[data-dvw-conversation-panel]{border-left-color:transparent!important}')
-    expect(styles).toContain('.dvw-side-resizer::after,.dvw-chat-resizer::after{background:transparent}.dvw-side-resizer::after{left:3px;width:3px}')
-    expect(styles).toContain('.dvw-chat-resizer::after{left:1px;width:6px}')
-    expect(styles).toContain('.dvw-chat-resizer{position:fixed;top:36px;right:calc(var(--dvw-chat-width) - 5px);z-index:22}')
+    // 两个缩放条的定位。
+    expect(styles).toContain('.dvw-side-resizer{position:relative;grid-column:2;grid-row:1/3;justify-self:end;height:100%;z-index:22;transform:translateX(5px)}')
+    expect(styles).toContain('.dvw-chat-resizer{position:fixed;top:36px;bottom:0;right:calc(var(--dvw-chat-width) - 5px);z-index:22}')
+    // 与 DSH 一致：悬停、聚焦、拖动都不做视觉反馈 —— resizer 自己的规则里不应出现高亮色，
+    // 也不该用 ::after 另画一根线。只挑出 resizer 的规则来判，避免顺带扫到别的组件。
+    const resizerRules = styles.match(/[^{}]*resizer[^{]*\{[^}]*\}/g) ?? []
+    expect(resizerRules.length).toBeGreaterThan(0)
+    expect(resizerRules.filter((rule) => /accent|::after/.test(rule))).toEqual([])
+    // 分隔线改由面板自身的边框提供，所以不能再把边框置为透明。
+    expect(styles).not.toContain('.dvw-side{border-right-color:transparent}')
   })
 })
