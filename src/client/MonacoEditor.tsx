@@ -46,12 +46,16 @@ const SYNTAX_DARK: Record<string, string> = {
   comment: '6a9955', string: 'ce9178', keyword: '569cd6', 'keyword.control': 'c586c0',
   number: 'b5cea8', type: '4ec9b0', 'type.identifier': '4ec9b0', function: 'dcdcaa',
   variable: '9cdcfe', 'variable.predefined': '4fc1ff', constant: '4fc1ff',
+  // Monaco 把变量与函数统一归到 identifier，不像 VS Code 那样分开着色。给 identifier 上 VS Code 的
+  // 变量色，至少让标识符不再与普通文本同色 —— 这是当前分词粒度下最接近 VS Code 的做法。
+  identifier: '9cdcfe',
   regexp: 'd16969', tag: '569cd6', attribute: '9cdcfe', delimiter: 'd4d4d4', operator: 'd4d4d4'
 }
 const SYNTAX_LIGHT: Record<string, string> = {
   comment: '008000', string: 'a31515', keyword: '0000ff', 'keyword.control': 'af00db',
   number: '098658', type: '267f99', 'type.identifier': '267f99', function: '795e26',
   variable: '001080', 'variable.predefined': '0070c1', constant: '0070c1',
+  identifier: '001080',
   regexp: '811f3f', tag: '800000', attribute: 'e50000', delimiter: '000000', operator: '000000'
 }
 
