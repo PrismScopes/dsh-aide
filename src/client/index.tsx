@@ -49,25 +49,42 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /**
  * 打开 DSH 自己的设置面板，工作台保持打开。
  *
- * 不再去点侧栏那个入口：它在**已登录时是个二级菜单**（账户菜单：设置 / 意见反馈 / 退出登录），
- * 结构由 primitives 的 Menu 渲染并 portal 到 body，role、class、可点元素都不是稳定的契约，
- * 两段式点击（先开菜单、再点其中一项）在实践中一直断。
+ * 不再去点侧栏入口，也不伪造键盘事件 —— 两者在桌面端都不成立：
+ *   - 那个入口在**已登录时是二级菜单**（账户菜单：设置 / 意见反馈 / 退出登录），由 primitives 的
+ *     Menu 渲染并 portal 到 body，role / class / 可点元素都不是稳定契约；
+ *   - 伪造的 KeyboardEvent 带 isTrusted: false，而桌面端走的是 window.dshDesktop.keyboard
+ *     原生键盘桥（见 dsh-client-shortcuts 的 ShortcutsService），不认这种合成事件。
+ *     **web 端能过、桌面端过不去，正是这个原因。**
  *
- * 改用 DSH 自己注册的快捷键 `settings.open`（dsh-client-ui-settings-general 里
- * ctx.shortcuts.register，regions 含 page/editable/terminal）：
- *   desktop:windows → Ctrl+,      web:windows → Ctrl+Alt+,
- * 两个都派发一次，由 DSH 的快捷键系统按当前平台认领其中一个。
+ * 直接用 DSH 的 shortcuts 服务执行它自己注册的命令：
+ *   ShortcutRegistry.invoke(id, context) —— 从命令表取 settings.open 并 run()，
+ *   context.modal 为 null 时不做模态门控。与平台无关，也不碰 DOM。
+ * registry 是该服务的内部字段，取不到时回退到派发组合键（web 端仍有效）。
  *
  * 工作台**不收起**：设置面板是 z-index 1000（wCInkW_overlay）、工作台 overlay 是 100，
  * 设置会浮在工作台之上，两者共存 —— 用户要的就是这个。
  */
 function openDshSettings(): void {
+  const registry = (shortcutsService as { registry?: { invoke?(id: string, context: unknown): unknown } } | undefined)?.registry
+  if (typeof registry?.invoke === 'function') {
+    console.info('[dvw] 打开 DSH 设置：走 shortcuts.registry.invoke')
+    registry.invoke(SETTINGS_COMMAND, { modal: null, source: 'dsh-vscode-workbench' })
+    return
+  }
+  // 回退：web 端认 Ctrl+Alt+,，桌面端认 Ctrl+,。桌面端不认合成事件，所以这条只在 web 端有效。
+  console.warn('[dvw] 打开 DSH 设置：shortcuts.registry.invoke 不可用，回退到派发组合键（桌面端此回退无效）')
   for (const altKey of [false, true]) {
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key: ',', code: 'Comma', ctrlKey: true, altKey, bubbles: true, cancelable: true
     }))
   }
 }
+
+/** DSH 为设置面板注册的命令 id（dsh-client-ui-settings-general 里 ctx.shortcuts.register）。 */
+const SETTINGS_COMMAND = 'settings.open'
+
+/** 由 apply 注入，供 openDshSettings 使用。 */
+let shortcutsService: unknown
 
 /** layout 服务的最小结构面（不 import 官方类型；旧版缺失时降级为 no-op）。 */
 interface LayoutLike { selectPanel(id: string | null): void }
@@ -169,12 +186,13 @@ const PanelPage = ({ service, layout }: { service: VscodeWorkbench; layout?: unk
 
 // layout 是跨插件面板动作契约（layout.selectPanel）。必须声明注入：cordis 拒绝访问未注入的
 // 服务，此前用 `as unknown as` 绕过类型读取 ctx.layout，运行时直接让整个插件激活失败。
-export const inject = ['slots', 'layout']
+// shortcuts 同样必须声明：openDshSettings 要经它执行 settings.open 命令（桌面端唯一可行的路径）。
+export const inject = ['slots', 'layout', 'shortcuts']
 export function apply(ctx: ClientContext): void {
   const service = new WorkbenchController()
   const layout = ctx.layout
-  // 设置入口由 Overlay 注册（见 useOpenSettingsAfterHide）：触发时机要等侧栏入口恢复显示，
-  // 只有那边才拿得到工作台的 visible 状态。
+  // shortcuts 服务的类型在绑定的旧版官方类型里还没有，按运行时形状取（同 layout 的做法）。
+  shortcutsService = (ctx as unknown as { shortcuts?: unknown }).shortcuts
   ctx.effect(() => installStyles(), 'dsh-vscode-workbench: styles')
   ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-vscode-workbench: service')
   ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-vscode-workbench: terminal panel')
