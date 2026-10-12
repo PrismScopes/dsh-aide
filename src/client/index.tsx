@@ -83,15 +83,13 @@ function findDshSettingsTrigger(): HTMLElement | undefined {
  * 两种都要走通，所以点完之后还要等菜单出现并点它的「设置」项（未登录时菜单不会出现，
  * 这一轮探询自然结束）。菜单是异步挂载的，用 rAF 轮询等到出现或超时，不能只等固定帧数。
  *
- * 另外工作台显示期间入口被 useHideShadowedSettingsEntry 设成了 display: none（避免与活动栏
- * 按钮视觉重叠）。display:none 的元素其实仍收得到 click，这里还是先临时恢复显示、点完再还原。
+ * 那一行在工作台显示期间被 useHideShadowedSettingsEntry 从 DOM 里移除了，所以先临时插回、
+ * 点完再摘掉 —— 否则根本没有可点的入口。
  */
 function openDshSettings(): void {
-  const rows = [...document.querySelectorAll<HTMLElement>('[class*=_triggerRow]')]
-  const saved = rows.map((row) => ({ row, display: row.style.display }))
-  for (const { row } of saved) row.style.removeProperty('display')
+  for (const { row, parent, next } of detachedEntryRows) parent?.insertBefore(row, next)
   findDshSettingsTrigger()?.click()
-  for (const { row, display } of saved) row.style.display = display
+  for (const { row } of detachedEntryRows) row.remove()
 
   // 已登录时上一步只打开了账户菜单，这里把它里面的「设置」点掉。
   const deadline = performance.now() + MENU_WAIT_MS
@@ -102,6 +100,12 @@ function openDshSettings(): void {
   }
   requestAnimationFrame(tick)
 }
+
+/**
+ * 被工作台移出 DOM 的 DSH 侧栏入口行，连同原位置。
+ * openDshSettings 需要临时把它插回来才点得到那个入口；关闭工作台时也会插回。
+ */
+let detachedEntryRows: { row: HTMLElement; parent: Element | null; next: Node | null }[] = []
 
 /** 账户菜单是异步挂载的，等它的上限。 */
 const MENU_WAIT_MS = 2000
@@ -121,17 +125,15 @@ function findSettingsMenuItem(): HTMLElement | undefined {
 interface LayoutLike { selectPanel(id: string | null): void }
 
 /**
- * 工作台显示期间，把 DSH 侧栏底部那个设置入口藏起来。
+ * 工作台显示期间，把 DSH 侧栏底部那个账户/设置入口整行从 DOM 里移除。
  *
  * 它的行位于 (10, 948)–(270, 990)，伸进工作台活动栏（x 0–48）的区域。被 overlay 盖住之后
- * 它既收不到点击（命中测试落在活动栏上，实测点击不打开设置），图标又会从活动栏与侧栏的
- * 缝隙里透出来 —— 表现为「两个图标重叠、其中一个点了没反应」。工作台活动栏的设置按钮
- * 提供的是同一个入口（都打开 DSH 设置面板），所以这里把这个被盖住的收掉，关闭工作台时还原。
+ * 它既收不到点击（命中测试落在活动栏上），里面的图标又会从活动栏与侧栏的缝隙里透出来 ——
+ * 表现为「两个图标重叠、其中一个点了没反应」。工作台活动栏的设置按钮提供的是同一个入口。
  *
- * 两件事都做：
- *   1. 行的 display 置 none —— 它不该接收点击（命中层归活动栏）；
- *   2. 真正**移除**行里的 svg —— 只是隐藏的话元素仍在 DOM 里，用户明确要求删除这个箭头而不是留着。
- * 移除的节点连同其原位置一起记下，工作台关闭时原位插回。
+ * 为什么移除整行而不是隐藏、也不是只删 svg：那一行里放什么取决于登录状态 ——
+ * 未登录时是 IconEllipsisOutlineMedium（省略号），已登录时是 AccountAvatar（可能是 <img>）。
+ * 只删 svg 会在已登录时漏掉头像，所以整行一起摘掉。节点连同原位置记下，关闭工作台时插回。
  *
  * 以 triggerRow 类名定位（DSH 的 CSS Module 类，前缀哈希但不影响后缀匹配）。
  */
@@ -140,14 +142,12 @@ function useHideShadowedSettingsEntry(visible: boolean): void {
     // 只在工作台显示期间收起：关掉工作台就要把入口还给 DSH，否则用户从侧栏进不去设置。
     if (!visible) return
     const rows = [...document.querySelectorAll<HTMLElement>('[class*=_triggerRow]')]
-    const savedRows = rows.map((row) => ({ row, display: row.style.display }))
-    const icons = rows.flatMap((row) => [...row.querySelectorAll<SVGElement>('svg')])
-      .map((icon) => ({ icon, parent: icon.parentElement, next: icon.nextSibling }))
-    for (const { row } of savedRows) row.style.display = 'none'
-    for (const { icon } of icons) icon.remove()
+      .map((row) => ({ row, parent: row.parentElement, next: row.nextSibling }))
+    detachedEntryRows = rows
+    for (const { row } of rows) row.remove()
     return () => {
-      for (const { icon, parent, next } of icons) parent?.insertBefore(icon, next)
-      for (const { row, display } of savedRows) row.style.display = display
+      for (const { row, parent, next } of rows) parent?.insertBefore(row, next)
+      detachedEntryRows = []
     }
   }, [visible])
 }
