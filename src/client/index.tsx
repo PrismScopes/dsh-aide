@@ -71,17 +71,34 @@ function openDshSettings(): void {
     registry.invoke(SETTINGS_COMMAND, { modal: null, source: 'dsh-vscode-workbench' })
     return
   }
-  // 回退：web 端认 Ctrl+Alt+,，桌面端认 Ctrl+,。桌面端不认合成事件，所以这条只在 web 端有效。
   console.warn('[dvw] 打开 DSH 设置：shortcuts.registry.invoke 不可用，回退到派发组合键（桌面端此回退无效）')
-  for (const altKey of [false, true]) {
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      key: ',', code: 'Comma', ctrlKey: true, altKey, bubbles: true, cancelable: true
-    }))
-  }
+  dispatchSettingsKeys()
 }
 
 /** DSH 为设置面板注册的命令 id（dsh-client-ui-settings-general 里 ctx.shortcuts.register）。 */
 const SETTINGS_COMMAND = 'settings.open'
+
+/**
+ * 回退路径：派发设置快捷键。
+ *
+ * DSH 的绑定写的是 modifiers: ["primary"]，即 mac 是 Cmd、其余平台是 Ctrl，所以修饰键要按
+ * 平台给，不能一律用 Ctrl。平台取自 DSH 自己的判定方式（见 dsh-client-shortcuts 的
+ * detectEnvironment）：html[data-platform] 存在即桌面端，其值用于区分 macos / windows / linux；
+ * 不存在则退回 navigator.platform。
+ *
+ * web 端还有一个 Alt 变体（defaults 里 web:windows 是 primary+alt），所以两种都派发。
+ * 桌面端不认合成事件，这条回退只在 web 端有效 —— 桌面端依赖上面的 registry.invoke。
+ */
+function dispatchSettingsKeys(): void {
+  const raw = document.documentElement.dataset.platform ?? navigator.platform ?? ''
+  const isMac = /darwin|mac|iphone|ipad/i.test(raw)
+  const primary = isMac ? { metaKey: true } : { ctrlKey: true }
+  for (const altKey of [false, true]) {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: ',', code: 'Comma', ...primary, altKey, bubbles: true, cancelable: true
+    }))
+  }
+}
 
 /** 由 apply 注入，供 openDshSettings 使用。 */
 let shortcutsService: unknown

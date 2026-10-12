@@ -12,6 +12,13 @@ import { DshMark } from './DshMark.tsx'
 import { DocumentPreview, documentPreviewKind, type DocumentPreviewKind } from './documentPreview.tsx'
 import { toggleTerminal } from './shortcuts.ts'
 import { resetWorkspaceDocuments, WorkspaceRequestScope } from './workspaceState.ts'
+import { useDshDarkTheme } from './theme.ts'
+import { Git } from './GitPanel.tsx'
+import { useDebouncedCallback } from './hooks.ts'
+
+// 从 GitPanel 拆出后重新导出，保持既有引用（含单测）不变。
+export { graphRows, graphTrackPath } from './GitPanel.tsx'
+export type { GraphRow, GraphTrack } from './GitPanel.tsx'
 
 interface Tab extends FileDocument { dirty: boolean; draft: string; loaded?: boolean; line?: number; column?: number; external?: boolean; preview?: boolean; title?: string; diff?: GitDiff; diffMode?: 'inline' | 'split'; diffSourcePath?:string; imageUrl?:string; documentPreview?:DocumentPreviewKind; documentUrl?:string; pinned?: boolean }
 // 工作台不提供配色选项，配色始终由 DSH 主题决定（见 useDshDarkTheme）。
@@ -94,66 +101,6 @@ export function directoryAffected(directory:string,changedPaths:string[]):boolea
 
 /** Return the basename shown in a tab while preserving its full internal path. */
 export function tabLabel(tab:Pick<Tab,'path'|'title'|'diffSourcePath'>):string{const path=tab.title??tab.diffSourcePath??tab.path.replace(/^diff:/,'');return path.split(/[\\/]/).at(-1)??path}
-
-/** Invoke `fn` at most once per `ms` after the latest call, always running the freshest callback. */
-function useDebouncedCallback(fn: () => void, ms: number): () => void {
-  const fnRef = useRef(fn); fnRef.current = fn
-  const timer = useRef<ReturnType<typeof setTimeout>>()
-  useEffect(() => () => clearTimeout(timer.current), [])
-  return useCallback(() => { clearTimeout(timer.current); timer.current = setTimeout(() => fnRef.current(), ms) }, [ms])
-}
-
-/** 解析 #rgb / #rrggbb / rgb() / rgba() 为 [r,g,b]；无法解析时返回 undefined。 */
-function parseColor(value: string): [number, number, number] | undefined {
-  const v = value.trim()
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v)
-  if (hex !== null) {
-    const raw = hex[1]!
-    const full = raw.length === 3 ? raw.split('').map(c => c + c).join('') : raw
-    return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)]
-  }
-  const rgb = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i.exec(v)
-  if (rgb !== null) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
-  return undefined
-}
-
-/** sRGB 相对亮度是否偏暗，用来判定底色。 */
-function isDarkColor(rgb: [number, number, number]): boolean {
-  const [r, g, b] = rgb.map(c => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4 }) as [number, number, number]
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5
-}
-
-/**
- * 判断宿主当前是否为深色。
- *
- * 以宿主实际渲染出来的 --dsw-alias-bg-base 为准。只看 html[data-ds-theme-source] 是不够的：
- * 该属性为 "system" 时只表示“跟随系统”，并不等于 DSH 最终采用的明暗——用户可能在设置里
- * 显式选了深色而系统仍是浅色。此前正是这种情况被误判成浅色，于是深色底上套了一套浅色语法色
- * （关键字是纯蓝 #0000ff、注释是纯绿 #008000），在深底上几乎看不见，代码看起来就是“发灰”。
- */
-function useDshDarkTheme(): boolean {
-  const read = () => {
-    const fromToken = parseColor(getComputedStyle(document.body).getPropertyValue('--dsw-alias-bg-base'))
-    if (fromToken !== undefined) return isDarkColor(fromToken)
-    // 拿不到底色时回退到属性与系统偏好。
-    const source = document.documentElement.dataset.dsThemeSource
-    if (source === 'dark') return true
-    if (source === 'light') return false
-    if (document.body.hasAttribute('data-ds-dark-theme')) return true
-    return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
-  }
-  const [dark, setDark] = useState(read)
-  useEffect(() => {
-    const observer = new MutationObserver(() => setDark(read()))
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-ds-theme-source'] })
-    observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
-    const media = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : undefined
-    const onChange = () => setDark(read())
-    media?.addEventListener('change', onChange)
-    return () => { observer.disconnect(); media?.removeEventListener('change', onChange) }
-  }, [])
-  return dark
-}
 
 function Tree({ sessionId, path, depth, expanded, selected, selectedDirectory, statuses, onToggle, onSelectDirectory, onOpen, onChange, onUpload, creating, onCreatingChange, onCreatingCancel, onCreatingSubmit }: TreeProps & { creating?: CreatingEntry; onCreatingChange(value: string): void; onCreatingCancel(): void; onCreatingSubmit(): void }) {
   const [rows, setRows] = useState<FileEntry[]>([]); const [error, setError] = useState<string>(); const [dropTarget, setDropTarget] = useState(false); const [context, setContext] = useState<{ entry: FileEntry; x: number; y: number }>(); const [renaming, setRenaming] = useState<{ path: string; value: string }>(); const [pendingDelete, setPendingDelete] = useState<FileEntry>()
@@ -254,85 +201,6 @@ function Search(props: { sessionId: string; onOpen(path: string, line: number, c
   return <><div className="dvw-side-head">搜索</div><form className="dvw-search-form" onSubmit={event => { event.preventDefault(); void search() }}><input className="dvw-input" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索" autoFocus/><div className="dvw-options">{([['caseSensitive','Aa'],['wholeWord','Ab'],['regex','.*']] as const).map(([key,label]) => <label key={key}><input type="checkbox" checked={flags[key]} onChange={e => setFlags({ ...flags, [key]: e.target.checked })}/>{label}</label>)}<button className="dvw-icon" title="搜索" disabled={busy}><Icon name="search"/></button></div><input className="dvw-input" value={include} onChange={e=>setInclude(e.target.value)} placeholder="包含文件，例如 src/**"/><input className="dvw-input" value={exclude} onChange={e=>setExclude(e.target.value)} placeholder="排除文件，例如 **/*.test.ts"/></form>{error&&<div className="dvw-error">{error}</div>}{limited&&<div className="dvw-message">结果已截断到 2000 条</div>}<div className="dvw-results">{[...groups].map(([path, rows]) => <div key={path}><div className="dvw-result-file"><Icon name="chevron-down"/> {path} <span className="dvw-badge">{rows.length}</span></div>{rows.map((row,index)=><div className="dvw-result" key={`${row.line}:${row.column}:${index}`} onClick={()=>props.onOpen(path,row.line,row.column)}><span className="dvw-line">{row.line}</span><span className="dvw-preview">{row.preview}</span></div>)}</div>)}</div></>
 }
 
-export interface GraphTrack { hash: string; color: number }
-export interface GraphRow { commit: GitCommit; lane: number; before: GraphTrack[]; after: GraphTrack[]; parentLanes: number[] }
-export function graphRows(commits: GitCommit[]): GraphRow[] {
-  const visible = new Set(commits.map(commit => commit.hash))
-  let nextColor = 0
-  let lanes: GraphTrack[] = commits[0] ? [{ hash: commits[0].hash, color: nextColor++ }] : []
-  return commits.map(commit => {
-    let lane = lanes.findIndex(track => track.hash === commit.hash)
-    if (lane < 0) { lanes = [{ hash: commit.hash, color: nextColor++ }, ...lanes]; lane = 0 }
-    const before = [...lanes]
-    const current = before[lane]!
-    const after = before.filter(track => track.hash !== commit.hash)
-    const parents = commit.parents.filter(parent => visible.has(parent))
-    parents.forEach((parent, index) => {
-      if (after.some(track => track.hash === parent)) return
-      const color = index === 0 ? current.color : nextColor++
-      after.splice(Math.min(lane + index, after.length), 0, { hash: parent, color })
-    })
-    const parentLanes = parents.map(parent => after.findIndex(track => track.hash === parent)).filter(index => index >= 0)
-    lanes = after
-    return { commit, lane, before, after, parentLanes }
-  })
-}
-
-const GRAPH_COLORS = ['#4c8dff','#d94f9f','#4fc1b0','#d9a441','#9b7bea']
-function graphColor(color:number):string{return GRAPH_COLORS[color%GRAPH_COLORS.length]!}
-function graphWidth(row:GraphRow):number{return Math.max(row.before.length,row.after.length,row.lane+1,1)*14+8}
-
-/** Draw a fixed-radius, orthogonal transition between two graph lanes. */
-export function graphTrackPath(from: number, to: number, startY: number, endY: number, bendY: number): string {
-  if (from === to) return `M ${from} ${startY} V ${endY}`
-  const direction = Math.sign(to - from)
-  const radius = Math.min(5, Math.abs(to - from) / 2, Math.abs(bendY - startY), Math.abs(endY - bendY))
-  return `M ${from} ${startY} V ${bendY - radius} Q ${from} ${bendY} ${from + direction * radius} ${bendY} H ${to - direction * radius} Q ${to} ${bendY} ${to} ${bendY + radius} V ${endY}`
-}
-
-function GraphTracks({row}:{row:GraphRow}) {
-  const width=graphWidth(row);const x=row.lane*14+8;const current=row.before[row.lane]!
-  return <svg className="dvw-graph-svg" width={width} height="38" viewBox={`0 0 ${width} 38`} aria-hidden="true">
-    {row.before.map((track,lane)=>{if(track.hash===row.commit.hash)return null;const target=row.after.findIndex(next=>next.hash===track.hash);const nextLane=target>=0?target:lane;return <path key={`continue-${track.hash}`} d={graphTrackPath(lane*14+8,nextLane*14+8,0,38,19)} fill="none" stroke={graphColor(track.color)} strokeWidth="2" vectorEffect="non-scaling-stroke"/>})}
-    <path d={`M ${x} 0 V 19`} fill="none" stroke={graphColor(current.color)} strokeWidth="2" vectorEffect="non-scaling-stroke"/>
-    {row.parentLanes.map((parent,index)=>{const target=parent*14+8;const track=row.after[parent]!;return <path key={`parent-${track.hash}-${index}`} d={graphTrackPath(x,target,19,38,29)} fill="none" stroke={graphColor(track.color)} strokeWidth="2" vectorEffect="non-scaling-stroke"/>})}
-    <circle cx={x} cy="19" r="5" fill="var(--dvw-surface-1)" stroke={graphColor(current.color)} strokeWidth="2" vectorEffect="non-scaling-stroke"/>
-  </svg>
-}
-
-function GraphContinuation({row}:{row:GraphRow}) {
-  const width=graphWidth(row)
-  return <svg className="dvw-graph-continuation" width={width} height="100%" viewBox={`0 0 ${width} 100`} preserveAspectRatio="none" aria-hidden="true">{row.after.map((track,lane)=><line key={track.hash} x1={lane*14+8} y1="0" x2={lane*14+8} y2="100" stroke={graphColor(track.color)} strokeWidth="2" vectorEffect="non-scaling-stroke"/>)}</svg>
-}
-
-function CommitGraph({ commits, expanded, files, onToggle, onOpenFile }: { commits: GitCommit[]; expanded?: string; files: Map<string,GitCommitFile[]>; onToggle(commit:GitCommit):void; onOpenFile(commit:GitCommit,file:GitCommitFile):void }) {
-  return <div className="dvw-graph-list">{graphRows(commits).map(row => {
-    const opened=expanded===row.commit.hash
-    return <div className="dvw-graph-entry" data-expanded={opened} key={row.commit.hash}>
-      <button className="dvw-graph-row" aria-expanded={opened} onClick={()=>onToggle(row.commit)} title={`${row.commit.hash}\n${row.commit.author}`}><GraphTracks row={row}/><span className="dvw-graph-copy"><span className="dvw-graph-subject">{row.commit.subject}</span><span className="dvw-graph-meta">{row.commit.author} · {new Date(row.commit.date).toLocaleDateString()}</span></span>{row.commit.refs.slice(0,2).map(ref=><span className="dvw-ref" key={ref}>{ref}</span>)}<Icon name={opened?'chevron-down':'chevron-right'}/></button>
-      {opened&&<div className="dvw-commit-files" style={{paddingLeft:graphWidth(row)+7}}><GraphContinuation row={row}/><div className="dvw-commit-file-list">{(files.get(row.commit.hash)??[]).map(file=><button className="dvw-commit-file" key={`${file.status}:${file.path}`} onClick={()=>onOpenFile(row.commit,file)}><Icon name={fileIcon(file.path)} className="dvw-file-icon"/><span className="dvw-commit-file-name">{file.path.split('/').at(-1)}</span><span className="dvw-commit-file-dir">{file.path.split('/').slice(0,-1).join('/')}</span><span className="dvw-badge">{file.status}</span></button>)}</div></div>}
-    </div>
-  })}</div>
-}
-
-function GitGroupHeader({ title, count, expanded, onToggle, children }: { title: string; count: number; expanded: boolean; onToggle(): void; children?: ReactNode }) {
-  return <div className="dvw-group-head"><button className="dvw-group-toggle" aria-expanded={expanded} onClick={onToggle}><Icon name={expanded?'chevron-down':'chevron-right'}/><span>{title}</span><span className="dvw-count">{count}</span></button>{children}</div>
-}
-
-function Git(props: { sessionId: string; onDiff(key:string, diff:GitDiff, title?:string, sourcePath?:string): void }) {
-  const [status, setStatus] = useState<GitStatus>(); const [commits,setCommits]=useState<GitCommit[]>([]); const [message, setMessage] = useState(''); const [error, setError] = useState<string>(); const [busy,setBusy]=useState(false); const [expanded,setExpanded]=useState({staged:true,changes:true,graph:true});const [expandedCommit,setExpandedCommit]=useState<string>();const [commitFileMap,setCommitFileMap]=useState<Map<string,GitCommitFile[]>>(new Map())
-  const refresh = useCallback(() => { void Promise.all([api<GitStatus>('git.status',{sessionId:props.sessionId}),api<GitCommit[]>('git.action',{sessionId:props.sessionId,action:'log'})]).then(([nextStatus,nextCommits])=>{setStatus(nextStatus);setCommits(nextCommits);setError(undefined)}).catch(error=>{setStatus(undefined);setCommits([]);setError(error instanceof ApiError&&error.code==='not-repository'?undefined:String(error))}) }, [props.sessionId])
-  const refreshDebounced = useDebouncedCallback(refresh, 500)
-  useEffect(refresh,[refresh]); useEffect(()=>{const fn=()=>refreshDebounced();window.addEventListener('dvw-files-changed',fn);return()=>window.removeEventListener('dvw-files-changed',fn)},[refreshDebounced])
-  const action = async (name: string, path?: string, value?: string) => { setBusy(true);try { const result = await api<GitStatus | GitDiff>('git.action',{sessionId:props.sessionId,action:name,path,value}); if(name==='diff'&&'diff'in result){const key=path??'';props.onDiff(key,result,key.split('/').at(-1)??key,key)} else {setStatus(result as GitStatus);if(name==='commit')refresh()} } catch(error){setError(String(error))}finally{setBusy(false)} }
-  const branch = async () => { const branches=await api<string[]>('git.action',{sessionId:props.sessionId,action:'branches'}); const choice=prompt(`切换分支，或输入 +新分支\n${branches.join('\n')}`); if(!choice)return; await action(choice.startsWith('+')?'branch.create':'branch.switch',undefined,choice.replace(/^\+/,'')) }
-  const toggleCommit=async(commit:GitCommit)=>{if(expandedCommit===commit.hash){setExpandedCommit(undefined);return}setExpandedCommit(commit.hash);if(commitFileMap.has(commit.hash))return;setBusy(true);try{const files=await api<GitCommitFile[]>('git.action',{sessionId:props.sessionId,action:'commit.files',value:commit.hash});setCommitFileMap(current=>new Map(current).set(commit.hash,files))}catch(error){setError(String(error))}finally{setBusy(false)}}
-  const openCommitFile=async(commit:GitCommit,file:GitCommitFile)=>{setBusy(true);try{const result=await api<GitDiff>('git.action',{sessionId:props.sessionId,action:'commit.file.diff',path:file.path,value:commit.hash});props.onDiff(`commit:${commit.hash}:${file.path}`,result,file.path.split('/').at(-1)??file.path,file.path)}catch(error){setError(String(error))}finally{setBusy(false)}}
-  const staged=status?.changes.filter(change=>change.index!=='.'&&change.index!=='?')??[]
-  const changed=status?.changes.filter(change=>change.worktree!=='.'||change.untracked)??[]
-  const renderChange=(change:GitStatus['changes'][number],group:'staged'|'worktree')=><div className="dvw-change" key={`${group}:${change.path}`} onClick={()=>void action('diff',change.path,change.untracked?'untracked':group)}><Icon name={change.untracked?'new-file':'diff'} className="dvw-file-icon"/><span className="dvw-change-path">{change.path}</span><span className="dvw-badge">{change.untracked?'U':group==='staged'?change.index:change.worktree}</span><button className="dvw-icon" title={group==='staged'?'取消暂存':'暂存更改'} onClick={event=>{event.stopPropagation();void action(group==='staged'?'unstage':'stage',change.path)}}><Icon name={group==='staged'?'remove':'add'}/></button>{group==='worktree'&&<button className="dvw-icon" title="放弃更改" onClick={event=>{event.stopPropagation();if(confirm(`放弃 ${change.path} 的更改？此操作无法撤销。`))void action('discard',change.path,change.untracked?'untracked':undefined)}}><Icon name="discard"/></button>}</div>
-  return <><div className="dvw-side-head">源代码管理<div className="dvw-toolbar"><button className="dvw-icon" title="刷新" disabled={busy} onClick={refresh}><Icon name="refresh"/></button></div></div>{error&&<div className="dvw-error">{error}</div>}{status&&<><div className="dvw-git-head"><button className="dvw-branch" onClick={()=>void branch()}><Icon name="git-branch"/> {status.branch}</button><span>↑{status.ahead} ↓{status.behind}</span></div><div className="dvw-commit"><input className="dvw-input" value={message} onChange={event=>setMessage(event.target.value)} onKeyDown={event=>{if(event.ctrlKey&&event.key==='Enter'&&message.trim())void action('commit',undefined,message).then(()=>setMessage(''))}} placeholder={`消息 (Ctrl+Enter 在“${status.branch}”提交)`}/><button className="dvw-commit-button" disabled={busy||!message.trim()} onClick={()=>void action('commit',undefined,message).then(()=>setMessage(''))}><Icon name="check"/> 提交</button></div><div className="dvw-git">{staged.length>0&&<section><GitGroupHeader title="暂存的更改" count={staged.length} expanded={expanded.staged} onToggle={()=>setExpanded(value=>({...value,staged:!value.staged}))}><button className="dvw-icon" title="取消暂存所有更改" onClick={()=>void action('unstage.all')}><Icon name="remove"/></button></GitGroupHeader>{expanded.staged&&staged.map(change=>renderChange(change,'staged'))}</section>}<section><GitGroupHeader title="更改" count={changed.length} expanded={expanded.changes} onToggle={()=>setExpanded(value=>({...value,changes:!value.changes}))}><button className="dvw-icon" title="放弃所有更改" onClick={()=>{if(confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。'))void action('discard.all')}}><Icon name="discard"/></button><button className="dvw-icon" title="暂存所有更改" onClick={()=>void action('stage.all')}><Icon name="add"/></button></GitGroupHeader>{expanded.changes&&changed.map(change=>renderChange(change,'worktree'))}</section><section className="dvw-graph"><GitGroupHeader title="图表" count={commits.length} expanded={expanded.graph} onToggle={()=>setExpanded(value=>({...value,graph:!value.graph}))}><button className="dvw-icon" title="刷新提交图表" onClick={refresh}><Icon name="refresh"/></button></GitGroupHeader>{expanded.graph&&<CommitGraph commits={commits} expanded={expandedCommit} files={commitFileMap} onToggle={commit=>void toggleCommit(commit)} onOpenFile={(commit,file)=>void openCommitFile(commit,file)}/>}</section></div></>}</>
-}
 
 export function Launcher({ service }: { service: VscodeWorkbench }) { return <button className="dvw-launch" title="打开 VS Code 工作台" onClick={()=>service.show()}>VS Code 工作台</button> }
 
