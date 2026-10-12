@@ -20,119 +20,131 @@ type GrammarModule = { default: GrammarLike[] }
  * 语言标识（Monaco 的语言 id）→ 语法模块的动态导入。
  * 用动态 import 是为了让未用到的语言的语法不进 bundle。
  */
-const GRAMMAR_BY_LANGUAGE: Record<string, () => Promise<GrammarModule>> = {
-  typescript: () => import('@shikijs/langs/typescript'),
-  javascript: () => import('@shikijs/langs/javascript'),
-  json: () => import('@shikijs/langs/json'),
-  jsonc: () => import('@shikijs/langs/jsonc'),
-  css: () => import('@shikijs/langs/css'),
-  scss: () => import('@shikijs/langs/scss'),
-  less: () => import('@shikijs/langs/less'),
-  html: () => import('@shikijs/langs/html'),
-  xml: () => import('@shikijs/langs/xml'),
-  markdown: () => import('@shikijs/langs/markdown'),
-  yaml: () => import('@shikijs/langs/yaml'),
-  toml: () => import('@shikijs/langs/toml'),
-  python: () => import('@shikijs/langs/python'),
-  shell: () => import('@shikijs/langs/shellscript'),
-  powershell: () => import('@shikijs/langs/powershell'),
-  bat: () => import('@shikijs/langs/bat'),
-  go: () => import('@shikijs/langs/go'),
-  rust: () => import('@shikijs/langs/rust'),
-  java: () => import('@shikijs/langs/java'),
-  kotlin: () => import('@shikijs/langs/kotlin'),
-  scala: () => import('@shikijs/langs/scala'),
-  c: () => import('@shikijs/langs/c'),
-  cpp: () => import('@shikijs/langs/cpp'),
-  objective_c: () => import('@shikijs/langs/objective-cpp'),
-  csharp: () => import('@shikijs/langs/csharp'),
-  fsharp: () => import('@shikijs/langs/fsharp'),
-  php: () => import('@shikijs/langs/php'),
-  ruby: () => import('@shikijs/langs/ruby'),
-  swift: () => import('@shikijs/langs/swift'),
-  dart: () => import('@shikijs/langs/dart'),
-  lua: () => import('@shikijs/langs/lua'),
-  perl: () => import('@shikijs/langs/perl'),
-  r: () => import('@shikijs/langs/r'),
-  julia: () => import('@shikijs/langs/julia'),
-  sql: () => import('@shikijs/langs/sql'),
-  graphql: () => import('@shikijs/langs/graphql'),
-  dockerfile: () => import('@shikijs/langs/dockerfile'),
-  makefile: () => import('@shikijs/langs/makefile'),
-  ini: () => import('@shikijs/langs/ini'),
-  nix: () => import('@shikijs/langs/nix'),
-  zig: () => import('@shikijs/langs/zig'),
-  elixir: () => import('@shikijs/langs/elixir'),
-  haskell: () => import('@shikijs/langs/haskell'),
-  clojure: () => import('@shikijs/langs/clojure'),
-  vue: () => import('@shikijs/langs/vue'),
-  svelte: () => import('@shikijs/langs/svelte'),
-  terraform: () => import('@shikijs/langs/terraform'),
-  protobuf: () => import('@shikijs/langs/protobuf'),
-  diff: () => import('@shikijs/langs/diff'),
-  log: () => import('@shikijs/langs/log'),
-  tex: () => import('@shikijs/langs/tex'),
-  restructuredtext: () => import('@shikijs/langs/rst')
+const GRAMMAR_BY_LANGUAGE: Record<string, string> = {
+  typescript: 'typescript.mjs',
+  javascript: 'javascript.mjs',
+  json: 'json.mjs',
+  jsonc: 'jsonc.mjs',
+  css: 'css.mjs',
+  scss: 'scss.mjs',
+  less: 'less.mjs',
+  html: 'html.mjs',
+  xml: 'xml.mjs',
+  markdown: 'markdown.mjs',
+  yaml: 'yaml.mjs',
+  toml: 'toml.mjs',
+  python: 'python.mjs',
+  shell: 'shellscript.mjs',
+  powershell: 'powershell.mjs',
+  bat: 'bat.mjs',
+  go: 'go.mjs',
+  rust: 'rust.mjs',
+  java: 'java.mjs',
+  kotlin: 'kotlin.mjs',
+  scala: 'scala.mjs',
+  c: 'c.mjs',
+  cpp: 'cpp.mjs',
+  objective_c: 'objective-cpp.mjs',
+  csharp: 'csharp.mjs',
+  fsharp: 'fsharp.mjs',
+  php: 'php.mjs',
+  ruby: 'ruby.mjs',
+  swift: 'swift.mjs',
+  dart: 'dart.mjs',
+  lua: 'lua.mjs',
+  perl: 'perl.mjs',
+  r: 'r.mjs',
+  julia: 'julia.mjs',
+  sql: 'sql.mjs',
+  graphql: 'graphql.mjs',
+  dockerfile: 'dockerfile.mjs',
+  makefile: 'makefile.mjs',
+  ini: 'ini.mjs',
+  nix: 'nix.mjs',
+  zig: 'zig.mjs',
+  elixir: 'elixir.mjs',
+  haskell: 'haskell.mjs',
+  clojure: 'clojure.mjs',
+  vue: 'vue.mjs',
+  svelte: 'svelte.mjs',
+  terraform: 'terraform.mjs',
+  protobuf: 'protobuf.mjs',
+  diff: 'diff.mjs',
+  log: 'log.mjs',
+  tex: 'tex.mjs',
+  restructuredtext: 'rst.mjs'
 }
 
 /**
  * scopeName → 加载器。TextMate 语法之间会互相 include（例如 vue 引用 source.css），
  * registry 按 scopeName 索取依赖语法时要有办法把它取回来。
  */
-const LOADER_BY_SCOPE: Record<string, () => Promise<GrammarModule>> = {
-  'source.ts': () => import('@shikijs/langs/typescript'),
-  'source.tsx': () => import('@shikijs/langs/tsx'),
-  'source.js': () => import('@shikijs/langs/javascript'),
-  'source.js.jsx': () => import('@shikijs/langs/jsx'),
-  'source.json': () => import('@shikijs/langs/json'),
-  'source.css': () => import('@shikijs/langs/css'),
-  'source.css.scss': () => import('@shikijs/langs/scss'),
-  'source.css.less': () => import('@shikijs/langs/less'),
-  'text.html.basic': () => import('@shikijs/langs/html'),
-  'text.xml': () => import('@shikijs/langs/xml'),
-  'text.html.markdown': () => import('@shikijs/langs/markdown'),
-  'source.yaml': () => import('@shikijs/langs/yaml'),
-  'source.toml': () => import('@shikijs/langs/toml'),
-  'source.python': () => import('@shikijs/langs/python'),
-  'source.shell': () => import('@shikijs/langs/shellscript'),
-  'source.powershell': () => import('@shikijs/langs/powershell'),
-  'source.batchfile': () => import('@shikijs/langs/bat'),
-  'source.go': () => import('@shikijs/langs/go'),
-  'source.rust': () => import('@shikijs/langs/rust'),
-  'source.java': () => import('@shikijs/langs/java'),
-  'source.kotlin': () => import('@shikijs/langs/kotlin'),
-  'source.scala': () => import('@shikijs/langs/scala'),
-  'source.c': () => import('@shikijs/langs/c'),
-  'source.cpp': () => import('@shikijs/langs/cpp'),
-  'source.css.mss': () => import('@shikijs/langs/objective-cpp'),
-  'source.cs': () => import('@shikijs/langs/csharp'),
-  'source.fsharp': () => import('@shikijs/langs/fsharp'),
-  'source.php': () => import('@shikijs/langs/php'),
-  'source.ruby': () => import('@shikijs/langs/ruby'),
-  'source.swift': () => import('@shikijs/langs/swift'),
-  'source.dart': () => import('@shikijs/langs/dart'),
-  'source.lua': () => import('@shikijs/langs/lua'),
-  'source.perl': () => import('@shikijs/langs/perl'),
-  'source.r': () => import('@shikijs/langs/r'),
-  'source.julia': () => import('@shikijs/langs/julia'),
-  'source.sql': () => import('@shikijs/langs/sql'),
-  'source.graphql': () => import('@shikijs/langs/graphql'),
-  'source.dockerfile': () => import('@shikijs/langs/dockerfile'),
-  'source.makefile': () => import('@shikijs/langs/makefile'),
-  'source.ini': () => import('@shikijs/langs/ini'),
-  'source.nix': () => import('@shikijs/langs/nix'),
-  'source.zig': () => import('@shikijs/langs/zig'),
-  'source.elixir': () => import('@shikijs/langs/elixir'),
-  'source.haskell': () => import('@shikijs/langs/haskell'),
-  'source.clojure': () => import('@shikijs/langs/clojure'),
-  'source.vue': () => import('@shikijs/langs/vue'),
-  'source.svelte': () => import('@shikijs/langs/svelte'),
-  'source.hcl.terraform': () => import('@shikijs/langs/terraform'),
-  'source.proto': () => import('@shikijs/langs/protobuf'),
-  'source.diff': () => import('@shikijs/langs/diff'),
-  'text.log': () => import('@shikijs/langs/log'),
-  'text.tex.latex': () => import('@shikijs/langs/tex'),
-  'source.rst': () => import('@shikijs/langs/rst')
+const LOADER_BY_SCOPE: Record<string, string> = {
+  'source.ts': 'typescript.mjs',
+  'source.tsx': 'tsx.mjs',
+  'source.js': 'javascript.mjs',
+  'source.js.jsx': 'jsx.mjs',
+  'source.json': 'json.mjs',
+  'source.css': 'css.mjs',
+  'source.css.scss': 'scss.mjs',
+  'source.css.less': 'less.mjs',
+  'text.html.basic': 'html.mjs',
+  'text.xml': 'xml.mjs',
+  'text.html.markdown': 'markdown.mjs',
+  'source.yaml': 'yaml.mjs',
+  'source.toml': 'toml.mjs',
+  'source.python': 'python.mjs',
+  'source.shell': 'shellscript.mjs',
+  'source.powershell': 'powershell.mjs',
+  'source.batchfile': 'bat.mjs',
+  'source.go': 'go.mjs',
+  'source.rust': 'rust.mjs',
+  'source.java': 'java.mjs',
+  'source.kotlin': 'kotlin.mjs',
+  'source.scala': 'scala.mjs',
+  'source.c': 'c.mjs',
+  'source.cpp': 'cpp.mjs',
+  'source.css.mss': 'objective-cpp.mjs',
+  'source.cs': 'csharp.mjs',
+  'source.fsharp': 'fsharp.mjs',
+  'source.php': 'php.mjs',
+  'source.ruby': 'ruby.mjs',
+  'source.swift': 'swift.mjs',
+  'source.dart': 'dart.mjs',
+  'source.lua': 'lua.mjs',
+  'source.perl': 'perl.mjs',
+  'source.r': 'r.mjs',
+  'source.julia': 'julia.mjs',
+  'source.sql': 'sql.mjs',
+  'source.graphql': 'graphql.mjs',
+  'source.dockerfile': 'dockerfile.mjs',
+  'source.makefile': 'makefile.mjs',
+  'source.ini': 'ini.mjs',
+  'source.nix': 'nix.mjs',
+  'source.zig': 'zig.mjs',
+  'source.elixir': 'elixir.mjs',
+  'source.haskell': 'haskell.mjs',
+  'source.clojure': 'clojure.mjs',
+  'source.vue': 'vue.mjs',
+  'source.svelte': 'svelte.mjs',
+  'source.hcl.terraform': 'terraform.mjs',
+  'source.proto': 'protobuf.mjs',
+  'source.diff': 'diff.mjs',
+  'text.log': 'log.mjs',
+  'text.tex.latex': 'tex.mjs',
+  'source.rst': 'rst.mjs'
+}
+
+/**
+ * 取一份 TextMate 语法。
+ *
+ * 语法数据留在宿主侧按需提供（全部语法合计约 2.5MB，cpp 一份就有 521KB），不进客户端 bundle；
+ * 响应带 immutable 缓存，同一份语法只会真正下载一次。这与 oniguruma WASM 的取法一致。
+ */
+async function loadGrammar(file: string): Promise<GrammarLike> {
+  const response = await fetch(`/dsh-vscode/grammar/${file}`)
+  if (!response.ok) throw new Error(`grammar ${file}: HTTP ${response.status}`)
+  return await response.json() as GrammarLike
 }
 
 let onigLibPromise: Promise<vsctm.IOnigLib> | undefined
@@ -170,7 +182,7 @@ function getRegistry(): vsctm.Registry {
       if (cached !== undefined) return cached as never
       const loader = LOADER_BY_SCOPE[scopeName]
       if (loader === undefined) return null
-      const grammar = (await loader()).default[0]
+      const grammar = await loadGrammar(loader)
       if (grammar === undefined) return null
       grammarByScope.set(scopeName, grammar)
       return grammar as never
@@ -183,7 +195,7 @@ function getRegistry(): vsctm.Registry {
 async function grammarFor(languageId: string): Promise<GrammarLike | undefined> {
   const loader = GRAMMAR_BY_LANGUAGE[languageId]
   if (loader === undefined) return undefined
-  const grammar = (await loader()).default[0]
+  const grammar = await loadGrammar(loader)
   if (grammar === undefined) return undefined
   grammarByScope.set(grammar.scopeName, grammar)
   return grammar

@@ -7,6 +7,7 @@ import chokidar from 'chokidar'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { HostContext } from './context.ts'
 import { codiconAsset, createEntry, cwdFor, deleteEntry, fileIconAsset, gitAction, gitStatus, katexAsset, listFiles, monacoAsset, onigWasmAsset, pdfWorkerAsset, readDocument, renameEntry, saveDocument, searchWorkspace, uploadFile, workspacePreviewFile } from './host.ts'
+import { readGrammar } from './assets.ts'
 import { installTerminal } from './terminal.ts'
 import type { SearchRequest } from './types.ts'
 import { readBinaryBody, readBody, send, sendError, stringField, trusted, WorkbenchError } from './wire.ts'
@@ -56,6 +57,22 @@ export function apply(ctx: HostContext): void {
       } catch (error) { sendError(res, error) }
     },
   }), 'dsh-vscode-workbench: PDF.js worker')
+
+  // TextMate 语法按需提供：全部语法约 2.5MB，留在宿主侧就不会进客户端 bundle。
+  // 客户端只在真正需要某种语言时取一次，之后由 immutable 缓存接管。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix', path: '/dsh-vscode/grammar', handler: async (req, res) => {
+      if (!trusted(req, ctx.webRuntime.trustedHosts)) { res.writeHead(403); res.end(); return }
+      try {
+        const name = new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/grammar/'.length)
+        // 先把数据取好再写 header：一旦 writeHead 发出，后面的异常就无法再用 sendError
+        // 正常响应了（二次 writeHead 会 ERR_HTTP_HEADERS_SENT，客户端只看到连接中断）。
+        const grammar = JSON.stringify(await readGrammar(name))
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=31536000, immutable' })
+        res.end(grammar)
+      } catch (error) { sendError(res, error) }
+    },
+  }), 'dsh-vscode-workbench: TextMate grammars')
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/api', handler: async (req, res) => {

@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import { dirname, extname, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import { WorkbenchError } from './wire.ts'
 import { inside } from './host.ts'
 
@@ -64,4 +65,29 @@ export function katexAsset(raw: string): { path: string; type: string } {
         : extension === '.ttf' ? 'font/ttf'
           : 'application/octet-stream'
   return { path, type }
+}
+
+/**
+ * 读取一份 shiki 的 TextMate 语法，返回它的原始 JSON。
+ *
+ * 之所以要这样取：@shikijs/langs 的每个语法模块只是 `JSON.parse("…")` 的包装，
+ * 而 vscode-textmate 的 loadGrammar 收的正是这个 JSON 对象。把语法留在宿主侧按需提供，
+ * 客户端就不必把它们打进 bundle —— 全部语法合计约 2.5MB（cpp 一份 521KB、cpp-macro 296KB、
+ * 还有 ts/js/jsx/tsx/objc-cpp/php/less/csharp/swift… 各数十至上百 KB），
+ * 这是客户端体积的最大来源。
+ *
+ * 入参来自 URL，先经 inside() 确认没有越出包目录。
+ */
+export async function readGrammar(raw: string): Promise<unknown> {
+  // 注意：@shikijs/langs 的 exports 不允许访问 ./package.json（会抛
+  // ERR_PACKAGE_PATH_NOT_EXPORTED），所以不能像其它包那样用它定位包目录。
+  // 改用主入口 —— 它就在 dist 里，取其所在目录即可。
+  const root = dirname(require.resolve('@shikijs/langs'))
+  const path = resolve(root, raw)
+  if (!inside(root, path)) throw new WorkbenchError('asset-invalid', 'invalid grammar path', 403)
+  const source = await readFile(path, 'utf8')
+  const match = /JSON\.parse\("([\s\S]*)"\)/.exec(source)
+  if (match === null) throw new WorkbenchError('asset-invalid', 'unexpected grammar format', 500)
+  // 文件里那一段是 JSON 字符串字面量的内容，先反转义成 JSON 文本，再解析。
+  return JSON.parse(JSON.parse(`"${match[1]}"`)) as unknown
 }
