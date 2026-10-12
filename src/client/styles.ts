@@ -35,14 +35,23 @@ html[data-ds-theme-source=dark] .dvw-overlay{color-scheme:dark}
 .dvw-set-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
 .dvw-set-title{color:var(--dsw-alias-label-primary);font-size:13px}
 .dvw-set-desc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
-.dvw-set-control{flex:none;display:flex;align-items:center}
-.dvw-set-switch{position:relative;flex:none;width:34px;height:20px;border:0;border-radius:10px;padding:0;cursor:pointer;background:var(--dsw-alias-interactive-bg-active);transition:background .15s}
-.dvw-set-switch[aria-checked=true]{background:var(--dsw-alias-state-business-primary)}
-.dvw-set-knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
-.dvw-set-switch[aria-checked=true] .dvw-set-knob{transform:translateX(14px)}
-.dvw-set-range{display:flex;align-items:center;gap:10px}
-.dvw-set-range input[type=range]{width:150px;accent-color:var(--dsw-alias-state-business-primary)}
-.dvw-set-range output{min-width:52px;text-align:right;color:var(--dsw-alias-label-secondary);font-size:12px;font-variant-numeric:tabular-nums}
+.dvw-set-control{flex:none;display:flex;align-items:center;gap:8px}
+/* 开关按 DSH 设置页的真实规格：36×20、radius 999px；开启时轨道取前景色、圆钮取底色（反色），
+   关闭时轨道为 16% 前景色、圆钮为三级文字色。那些 class 是 CSS Module 哈希，只能照规格重画。 */
+.dvw-set-switch{position:relative;flex:none;width:36px;height:20px;border:0;border-radius:999px;padding:0;cursor:pointer;background:var(--dsw-alias-label-primary);transition:background .12s}
+.dvw-set-switch[aria-checked=false]{background:color-mix(in srgb,var(--dsw-alias-label-primary) 16%,transparent)}
+.dvw-set-knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--dsw-alias-bg-base);transition:transform .12s,background .12s}
+.dvw-set-switch[aria-checked=true] .dvw-set-knob{transform:translateX(16px)}
+.dvw-set-switch[aria-checked=false] .dvw-set-knob{background:var(--dsw-alias-label-tertiary);transform:none}
+/* 数值调节：DSH 用步进器而不是滑块。72×36、radius 12px、底色 bg-layer-3；箭头默认透明、悬停才显形。 */
+.dvw-set-stepper{flex:none;display:flex;align-items:center;justify-content:space-between;width:72px;height:36px;padding:0 8px;border-radius:12px;background:var(--dsw-alias-bg-layer-3)}
+.dvw-set-value{font-size:14px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary)}
+.dvw-set-arrows{display:flex;flex-direction:column;gap:2px;opacity:0;transition:opacity .12s}
+.dvw-set-stepper:hover .dvw-set-arrows,.dvw-set-stepper:focus-within .dvw-set-arrows{opacity:1}
+.dvw-set-arrow{display:grid;place-items:center;width:14px;height:14px;border:0;padding:0;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.dvw-set-arrow:hover:not(:disabled){color:var(--dsw-alias-label-primary)}
+.dvw-set-arrow:disabled{opacity:.4;cursor:default}
+.dvw-set-unit{color:var(--dsw-alias-label-secondary);font-size:14px}
 /* 侧栏面板行：图标占一个正常 flex 位，命中层另用绝对定位铺满整行并在冒泡阶段吃掉点击，
    避免 DSH 把主区域切到空面板（那会卸载整个会话视图，是打开工作台时整屏卡顿的来源）。 */
 .dvw-panel-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px}
