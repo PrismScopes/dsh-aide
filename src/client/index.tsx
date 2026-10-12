@@ -65,7 +65,7 @@ function findDshSettingsTrigger(): HTMLElement | undefined {
 }
 
 /**
- * 打开 DSH 自己的设置面板。
+ * 打开 DSH 自己的设置面板，工作台保持打开。
  *
  * 不能用 layout.selectPanel('settings')：DSH 的设置是**模态对话框**，不是 main 面板，
  * 那个 id 压根没有对应的 main panel，切过去只会把主区域换成一片空白。
@@ -74,15 +74,19 @@ function findDshSettingsTrigger(): HTMLElement | undefined {
  * settings.trigger 时 inject 出 openSettings: actions.open），插件拿不到那个 store，
  * 也没有别的公开入口，所以直接触发侧栏的入口按钮。
  *
- * 先收起工作台再触发。DSH 设置面板本身是 z-index 1000、工作台 overlay 是 100，层级上并没有
- * 被盖住，但收起工作台可以免掉层级与命中上的疑问，也符合「进设置就是离开工作台」的直觉。
+ * 工作台**不收起**：设置面板是 z-index 1000、工作台 overlay 是 100，设置会浮在工作台之上，
+ * 两者可以共存（用户要的就是这个）。
+ *
+ * 但工作台显示期间那个入口被 useHideShadowedSettingsEntry 设成了 display: none（避免与
+ * 活动栏按钮视觉重叠）。display:none 的元素其实仍收得到 click，这里还是先把它临时恢复显示、
+ * 点完再还原 —— 不依赖那个边缘行为。
  */
-function openDshSettings(service: VscodeWorkbench): void {
-  service.hide()
-  // 等两帧让工作台卸载、被我隐藏的侧栏入口恢复显示（隐藏由 visible 状态驱动）。
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => { findDshSettingsTrigger()?.click() })
-  })
+function openDshSettings(): void {
+  const rows = [...document.querySelectorAll<HTMLElement>('[class*=_triggerRow]')]
+  const saved = rows.map((row) => ({ row, display: row.style.display }))
+  for (const { row } of saved) row.style.removeProperty('display')
+  findDshSettingsTrigger()?.click()
+  for (const { row, display } of saved) row.style.display = display
 }
 
 /** layout 服务的最小结构面（不 import 官方类型；旧版缺失时降级为 no-op）。 */
@@ -98,9 +102,7 @@ interface LayoutLike { selectPanel(id: string | null): void }
  *
  * 以 triggerRow 类名定位（DSH 的 CSS Module 类，前缀哈希但不影响后缀匹配）。
  */
-function useHideShadowedSettingsEntry(service: VscodeWorkbench): void {
-  const [visible, setVisible] = useState(() => service.getSnapshot().visible)
-  useEffect(() => service.subscribe(() => setVisible(service.getSnapshot().visible)), [service])
+function useHideShadowedSettingsEntry(visible: boolean): void {
   useEffect(() => {
     // 只在工作台显示期间隐藏：关掉工作台就要把入口还给 DSH，否则用户从侧栏进不去设置。
     if (!visible) return
@@ -116,7 +118,15 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
   // 在 state.byId 里找 retainedBy.mainView > 0 的会话（对齐 dsh-client-ui-layout 的 DocumentTitle
   // 与 dsh-client-ui-cordis 的 current 取法）。state.current 读取保留，用于兼容 0.1.x。
   const sessionId = useSessions((state: any) => state.current ?? (Object.values(state.byId ?? {}) as any[]).find((session: any) => (session.retainedBy?.mainView ?? 0) > 0)?.id) as string | undefined
-  useHideShadowedSettingsEntry(service)
+  // 两个 effect 的声明顺序有意义：先恢复被隐藏的侧栏入口，再触发它。见各自的注释。
+  // 两个 effect 的声明顺序有意义：先按 visible 隐藏/恢复侧栏入口，再注册 opener。
+  const [visible, setVisible] = useState(() => service.getSnapshot().visible)
+  useEffect(() => service.subscribe(() => setVisible(service.getSnapshot().visible)), [service])
+  useHideShadowedSettingsEntry(visible)
+  useEffect(() => {
+    service.setSettingsOpener(openDshSettings)
+    return () => { service.setSettingsOpener(() => {}) }
+  }, [service])
   return <Workbench key={sessionId ?? 'no-session'} service={service} useSessions={useSessions as never}/>
 }
 
@@ -180,8 +190,8 @@ export const inject = ['slots', 'layout']
 export function apply(ctx: ClientContext): void {
   const service = new WorkbenchController()
   const layout = ctx.layout
-  // 工作台里的设置按钮要打开 DSH 自己的设置面板（布局偏好已迁到那里）。
-  service.setSettingsOpener(() => openDshSettings(service))
+  // 设置入口由 Overlay 注册（见 useOpenSettingsAfterHide）：触发时机要等侧栏入口恢复显示，
+  // 只有那边才拿得到工作台的 visible 状态。
   ctx.effect(() => installStyles(), 'dsh-vscode-workbench: styles')
   ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-vscode-workbench: service')
   ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-vscode-workbench: terminal panel')

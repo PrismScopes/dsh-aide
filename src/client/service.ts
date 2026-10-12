@@ -59,10 +59,12 @@ export interface VscodeWorkbench {
   getLayout(): WorkbenchLayout
   setLayout(patch: Partial<WorkbenchLayout>): void
   /**
-   * 打开 DSH 自己的设置面板。布局偏好的入口已迁到那里（settings.plugins.tab），
-   * 工作台不再自建设置界面。实现由 index.tsx 用 layout.selectPanel('settings') 注入。
+   * 打开 DSH 自己的设置面板。布局偏好的入口已迁到那里（settings.section），
+   * 工作台不再自建设置界面；具体实现由 Overlay 注册（触发时机要等侧栏入口恢复显示）。
    */
   openDshSettings(): void
+  /** 注册 openDshSettings 的实现。Overlay 挂载时注入，卸载时恢复成 no-op。 */
+  setSettingsOpener(opener: () => void): void
   subscribe(listener: () => void): () => void
 }
 
