@@ -50,20 +50,28 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
  * 打开 DSH 自己的设置面板。
  *
  * 不能用 layout.selectPanel('settings')：DSH 的设置是**模态对话框**，不是 main 面板，
- * 那个 id 压根没有对应的 main panel，切过去只会把主区域换成一片空白 —— 这正是
- * 「设置按钮点了是空的」的原因。
+ * 那个 id 压根没有对应的 main panel，切过去只会把主区域换成一片空白。
  *
  * 设置面板的开关状态由 dsh-client-ui-settings-general 内部的 store 持有（它注册
  * settings.trigger 时 inject 出 openSettings: actions.open），插件拿不到那个 store，
- * 也没有别的公开入口，所以直接触发侧栏的入口按钮：同一文档，模态会正常弹出。
- * 按钮以 aria-label 定位，中英文两种本地化文案都覆盖。
+ * 也没有别的公开入口，所以直接触发侧栏的入口按钮。
+ *
+ * 先收起工作台再触发。DSH 设置面板本身是 z-index 1000、工作台 overlay 是 100，层级上并没有
+ * 被盖住（实测设置面板中心命中它自己的元素、不在 overlay 内），但收起工作台可以免掉层级与命中
+ * 上的任何疑问，也符合「进设置就是离开工作台」的直觉；收起后侧栏入口恢复显示，按钮才点得到。
  */
-function openDshSettings(): void {
-  const trigger = [...document.querySelectorAll<HTMLElement>('button, [role=button]')].find((button) => {
-    const label = (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
-    return label === '设置' || label === 'Settings'
+function openDshSettings(service: VscodeWorkbench): void {
+  service.hide()
+  // 等工作台卸载、侧栏入口恢复显示之后（隐藏逻辑由 visible 状态驱动）再触发它。
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const trigger = [...document.querySelectorAll<HTMLElement>('button, [role=button]')].find((button) => {
+        const label = (button.getAttribute('aria-label') ?? button.textContent ?? '').trim()
+        return label === '设置' || label === 'Settings'
+      })
+      trigger?.click()
+    })
   })
-  trigger?.click()
 }
 
 /** layout 服务的最小结构面（不 import 官方类型；旧版缺失时降级为 no-op）。 */
@@ -162,7 +170,7 @@ export function apply(ctx: ClientContext): void {
   const service = new WorkbenchController()
   const layout = ctx.layout
   // 工作台里的设置按钮要打开 DSH 自己的设置面板（布局偏好已迁到那里）。
-  service.setSettingsOpener(openDshSettings)
+  service.setSettingsOpener(() => openDshSettings(service))
   ctx.effect(() => installStyles(), 'dsh-vscode-workbench: styles')
   ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-vscode-workbench: service')
   ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-vscode-workbench: terminal panel')
