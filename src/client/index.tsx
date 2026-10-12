@@ -17,7 +17,10 @@ declare module '@deepseek-ai/cordis' { interface Context { vscodeWorkbench: Vsco
 declare module '@deepseek-ai/dsh-client-ui-slots' { interface SlotInjectMap { 'dsh-vscode-workbench.overlay': { service: VscodeWorkbench }; 'dsh-vscode-workbench.launcher': { service: VscodeWorkbench } } }
 
 const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { service: VscodeWorkbench }) => {
-  const sessionId = useSessions(state => state.current) as string | undefined
+  // DSH 0.2.0 起 sessions store 不再提供 state.current。官方在 shell 层的取法是
+  // 在 state.byId 里找 retainedBy.mainView > 0 的会话（对齐 dsh-client-ui-layout 的 DocumentTitle
+  // 与 dsh-client-ui-cordis 的 current 取法）。state.current 读取保留，用于兼容 0.1.x。
+  const sessionId = useSessions((state: any) => state.current ?? (Object.values(state.byId ?? {}) as any[]).find((session: any) => (session.retainedBy?.mainView ?? 0) > 0)?.id) as string | undefined
   return <Workbench key={sessionId ?? 'no-session'} service={service} useSessions={useSessions as never}/>
 }
 const Footer = ({ service }: PropsRuntime<'sidebar.footer.action'> & { service: VscodeWorkbench }) => {

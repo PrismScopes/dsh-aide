@@ -92,9 +92,25 @@ function useDebouncedCallback(fn: () => void, ms: number): () => void {
 }
 
 function useDshDarkTheme(): boolean {
-  const read = () => document.body.hasAttribute('data-ds-dark-theme')
+  // DSH 0.2.0 把主题来源放在 html[data-ds-theme-source]（取值 system / light / dark）；
+  // 旧版写在 body[data-ds-dark-theme]。两条都读，source 为 system 时回落 prefers-color-scheme。
+  const read = () => {
+    const source = document.documentElement.dataset.dsThemeSource
+    if (source === 'dark') return true
+    if (source === 'light') return false
+    if (document.body.hasAttribute('data-ds-dark-theme')) return true
+    return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
+  }
   const [dark, setDark] = useState(read)
-  useEffect(() => { const observer = new MutationObserver(() => setDark(read())); observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] }); return () => observer.disconnect() }, [])
+  useEffect(() => {
+    const observer = new MutationObserver(() => setDark(read()))
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-ds-theme-source'] })
+    observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
+    const media = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : undefined
+    const onChange = () => setDark(read())
+    media?.addEventListener('change', onChange)
+    return () => { observer.disconnect(); media?.removeEventListener('change', onChange) }
+  }, [])
   return dark
 }
 
@@ -282,7 +298,8 @@ export function Launcher({ service }: { service: VscodeWorkbench }) { return <bu
 export function Workbench({ service, useSessions }: { service: VscodeWorkbench; useSessions: (selector: (state: any) => any) => any }) {
   const [snapshot, setSnapshot] = useState(() => service.getSnapshot()); const [panels, setPanels] = useState(() => service.getPanels())
   useEffect(() => service.subscribe(() => { setSnapshot(service.getSnapshot()); setPanels(service.getPanels()) }), [service])
-  const sessionId = useSessions(state=>state.current) as string|undefined; const cwd = useSessions(state=>sessionId===undefined?undefined:state.byId[sessionId]?.cwd) as string|undefined
+  // 同 index.tsx：0.2.0 的 sessions store 无 state.current，改用 retainedBy.mainView 判定当前会话。
+  const sessionId = useSessions((state:any)=>state.current??(Object.values(state.byId??{}) as any[]).find((session:any)=>(session.retainedBy?.mainView??0)>0)?.id) as string|undefined; const cwd = useSessions(state=>sessionId===undefined?undefined:state.byId[sessionId]?.cwd) as string|undefined
   const [workspace,setWorkspace]=useState<{cwd:string;name:string}>(); const [tabs,setTabs]=useState<Tab[]>([]); const [active,setActive]=useState<string>(); const [error,setError]=useState<string>(); const [panelHeight,setPanelHeight]=useState(260); const [sideWidth,setSideWidth]=useState(210); const [primarySideVisible,setPrimarySideVisible]=useState(()=>localStorage.getItem('dvw:primary-side-visible')!=='closed');const [statusVisible,setStatusVisible]=useState(()=>localStorage.getItem('dvw:status-visible')!=='closed');const [settingsOpen,setSettingsOpen]=useState(false);const [chatWidth,setChatWidth]=useState(()=>Math.max(400,Math.min(720,Math.round(Number(localStorage.getItem('dvw:dsh-chat-width'))||420))));const [chatVisible,setChatVisible]=useState(()=>localStorage.getItem('dvw:dsh-chat-visible')!=='closed');const [outlineVisible,setOutlineVisible]=useState(()=>localStorage.getItem('dvw:outline')!=='closed')
   const tabsRef=useRef(tabs);tabsRef.current=tabs
   const workspaceRequests=useRef(new WorkspaceRequestScope());const loadingTabs=useRef(new Set<string>())
