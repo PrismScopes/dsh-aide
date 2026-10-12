@@ -14,7 +14,11 @@ export function DshConversationPanel({ visible, width, statusHeight }: { visible
   useLayoutEffect(() => {
     if (!visible) return
     let attached: HTMLElement | null = null
-    const attach = () => {
+    let observed: HTMLElement | null = null
+    let frame = 0
+    const observer = new MutationObserver(() => { if (frame === 0) frame = requestAnimationFrame(apply) })
+    function apply() {
+      frame = 0
       const next = findDshConversationRoot()
       if (next === attached) return
       attached?.removeAttribute('data-dvw-conversation-panel')
@@ -24,12 +28,23 @@ export function DshConversationPanel({ visible, width, statusHeight }: { visible
       attached?.setAttribute('data-dvw-conversation-panel', '')
       attached?.style.setProperty('--dvw-chat-width', `${width}px`)
       attached?.style.setProperty('--dvw-status-height', `${statusHeight}px`)
+      /**
+       * 只盯对话栏的直接父元素，且**不带 subtree**。会话正文渲染会在 body 子树上搅出成千上万次
+       * 变动，每一条都要生成 mutation record——而 DSH 重建会话视图（打开/关闭工作台）时正是这种
+       * 时刻，那部分开销就是卡顿来源。深层变动不会替换对话栏本身，无需监听；对话栏真被重建时，
+       * 父元素的直接子节点必然变化，这一层足够捕捉。配合 rAF 合并，代价与页面变动量解耦。
+       */
+      const parent = next?.parentElement ?? null
+      if (parent !== observed) {
+        observer.disconnect()
+        observed = parent
+        if (parent !== null) observer.observe(parent, { childList: true })
+      }
     }
-    attach()
-    const observer = new MutationObserver(attach)
-    observer.observe(document.body, { childList: true, subtree: true })
+    apply()
     return () => {
       observer.disconnect()
+      if (frame !== 0) cancelAnimationFrame(frame)
       attached?.removeAttribute('data-dvw-conversation-panel')
       attached?.style.removeProperty('--dvw-chat-width')
       attached?.style.removeProperty('--dvw-status-height')
