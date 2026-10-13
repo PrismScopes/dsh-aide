@@ -277,6 +277,8 @@ export class RetrievalIndex {
     for (const [path, list] of this.stored) {
       if (path === excludePath) continue
       for (const chunk of list) {
+        // 单行片段不注入：它给不出可复用的模式，而哈希嵌入对短文本的余弦偏高，反而容易挤掉真正相关的多行片段。
+        if (chunk.endLine - chunk.startLine < 1) continue
         const cosine = cosineSimilarity(queryVector, decodeVector(chunk.vector))
         if (cosine < this.options.similarityThreshold) continue
         // 打分以正文词元的重合为主：哈希嵌入只给一个很弱的语义信号，重合度才是可靠的那一半。
