@@ -106,10 +106,14 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
     window.addEventListener('keydown', escape)
     return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', escape) }
   }, [context])
-  const closeTerminal = (id: string) => { setContext(undefined); setSplit(current => current?.filter(value => value !== id)); void workspace.close(id) }
+  // 关掉终端后若 split 只剩空数组，要收回 undefined：留下空数组会让 `split ?? [active]` 一直选中
+  // 那个空数组，之后新建的终端也不会渲染（面板整块空白）。
+  const closeTerminal = (id: string) => { setContext(undefined); setSplit(current => { const next = current?.filter(value => value !== id); return next === undefined || next.length === 0 ? undefined : next }); void workspace.close(id) }
   const saveRename = (id: string) => { const title = renaming?.id === id ? renaming.value.trim() : ''; setRenaming(undefined); if (title) void workspace.rename(id, title) }
   const splitTerminal = (first = active) => { if (first === undefined) return; void workspace.create().then(value => { setSplit(current => [...(current?.includes(first) ? current : [first]), value.id]); setActive(value.id) }) }
-  const shown = (split ?? (active === undefined ? [] : [active])).filter(id => snapshot.terminals.some(value => value.id === id))
+  // 兜底不变量：只要还有终端，就必须有一个窗格在渲染 —— 状态一旦错位，面板会整块空白。
+  const panes = (split ?? (active === undefined ? [] : [active])).filter(id => snapshot.terminals.some(value => value.id === id))
+  const shown = panes.length > 0 || snapshot.terminals.length === 0 ? panes : snapshot.terminals.slice(0, 1).map(value => value.id)
   const selectTerminal = (id: string) => { setActive(id); setSplit(current => current?.includes(id) ? current : [id]) }
   const startRename = (id: string, title: string, where: 'tab' | 'list') => setRenaming({ id, value: title, where })
   // 顶部标签栏。渲染进面板头里留给面板的那块容器（见 service.ts 的 BottomPanelProps.header）：
