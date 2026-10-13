@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { applyEvent, CompletionClient, contextFingerprint, triggerPlan } from '../src/client/completion.ts'
 import type * as monaco from 'monaco-editor'
-import { ACCEPT_COMMAND_ID, buildInlineCompletionItems, InlineCompletionController, nextLineOf, nextWordOf } from '../src/client/inlineCompletion.ts'
+import { ACCEPT_COMMAND_ID, buildInlineCompletionItems, InlineCompletionController, nextLineOf } from '../src/client/inlineCompletion.ts'
 import { encodeSseEvent, type CompletionEvent } from '../src/completion/protocol.ts'
 import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
 
@@ -80,13 +80,6 @@ describe('inline completion items', () => {
 })
 
 describe('accept granularity', () => {
-  it('takes a whole identifier as one word and a single character otherwise', () => {
-    expect(nextWordOf('useState(0)')).toBe('useState')
-    expect(nextWordOf('  call()')).toBe('  call')
-    expect(nextWordOf('(0)')).toBe('(')
-    expect(nextWordOf('42 + 1')).toBe('42')
-    expect(nextWordOf('')).toBe('')
-  })
 
   it('takes one line, keeping the newline so repeated accepts continue', () => {
     expect(nextLineOf('first()\nsecond()')).toBe('first()\n')
@@ -114,19 +107,14 @@ describe('accept granularity', () => {
       controllerId: 'test-controller',
     })
     // 建议内容与位置由 provide 决定，这里直接注入：'useState(0)' 从第 3 列起。
-    ;(controller as unknown as { current: unknown }).current = { text: 'useState(0)', position: { lineNumber: 1, column: 3 }, path: 'a.ts' }
-    // 切词定义：标识符整体、数字整体、其余取单个非空白字符。
-    expect(controller.acceptPartial('word')).toBe('useState')
-    expect(controller.acceptPartial('word')).toBe('(')
-    expect(controller.acceptPartial('word')).toBe('0')
-    expect(controller.acceptPartial('word')).toBe(')')
-    expect(controller.acceptPartial('word')).toBeUndefined()
-    expect(edits.map(edit => edit.text)).toEqual(['useState', '(', '0', ')'])
-    expect(recorded[0]).toEqual({ filePath: 'a.ts', start: 2, end: 10, text: 'useState', inline: true })
-    // 每次采纳记录的是它自己插入的位置：光标随之前移，所以最后一段的偏移是 2 + 8 + 1 + 1。
-    expect(recorded[1]).toEqual({ filePath: 'a.ts', start: 10, end: 11, text: '(', inline: true })
-    expect(recorded[3]).toEqual({ filePath: 'a.ts', start: 12, end: 13, text: ')', inline: true })
+    ;(controller as unknown as { current: unknown }).current = { text: 'useState(0)\nnextLine()', position: { lineNumber: 1, column: 3 }, path: 'a.ts' }
+    expect(controller.acceptNextLine()).toBe('useState(0)\n')
+    expect(controller.acceptNextLine()).toBe('nextLine()')
+    expect(controller.acceptNextLine()).toBeUndefined()
+    expect(edits.map(edit => edit.text)).toEqual(['useState(0)\n', 'nextLine()'])
+    expect(recorded[0]).toEqual({ filePath: 'a.ts', start: 2, end: 14, text: 'useState(0)\n', inline: true })
   })
+
 
   it('attaches an accept command to every item', () => {
     const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }
@@ -198,6 +186,22 @@ describe('completion client', () => {
     const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
     const result = await client.suggest(input({ document: 'const value = useState()' }))
     expect(result.candidates).toEqual([])
+  })
+
+  it('keeps every candidate the host sent, so the user can switch between them', async () => {
+    // 真实响应是逐条推来的：index 0 与 index 1。若只留第一条，切换就没有候选可切（文档 4.6）。
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'output', candidates: [{ index: 0, text: 'SyncExternalStore', finishReason: '', elapsedMs: 1 }] })))
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'output', candidates: [{ index: 1, text: 'State', finishReason: '', elapsedMs: 1 }] })))
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'done' })))
+        controller.close()
+      },
+    })
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl: async () => new Response(stream, { status: 200 }) })
+    const result = await client.suggest(input({ document: 'const a = useState(0)\nconst c = use', rewriteAt: { line: 2, column: 13 } }))
+    expect(result.candidates).toEqual(['SyncExternalStore', 'State'])
   })
 
   it('reports an error event as a thrown failure', async () => {

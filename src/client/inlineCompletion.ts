@@ -51,11 +51,7 @@ export const ACCEPT_COMMAND_ID = 'dsh-completion.accept'
 /** 记账载荷：采纳起点（字符偏移）与采纳文本，区间取 [offset, offset + text.length)。 */
 export interface AcceptPayload { controllerId: string; path: string; offset: number; text: string }
 
-/** 按词采纳时取出的下一段：标识符整体取出，其余取一个非空白字符。 */
-export function nextWordOf(text: string): string {
-  const match = /^\s*[A-Za-z_$][\w$]*|^\s*\d+(?:\.\d+)?|^\s*\S/.exec(text)
-  return match?.[0] ?? ''
-}
+
 
 /** 按行采纳时取出的下一行；含换行符，便于连续按行采纳。 */
 export function nextLineOf(text: string): string {
@@ -86,15 +82,15 @@ export class InlineCompletionController {
   }
 
   /**
-   * 按词或按行采纳。
+   * 采纳建议的下一行。
    *
-   * Monaco 只自带整块采纳，这两种粒度由本地切片后作为一次编辑写入并同样记账。切分与记账都不依赖
-   * Monaco 的内部状态，因此可以单独测。
+   * 整块采纳与按词采纳由 Monaco 自带（Tab 与 Ctrl+方向键右），按行它没有，所以由本地切片后
+   * 作为一次编辑写入并同样记账。切分与记账都不依赖 Monaco 的内部状态，因此可以单独测。
    */
-  acceptPartial(granularity: 'word' | 'line'): string | undefined {
+  acceptNextLine(): string | undefined {
     const current = this.current
     if (current === undefined || current.text === '') return undefined
-    const slice = granularity === 'word' ? nextWordOf(current.text) : nextLineOf(current.text)
+    const slice = nextLineOf(current.text)
     if (slice === '') return undefined
     const editor = this.options.editor
     // 记账要在写入之前算：写入之后光标已经不在原处了。
@@ -116,6 +112,7 @@ export class InlineCompletionController {
     }))
     return items.length === 0 ? undefined : { items }
   }
+
 
   private offsetAt(position: { lineNumber: number; column: number }): number {
     return this.options.editor.getModel()?.getOffsetAt({ lineNumber: position.lineNumber, column: position.column }) ?? 0
@@ -156,14 +153,14 @@ export class InlineCompletionController {
   async provide(model: monaco.editor.ITextModel, position: monaco.Position, context: monaco.languages.InlineCompletionContext, token: monaco.CancellationToken): Promise<monaco.languages.InlineCompletions | undefined> {
     const params = this.options.params ?? DEFAULT_COMPLETION_PARAMS
     const language = model.getLanguageId()
-    // 自动触发不取新结果：它对上位置一致时直接复用上次候选（文档 4.1：命中缓存直接呈现、不发请求），
-    // 位置不同则放弃 —— 返回空的候选等于清空当前建议，会把刚显示的内容抹掉。
-    if (context.triggerKind !== this.options.kinds.explicit) {
-      const last = this.lastResult
-      if (last === undefined) return undefined
-      if (last.position.lineNumber !== position.lineNumber || last.position.column !== position.column) return undefined
-      return this.toInlineCompletions(last.candidates, position, model)
+    // 位置一致时直接复用上次候选（文档 4.1：命中缓存直接呈现、不发请求）：
+    // 切换候选走的就是这条路 —— 只改先看哪一条，不取新结果。
+    const cached = this.lastResult
+    if (cached !== undefined && cached.position.lineNumber === position.lineNumber && cached.position.column === position.column) {
+      return this.toInlineCompletions(cached.candidates, position, model)
     }
+    // 自动触发在位置不一致时放弃：返回空候选等于清空当前建议，会把刚显示的内容抹掉。
+    if (context.triggerKind !== this.options.kinds.explicit) return undefined
 
     const controller = new AbortController()
     this.inFlight = controller
@@ -240,20 +237,15 @@ export function attachInlineCompletion(monacoApi: typeof monaco, editor: monaco.
 
   // 按词与按行：只在建议可见时接管按键，否则会抢掉正常的按词移动。
   const actions = [
-    editor.addAction({
-      id: 'dsh-completion.acceptWord',
-      label: '采纳补全的下一段',
-      precondition: 'inlineSuggestionVisible',
-      keybindings: [monacoApi.KeyMod.CtrlCmd | monacoApi.KeyCode.RightArrow],
-      run: () => { controller.acceptPartial('word') },
-    }),
+
     editor.addAction({
       id: 'dsh-completion.acceptLine',
       label: '采纳补全的下一行',
       precondition: 'inlineSuggestionVisible',
       keybindings: [monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.RightArrow],
-      run: () => { controller.acceptPartial('line') },
+      run: () => { controller.acceptNextLine() },
     }),
+
   ]
 
   const change = editor.onDidChangeModelContent(changes => controller.noteChange(changes))
