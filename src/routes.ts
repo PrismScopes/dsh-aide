@@ -8,6 +8,7 @@ import type { HostContext } from './context.ts'
 import { codiconAsset, cwdFor, fileIconAsset, katexAsset, monacoAsset, onigWasmAsset, pdfWorkerAsset, uploadFile, workspacePreviewFile } from './host.ts'
 import { readGrammar } from './assets.ts'
 import { readBinaryBody, readBody, send, sendError, trusted, WorkbenchError } from './wire.ts'
+import { localBase } from './terminal.ts'
 import { dispatch } from './api.ts'
 
 /**
@@ -64,7 +65,9 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         req.once('aborted', () => controller.abort())
         const path = new URL(req.url ?? '/', 'http://dsh.local').pathname
         const method = path.slice('/dsh-vscode/api/'.length)
-        send(res, 200, { ok: true, value: await dispatch(ctx, method, await readBody(req), controller.signal) })
+        // 顺带带上宿主本机地址：桌面端的页面在 dsh-app://app/ 下，location.host 是 app，
+        // 客户端拼不出可连的 WebSocket 地址（文件变更监听就依赖它）。
+        send(res, 200, { ok: true, value: await dispatch(ctx, method, await readBody(req), controller.signal), wsBase: localBase(req) })
       } catch (error) { sendError(res, error) }
     },
   }), 'dsh-vscode-workbench: API')

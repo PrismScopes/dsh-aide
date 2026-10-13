@@ -123,7 +123,7 @@ function terminalRequestAllowed(req: IncomingMessage): boolean {
  *
  * 只输出回环地址：客户端就在本机，没有理由把对外地址交出去。
  */
-function localBase(req: IncomingMessage): string | undefined {
+export function localBase(req: IncomingMessage): string | undefined {
   const port = req.socket.localPort
   if (typeof port !== 'number' || port <= 0) return undefined
   const host = req.socket.localAddress === '::1' ? '[::1]' : '127.0.0.1'

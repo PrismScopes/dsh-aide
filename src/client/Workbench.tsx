@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, DragEvent, ReactNode } from 'react'
 import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch } from '../types.ts'
-import { ApiError, api } from './api.ts'
+import { ApiError, api, currentHostBase, hostWebSocketUrl } from './api.ts'
 import type { VscodeWorkbench, WorkbenchView } from './service.ts'
 import { fileIcon, fileIconUrl, Icon } from './Icon.tsx'
 import { MarkdownPreview, markdownHeadings } from './MarkdownPreview.tsx'
@@ -254,7 +254,30 @@ export function Workbench({ service, useSessions }: { service: VscodeWorkbench; 
   }
   useEffect(()=>{if(!snapshot.visible||sessionId===undefined)return;const epoch=workspaceRequests.current.begin();const cleared=resetWorkspaceDocuments<Tab>();loadingTabs.current.clear();setWorkspace(undefined);setTabs(cleared.tabs);tabsRef.current=cleared.tabs;setActive(cleared.active);setError(cleared.error);const controller=new AbortController();void api<{cwd:string;name:string}>('workspace',{sessionId},controller.signal).then(value=>{if(!workspaceRequests.current.isCurrent(epoch))return;setWorkspace(value);const saved=localStorage.getItem(`dvw:${value.cwd}`);if(saved){try{const parsed=JSON.parse(saved) as {view?:WorkbenchView;paths?:string[];active?:string;panelHeight?:number;sideWidth?:number};if(parsed.view)service.show(parsed.view);if(typeof parsed.panelHeight==='number')setPanelHeight(parsed.panelHeight);if(typeof parsed.sideWidth==='number')setSideWidth(Math.max(210,Math.min(640,Math.round(parsed.sideWidth))));const restored=restoreTabPaths(parsed.paths??[]);setTabs(restored);setActive(restored.some(tab=>tab.path===parsed.active)?parsed.active:restored.at(-1)?.path)}catch{}}}).catch(error=>{if(!controller.signal.aborted&&workspaceRequests.current.isCurrent(epoch))setError(String(error))});return()=>{controller.abort();loadingTabs.current.clear();workspaceRequests.current.invalidate(epoch)}},[snapshot.visible,sessionId])
   useEffect(()=>{if(workspace) localStorage.setItem(`dvw:${workspace.cwd}`,JSON.stringify({view:snapshot.view,paths:tabs.filter(t=>!t.path.startsWith('diff:')).map(t=>t.path),active,panelHeight,sideWidth}))},[workspace,snapshot.view,tabs,active,panelHeight,sideWidth])
-  useEffect(()=>{if(!snapshot.visible||sessionId===undefined)return;const protocol=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(`${protocol}://${location.host}/dsh-vscode/ws/files?sessionId=${encodeURIComponent(sessionId)}`);ws.onmessage=event=>{let paths:string[]=[];try{paths=(JSON.parse(String(event.data)) as {paths?:string[]}).paths??[]}catch{}window.dispatchEvent(new CustomEvent('dvw-files-changed',{detail:paths}));setTabs(current=>current.map(tab=>tab.dirty?{...tab,external:true}:tab))};return()=>ws.close()},[snapshot.visible,sessionId])
+  // 文件变更监听。地址必须用宿主的绝对地址：桌面端页面在 dsh-app://app/ 下，location.host 是
+  // "app"，按它拼出来的 ws://app/… 连不上（实测 close 1006）——同一处坑，终端那边也踩过。
+  // 宿主地址随 API 响应写进 api.ts 的模块状态，所以这里等它到位再连；拿不到就不连（Web 端会
+  // 立刻拿到，桌面端要等第一次 API 返回）。
+  useEffect(() => {
+    if (!snapshot.visible || sessionId === undefined) return
+    let ws: WebSocket | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let closed = false
+    const connect = () => {
+      if (closed || currentHostBase() === undefined) return
+      ws = new WebSocket(hostWebSocketUrl('/dsh-vscode/ws/files', { sessionId }))
+      ws.onmessage = event => {
+        let paths: string[] = []
+        try { paths = (JSON.parse(String(event.data)) as { paths?: string[] }).paths ?? [] } catch { /* 忽略格式不对的消息 */ }
+        window.dispatchEvent(new CustomEvent('dvw-files-changed', { detail: paths }))
+        setTabs(current => current.map(tab => tab.dirty ? { ...tab, external: true } : tab))
+      }
+    }
+    // 宿主地址可能还没到（第一次 API 尚未返回），稍后重试一次。
+    if (currentHostBase() === undefined) timer = setTimeout(connect, 1500)
+    else connect()
+    return () => { closed = true; clearTimeout(timer); ws?.close() }
+  }, [snapshot.visible, sessionId])
   useEffect(()=>{if(sessionId===undefined||active===undefined)return;const tab=tabsRef.current.find(row=>row.path===active);if(tab===undefined||tab.loaded!==false||loadingTabs.current.has(active))return;const epoch=workspaceRequests.current.current();loadingTabs.current.add(active);const documentPreview=documentPreviewKind(active);if(documentPreview!==undefined){const documentUrl=`/dsh-vscode/file?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(active)}`;setTabs(rows=>rows.map(row=>row.path===active?{...row,loaded:true,documentPreview,documentUrl}:row));loadingTabs.current.delete(active);return}if(/\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(active)){const imageUrl=`/dsh-vscode/file?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(active)}`;setTabs(rows=>rows.map(row=>row.path===active?{...row,loaded:true,imageUrl}:row));loadingTabs.current.delete(active);return}void api<FileDocument>('fs.read',{sessionId,path:active}).then(doc=>{if(!workspaceRequests.current.isCurrent(epoch))return;if(doc.binary||doc.tooLarge){setTabs(rows=>rows.filter(row=>row.path!==active));setActive(current=>current===active?undefined:current);setError(doc.binary?'二进制文件不能在文本编辑器中打开':`文件超过 5 MiB：${active}`);return}setTabs(rows=>rows.map(row=>row.path===active?{...row,...doc,draft:doc.content,loaded:true}:row))}).catch(error=>{if(workspaceRequests.current.isCurrent(epoch))setError(String(error))}).finally(()=>loadingTabs.current.delete(active))},[active,sessionId,tabs])
   const open=(path:string,line?:number,column?:number,pin?:boolean)=>{if(sessionId!==undefined)openForWorkspace(path,line,column,pin)}
   useEffect(()=>{const listener=(event:Event)=>void open((event as CustomEvent<string>).detail);window.addEventListener('dvw-open-workspace-path',listener);return()=>window.removeEventListener('dvw-open-workspace-path',listener)},[sessionId,tabs])

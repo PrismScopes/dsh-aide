@@ -1,4 +1,5 @@
 import type { TerminalInfo } from '../terminal.ts'
+import { currentHostBase, normalizeHostBase } from './api.ts'
 
 export interface TerminalConnection {
   write(data: string): void
@@ -21,45 +22,17 @@ export interface TerminalWorkspace {
 }
 
 /**
- * 把宿主给的本机地址归一成可直接使用的 WebSocket 前缀。
+ * 拼出终端 WebSocket 的地址（地址来源与回退规则见 api.ts 的 hostWebSocketUrl）。
  *
- * 有两件事必须在这里处理，都是实测出来的：
- *   1. 宿主可能只给「主机:端口」而不带协议 —— 补上 http://；
- *   2. **`localhost` 在本机可能解析到 `::1`，而 DSH 只监听 `127.0.0.1`。**
- *      实测 `ws://localhost:19387/…` 连不上、`ws://127.0.0.1:19387/…` 可以，
- *      所以这里统一把 localhost 换成 127.0.0.1。
- *
- * 解析不出来就返回 undefined，由调用方退回按 location 拼的老行为。
- */
-function normalizeBase(base: string | undefined): string | undefined {
-  if (base === undefined || base.trim() === '') return undefined
-  const raw = base.trim()
-  const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`
-  try {
-    const url = new URL(withScheme)
-    if (url.hostname === '') return undefined
-    const host = url.hostname === 'localhost' ? '127.0.0.1' : url.hostname
-    const port = url.port === '' ? '' : `:${url.port}`
-    return `${url.protocol === 'https:' ? 'wss' : 'ws'}://${host}${port}`
-  } catch { return undefined }
-}
-
-/**
- * 拼出终端 WebSocket 的地址。
- *
- * 优先用宿主给的规范地址（`wsBase`）。原因是桌面端(Electron)的页面跑在 `dsh-app://app/` 下、
- * `location.host` 是 `app`，按它拼出来的 `ws://app/…` 连不上（实测 close code 1006）—— 桌面端
- * 把 HTTP 请求经自定义协议转发给宿主，但 **WebSocket 的 upgrade 不走那条转发**，所以桌面端
- * 必须用绝对地址。
- *
- * 拿不到（或解析不出）wsBase 时退回按 location 拼的方式，Web 端与旧宿主下仍然正确。
+ * 保留 `wsBase` 入参：终端 API 自己也会带回一次地址，优先用它，免得依赖"之前有没有别的
+ * API 调用过"。两条来源最终都进同一个归一化逻辑。
  */
 export function webSocketUrl(sessionId: string, id: string, wsBase?: string): string {
-  const query = `sessionId=${encodeURIComponent(sessionId)}&id=${encodeURIComponent(id)}`
-  const base = normalizeBase(wsBase)
-  if (base !== undefined) return `${base}/dsh-vscode-terminal/ws?${query}`
+  const base = normalizeHostBase(wsBase) ?? normalizeHostBase(currentHostBase())
+  const search = `sessionId=${encodeURIComponent(sessionId)}&id=${encodeURIComponent(id)}`
+  if (base !== undefined) return `${base}/dsh-vscode-terminal/ws?${search}`
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${protocol}://${location.host}/dsh-vscode-terminal/ws?${query}`
+  return `${protocol}://${location.host}/dsh-vscode-terminal/ws?${search}`
 }
 
 interface HostAnswer<T> { ok?: boolean; value?: T; wsBase?: string; error?: { message?: string } }
