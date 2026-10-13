@@ -21,6 +21,9 @@ function terminalTheme(colorScheme: 'dark' | 'light') {
   }
 }
 
+/** 回放结束后解除输入抑制的等待时间。 */
+const REPLAY_SETTLE_MS = 250
+
 function XtermView({ workspace, id, colorScheme }: { workspace: TerminalWorkspaceController; id: string; colorScheme: 'dark' | 'light' }) {
   const root = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal>()
@@ -36,14 +39,30 @@ function XtermView({ workspace, id, colorScheme }: { workspace: TerminalWorkspac
     terminal.open(root.current)
     const connection = workspace.connect(id)
     const output = connection.subscribe(value => {
-      if (value.replay) { replaying.current = true; clearTimeout(replayGuard.current) }
-      terminal.write(value.data, () => { if (value.replay) replayGuard.current = setTimeout(() => { replaying.current = false }, 250) })
+      if (value.replay) {
+        replaying.current = true
+        // 收到回放时就先挂一个兜底定时器。原先只在 terminal.write 的回调里解除抑制，
+        // 而那个回调并不保证一定触发（渲染时序因环境而异）；一旦没触发，replaying 会永久为
+        // true，此后用户的每一次按键都被丢弃 —— 表现为「提示符在、打字毫无反应」。
+        clearTimeout(replayGuard.current)
+        replayGuard.current = setTimeout(() => { replaying.current = false }, REPLAY_SETTLE_MS)
+      }
+      terminal.write(value.data, () => {
+        if (value.replay) {
+          clearTimeout(replayGuard.current)
+          replayGuard.current = setTimeout(() => { replaying.current = false }, REPLAY_SETTLE_MS)
+        }
+      })
     })
     const input = terminal.onData(data => { if (!replaying.current || !isTerminalProtocolReply(data)) connection.write(data) })
     const resize = terminal.onResize(({ cols, rows }) => connection.resize(cols, rows))
     const observer = new ResizeObserver(() => { try { fit.fit() } catch { /* The panel can be hidden during layout changes. */ } })
     observer.observe(root.current)
-    try { fit.fit(); terminal.focus() } catch (exception) { setError(exception instanceof Error ? exception.message : String(exception)) }
+    // fit 与 focus 必须分开：面板刚显示时容器尺寸可能是 0，此时 fit.fit() 会抛错。
+    // 原先两者写在同一个 try 里，一次抛错就把 terminal.focus() 整个跳过 —— 终端拿不到焦点，
+    // 用户打字完全没有反应，而提示符照常显示。
+    try { fit.fit() } catch { /* 尺寸未就绪时允许失败，下一次 ResizeObserver 会重试。 */ }
+    try { terminal.focus() } catch (exception) { setError(exception instanceof Error ? exception.message : String(exception)) }
     return () => { terminalRef.current = undefined; clearTimeout(replayGuard.current); observer.disconnect(); input.dispose(); resize.dispose(); output(); connection.close(); terminal.dispose() }
   }, [workspace, id])
   useEffect(() => { if (terminalRef.current !== undefined) terminalRef.current.options.theme = terminalTheme(colorScheme) }, [colorScheme])
