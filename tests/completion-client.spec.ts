@@ -116,6 +116,51 @@ describe('accept granularity', () => {
   })
 
 
+  it('does not send anything when a blocking tenant rule matches the outgoing document', async () => {
+    // 请求前预过滤：内容一旦发出去就收不回来了，所以拦截要在发之前生效。
+    let calls = 0
+    const client = {
+      suggest: async () => { calls += 1; return { candidates: [], finishReason: 'done', masked: false, timing: { requestedAt: 0 } } },
+      recordAccept: () => undefined,
+    }
+    const model = {
+      uri: { path: '/a.ts' },
+      getLanguageId: () => 'typescript',
+      getValue: () => 'const key = "-----BEGIN RSA PRIVATE KEY-----"',
+      getOffsetAt: (position: { column: number }) => position.column - 1,
+    }
+    const controller = new InlineCompletionController({
+      client: client as unknown as CompletionClient,
+      controllerId: 'prefilter-test',
+      kinds: { automatic: 0 as unknown as monaco.languages.InlineCompletionTriggerKind, explicit: 1 as unknown as monaco.languages.InlineCompletionTriggerKind },
+      emptyRangeAt: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } as unknown as monaco.Range),
+      editor: { getModel: () => model, getPosition: () => ({ lineNumber: 1, column: 1 }), executeEdits: () => undefined } as unknown as monaco.editor.IStandaloneCodeEditor,
+    })
+    const call = () => controller.provide(
+      model as unknown as monaco.editor.ITextModel,
+      { lineNumber: 1, column: 1 } as unknown as monaco.Position,
+      { triggerKind: 1 } as unknown as monaco.languages.InlineCompletionContext,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) } as unknown as monaco.CancellationToken,
+    )
+    // 未设置规则时照常请求。
+    await call()
+    expect(calls).toBe(1)
+    // 设置拦截规则后不再发出请求。
+    controller.setSecurityRules([{ id: 'private-key-block', name: '私钥块', action: 'block', pattern: '-----BEGIN [A-Z ]*PRIVATE KEY-----' }])
+    expect(await call()).toBeUndefined()
+    expect(calls).toBe(1)
+    // 脱敏规则不该拦住请求：内容照常送出，由服务端标记。
+    controller.setSecurityRules([{ id: 'generic-credential', name: '硬编码凭据', action: 'mask', pattern: 'secret' }])
+    // 换个位置：同一位置会命中控制器自己的「上次结果」缓存，走不到请求这一步。
+    await controller.provide(
+      model as unknown as monaco.editor.ITextModel,
+      { lineNumber: 1, column: 2 } as unknown as monaco.Position,
+      { triggerKind: 1 } as unknown as monaco.languages.InlineCompletionContext,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) } as unknown as monaco.CancellationToken,
+    )
+    expect(calls).toBe(2)
+  })
+
   it('reports shown, accepted and cancelled through the telemetry hook', async () => {
     // 采样点必须真的接上：采纳率的分母是展示次数，取消率来自在途请求被变更作废。
     const reported: Array<{ kind: string; candidateCount?: number; firstByteMs?: number; model?: string; experiment?: string }> = []

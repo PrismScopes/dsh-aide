@@ -9,6 +9,7 @@
  */
 import type * as monaco from 'monaco-editor'
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from '../completion/params.ts'
+import { evaluateSecurity, type SecurityRule } from '../completion/security.ts'
 import { triggerPlan } from './completion.ts'
 import { api } from './api.ts'
 import { CompletionClient, type CompletionResponse } from './completion.ts'
@@ -69,6 +70,10 @@ export class InlineCompletionController {
   readonly tracker: ChangeTracker = { lastChangeHadNewline: false }
   private inFlight: AbortController | undefined
   private triggerTimer: ReturnType<typeof setTimeout> | undefined
+  /** 服务端下发的参数覆盖本地默认值（文档七：参数由服务端下发，便于按分组灰度）。 */
+  private paramsOverride: CompletionParams | undefined
+  /** 请求前预过滤用的租户规则（文档 6.4 的请求前一道）。 */
+  private securityRules: readonly SecurityRule[] = []
   /** 当前展示的建议：整块之外的采纳粒度都基于它切分。 */
   private current: { text: string; position: { lineNumber: number; column: number }; path: string } | undefined
   /** 上一次成功产出的候选与它对应的位置，供自动触发直接呈现（文档 4.1：命中缓存不发请求）。 */
@@ -121,6 +126,20 @@ export class InlineCompletionController {
   }
 
 
+  /** 应用服务端下发的参数。传 undefined 表示回到本地默认值。 */
+  setParams(params: CompletionParams | undefined): void {
+    this.paramsOverride = params
+  }
+
+  /** 应用服务端下发的安全规则；空数组表示不做请求前过滤。 */
+  setSecurityRules(rules: readonly SecurityRule[]): void {
+    this.securityRules = rules
+  }
+
+  private paramsOf(): CompletionParams {
+    return this.paramsOverride ?? this.options.params ?? DEFAULT_COMPLETION_PARAMS
+  }
+
   private languageOf(): string {
     return this.options.editor.getModel()?.getLanguageId() ?? 'plaintext'
   }
@@ -156,7 +175,7 @@ export class InlineCompletionController {
   private scheduleTrigger(): void {
     if (this.triggerTimer !== undefined) clearTimeout(this.triggerTimer)
     const language = this.languageOf()
-    const plan = triggerPlan({ isNewLine: this.tracker.lastChangeHadNewline }, language, this.options.params ?? DEFAULT_COMPLETION_PARAMS)
+    const plan = triggerPlan({ isNewLine: this.tracker.lastChangeHadNewline }, language, this.paramsOf())
     this.triggerTimer = setTimeout(() => {
       this.triggerTimer = undefined
       this.options.editor.trigger('dsh-completion', 'editor.action.inlineSuggest.trigger', {})
@@ -164,7 +183,7 @@ export class InlineCompletionController {
   }
 
   async provide(model: monaco.editor.ITextModel, position: monaco.Position, context: monaco.languages.InlineCompletionContext, token: monaco.CancellationToken): Promise<monaco.languages.InlineCompletions | undefined> {
-    const params = this.options.params ?? DEFAULT_COMPLETION_PARAMS
+    const params = this.paramsOf()
     const language = model.getLanguageId()
     // 位置一致时直接复用上次候选（文档 4.1：命中缓存直接呈现、不发请求）：
     // 切换候选走的就是这条路 —— 只改先看哪一条，不取新结果。
@@ -174,6 +193,10 @@ export class InlineCompletionController {
     }
     // 自动触发在位置不一致时放弃：返回空候选等于清空当前建议，会把刚显示的内容抹掉。
     if (context.triggerKind !== this.options.kinds.explicit) return undefined
+
+    // 请求前预过滤（文档 6.4 的请求前一道）：命中拦截规则就什么都不发，
+    // 而不是发出去再让服务端拦 —— 那时代码已经离开本机了。
+    if (evaluateSecurity(model.getValue(), this.securityRules)?.action === 'block') return undefined
 
     const controller = new AbortController()
     this.inFlight = controller
@@ -221,6 +244,18 @@ export class InlineCompletionController {
  * （比如 diff 视图的只读模型）直接不提供补全。
  */
 const controllers = new Map<string, InlineCompletionController>()
+/**
+ * 服务端配置只取一次。
+ *
+ * 参数与规则在同一次编辑会话里不会变（分组按会话稳定分配），反复拉取只会把请求量翻倍。
+ * 缓存的是一次 promise 而不是结果：多个编辑器同时挂载时也只发一次请求。
+ */
+let configPromise: Promise<{ params?: CompletionParams; experiment?: string; security?: { rules: readonly SecurityRule[] } }> | undefined
+function loadConfig(sessionId: string): Promise<{ params?: CompletionParams; experiment?: string; security?: { rules: readonly SecurityRule[] } }> {
+  configPromise ??= api<{ params?: CompletionParams; experiment?: string; security?: { rules: readonly SecurityRule[] } }>('completion.config', { sessionId }).catch(() => ({}))
+  return configPromise
+}
+
 /** 采纳命令是全局的，按控制器标识路由回具体编辑器。 */
 const controllersById = new Map<string, InlineCompletionController>()
 let providerRegistered = false
@@ -242,6 +277,14 @@ export function attachInlineCompletion(monacoApi: typeof monaco, editor: monaco.
     emptyRangeAt: position => new monacoApi.Range(position.lineNumber, position.column, position.lineNumber, position.column),
     editor,
   })
+  // 服务端下发的参数与规则在这里生效；拉不到就继续用本地默认值，补全不受影响。
+  void loadConfig(options.sessionId ?? '').then(config => {
+    controller.setParams(config.params)
+    controller.setSecurityRules(config.security?.rules ?? [])
+    // 环境元数据里带上分组标识（文档 4.3）；服务端仍会按会话重新分配，这份用于对齐语义。
+    if (config.experiment !== undefined) client.setEnvironment({ experiment: config.experiment })
+  })
+
   const model = editor.getModel()
   const key = model?.uri.toString() ?? ''
   if (key !== '') controllers.set(key, controller)

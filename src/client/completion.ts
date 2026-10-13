@@ -73,8 +73,11 @@ export interface CompletionClientOptions {
   /** 宿主侧的补全端点。 */
   endpoint: string
   sessionId: string
+  /** 环境元数据覆盖项：服务端下发的实验分组标识写在这里（文档 4.3）。 */
+  environment?: Record<string, string>
   params?: CompletionParams
   filterOptions?: FilterOptions
+
   /** 相同上下文的缓存有效期。文档要求命中缓存时直接呈现、不发请求。 */
   cacheTtlMs?: number
   fetchImpl?: typeof fetch
@@ -122,6 +125,11 @@ export class CompletionClient {
     this.now = options.now ?? (() => Date.now())
   }
 
+  /** 覆盖环境元数据（配置到达后回填实验分组标识，文档 4.3）。 */
+  setEnvironment(environment: Record<string, string>): void {
+    this.options.environment = { ...(this.options.environment ?? {}), ...environment }
+  }
+
   /** 记录一次采纳，供「与上次采纳区间」两条判定使用。 */
   recordAccept(range: AcceptedRange): void {
     this.lastAccepted = range
@@ -151,7 +159,7 @@ export class CompletionClient {
     const requestedAt = this.now()
     const body: CompletionRequest = {
       sessionId: this.options.sessionId,
-      environment: { ideVersion: 'dsh-workbench', extensionVersion: '0.1.8', region: '', channel: 'desktop', repository: '' },
+      environment: { ideVersion: 'dsh-workbench', extensionVersion: '0.1.8', region: '', channel: 'desktop', repository: '', ...(this.options.environment ?? {}) },
       language: input.language,
       trigger: 'inline',
       edits: input.edits ?? [],
