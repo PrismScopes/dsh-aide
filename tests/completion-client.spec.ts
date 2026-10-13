@@ -140,6 +140,24 @@ describe('completion client', () => {
     expect(result.candidates).toEqual(['safe value'])
   })
 
+  it('calls the global fetch so the browser does not raise Illegal invocation', async () => {
+    // 浏览器要求 fetch 的接收者是全局对象：把裸 fetch 存成字段再以 this.fetchImpl(...) 调用会抛
+    // "Illegal invocation"，表现为请求一条都发不出去。这里用真实的调用语义把它钉住。
+    const spy = vi.fn(function (this: unknown) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation")
+      return Promise.resolve(streamResponse(events({ type: 'output', candidates: [{ index: 0, text: 'ate', finishReason: '', elapsedMs: 1 }] }, { type: 'done' })))
+    })
+    vi.stubGlobal('fetch', spy)
+    try {
+      const client = new CompletionClient({ endpoint: '/c', sessionId: 's' })
+      const result = await client.suggest(input())
+      expect(result.candidates).toEqual(['ate'])
+      expect(spy).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('forwards the cancellation signal to the request and rejects a failed response', async () => {
     const controller = new AbortController()
     const seen: Array<AbortSignal | undefined> = []

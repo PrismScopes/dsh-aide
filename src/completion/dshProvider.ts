@@ -34,10 +34,17 @@ export interface DshCallConfig {
   stop?: string[]
 }
 
-/** 适配器产出的增量；只关心文本增量与结束。 */
-export interface DshStreamChunk { type: string; text?: string; reason?: string }
+/** 结束原因：正常结束、被中止，或失败（失败时带错误信息）。 */
+export interface DshFinishReason { kind?: string; failure?: { message?: string; code?: string } }
 
-export interface DshPreparedCall { stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk> }
+/** 适配器产出的增量；只关心文本增量与结束。 */
+export interface DshStreamChunk { type: string; text?: string; reason?: DshFinishReason }
+
+export interface DshPreparedCall {
+  /** 解析后的生效配置（含适配器默认值）：必须原样喂回 stream，否则 DSH 会拒绝这次调用。 */
+  config?: DshCallConfig
+  stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk>
+}
 
 export interface DshLlmService {
   prepareCall(config: DshCallConfig, signal?: AbortSignal): Promise<DshPreparedCall>
@@ -48,10 +55,10 @@ export interface DshDefaultModelService { currentSelection(): DshModelSelection 
 /**
  * 对话式补全的停止串。
  *
- * 对话模型输出代码块时习惯补一个围栏，或在新一轮对话前停下；这些串出现即视为补全结束，
- * 免得把解释性文字一起插进代码里。
+ * 这里**不能**放代码围栏：对话模型往往一开头就输出 ```，把它当停止串会让生成刚起步就被截停、
+ * 结果一个字都拿不到。围栏改由后处理剥掉（见 filter.ts 的 stripCodeFence）。
  */
-export const COMPLETION_STOP = ['```', '\n\n\n', '<CURSOR>']
+export const COMPLETION_STOP = ['\n\n\n', '<CURSOR>']
 
 export interface DshProviderOptions {
   params?: CompletionParams
@@ -75,15 +82,12 @@ export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelSer
     get model(): string { return selection().model },
     async *complete(prompt: string, context: ProviderContext): AsyncIterable<CompletionChunk> {
       const chosen = selection()
-      const call = await llm.prepareCall({ provider: chosen.provider, model: chosen.model, temperature: 0, maxTokens, stop: COMPLETION_STOP }, context.signal)
+      const proposed: DshCallConfig = { provider: chosen.provider, model: chosen.model, temperature: 0, maxTokens, stop: COMPLETION_STOP }
+      const call = await llm.prepareCall(proposed, context.signal)
       const stream = call.stream({
-        provider: chosen.provider,
-        model: chosen.model,
+        ...(call.config ?? proposed),
         // 单条用户消息：补全不需要多轮，把上下文与指令都放进这一条里。
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0,
-        maxTokens,
-        stop: COMPLETION_STOP,
         signal: context.signal,
       })
       for await (const chunk of stream) {
@@ -92,7 +96,13 @@ export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelSer
           yield { text: chunk.text, done: false }
           continue
         }
-        if (chunk.type === 'finish') break
+        if (chunk.type === 'finish') {
+          // 失败的结束必须抛出去：否则调用方只看到一个空结果，把上游故障当成"模型没想出内容"。
+          const kind = chunk.reason?.kind
+          if (kind === 'error') throw new Error(`completion upstream failed: ${chunk.reason?.failure?.message ?? 'unknown error'}`)
+          if (kind === 'aborted') return
+          break
+        }
       }
       yield { text: '', done: true }
     },

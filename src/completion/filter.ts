@@ -191,9 +191,31 @@ export function truncateAfterCompleteBlock(candidate: string): string {
   return candidate
 }
 
+/**
+ * 剥掉对话模型补上的代码围栏与语言标注行。
+ *
+ * 对话模型被要求「只输出要插入的内容」时，仍常常包一层围栏；这属于呈现层杂质，不该插进代码。
+ * 只剥最外层的一对，内部的围栏（比如写在字符串里的）不动。
+ */
+export function stripCodeFence(candidate: string): string {
+  const trimmed = candidate.trim()
+  if (!trimmed.startsWith('```')) return candidate
+  const lines = trimmed.split('\n')
+  const first = lines[0] ?? ''
+  if (!first.startsWith('```')) return candidate
+  // 首行是围栏（可能带语言名）；末行是收尾围栏时一并去掉。
+  const body = lines.slice(1)
+  if ((body.at(-1) ?? '').trim() === '```') body.pop()
+  else if (body.at(-1) !== undefined && (body.at(-1) as string).trimEnd().endsWith('```')) body[body.length - 1] = (body.at(-1) as string).trimEnd().slice(0, -3)
+  // 保留原候选的首尾空白形态：插入位置常常就在行中间。
+  const leading = candidate.slice(0, candidate.indexOf(first))
+  return leading + body.join('\n')
+}
+
 /** 后处理五件事的组合入口，顺序按文档给出的次序。 */
 export function postProcess(candidate: string, state: Pick<FilterState, 'document' | 'offset'>): string {
-  let text = collapseRepeatedLines(candidate)
+  let text = stripCodeFence(candidate)
+  text = collapseRepeatedLines(text)
   text = trimDuplicateTrailingSymbol(text, state.document, state.offset)
   text = closeBrackets(text)
   text = truncateAfterCompleteBlock(text)

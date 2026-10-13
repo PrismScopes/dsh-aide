@@ -31,7 +31,9 @@ export interface ResolvedCompletionProvider {
 export function resolveProvider(ctx: CompletionContextLike, params: CompletionParams = DEFAULT_COMPLETION_PARAMS): ResolvedCompletionProvider {
   const llm = ctx.get('llm') as DshLlmService | undefined
   const defaultModel = ctx.get('agentDefaultModel') as DshDefaultModelService | undefined
-  if (llm !== undefined && defaultModel !== undefined) {
+  // 允许显式指定本地兜底：离线、或要单独验证客户端链路时用；不设则优先用 DSH 的模型服务。
+  const forced = (globalThis.process?.env?.['DSH_COMPLETION_PROVIDER'] ?? '').toLowerCase()
+  if (forced !== 'local' && llm !== undefined && defaultModel !== undefined) {
     const provider = dshProvider(llm, defaultModel, { params })
     return { provider, profile: INSTRUCTION_PROMPT_PROFILE, source: 'dsh', model: provider.model }
   }

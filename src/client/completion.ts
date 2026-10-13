@@ -121,7 +121,9 @@ export class CompletionClient {
     this.params = options.params ?? DEFAULT_COMPLETION_PARAMS
     this.filterOptions = options.filterOptions ?? DEFAULT_FILTER_OPTIONS
     this.cacheTtlMs = options.cacheTtlMs ?? 2_000
-    this.fetchImpl = options.fetchImpl ?? fetch
+    // 不能直接把裸 fetch 存下来当方法用：浏览器要求它的接收者是全局对象，方法式调用会抛
+    // "Illegal invocation"，于是请求一条都发不出去，而调用方只会看到一个永不落地的 promise。
+    this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init))
     this.now = options.now ?? (() => Date.now())
   }
 
