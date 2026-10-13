@@ -204,10 +204,13 @@ export class CompletionClient {
           else if (event.type === 'content_security') { masked = true }
           else if (event.type === 'done') { finishReason = 'done' }
         }
-        if (early) { await reader.cancel().catch(() => undefined); break }
+        // 首个候选已够用：把连接取消掉（文档 4.1 要求取消真正生效），但不等待它结算 ——
+        // 有在途数据时 cancel 的 Promise 不落地，await 会把 suggest 挂死，调用方因此永远拿不到候选。
+        if (early) { void reader.cancel().catch(() => undefined); break }
       }
     } finally {
-      if (input.signal?.aborted === true) await reader.cancel().catch(() => undefined)
+      // 同理：取消要发出去，但不能等它结算。
+      if (input.signal?.aborted === true) void reader.cancel().catch(() => undefined)
     }
 
     timing.lastByteAt = this.now()

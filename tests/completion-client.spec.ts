@@ -200,6 +200,26 @@ describe('completion client', () => {
     expect(result.candidates).toEqual([])
   })
 
+  it('returns the first candidate even when cancelling the stream never settles', async () => {
+    // 回归：拿到首个候选后要取消连接，但取消的 Promise 在有在途数据时不会落地。
+    // 一旦 await 它，suggest 就永远不返回，调用方（Monaco 的 provider）自然显示不出幻影文本。
+    const encoder = new TextEncoder()
+    let cancelled = false
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'output', candidates: [{ index: 0, text: 'ate', finishReason: '', elapsedMs: 1 }] })))
+      },
+      cancel() { cancelled = true; return new Promise<void>(() => { /* 永不结算 */ }) },
+    })
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl: async () => new Response(stream, { status: 200 }) })
+    const result = await Promise.race([
+      client.suggest(input({ firstCandidateOnly: true })),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('suggest 挂住了')), 1500)),
+    ])
+    expect(result.candidates).toEqual(['ate'])
+    expect(cancelled).toBe(true)
+  })
+
   it('reports an error event as a thrown failure', async () => {
     const fetchImpl = vi.fn(async () => streamResponse(events({ type: 'error', code: 'completion-timeout', message: 'slow' })))
     const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
