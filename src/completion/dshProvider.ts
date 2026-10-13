@@ -99,7 +99,8 @@ export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelSer
         if (chunk.type === 'finish') {
           // 失败的结束必须抛出去：否则调用方只看到一个空结果，把上游故障当成"模型没想出内容"。
           const kind = chunk.reason?.kind
-          if (kind === 'error') throw new Error(`completion upstream failed: ${chunk.reason?.failure?.message ?? 'unknown error'}`)
+          // 带上路由：失败信息里没有提供方与模型时，只能靠猜是哪条路断了。
+          if (kind === 'error') throw new Error(`completion upstream failed (${chosen.provider}/${chosen.model}): ${chunk.reason?.failure?.message ?? 'unknown error'}`)
           if (kind === 'aborted') return
           break
         }

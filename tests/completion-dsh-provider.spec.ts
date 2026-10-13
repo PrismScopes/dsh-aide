@@ -52,7 +52,8 @@ describe('dsh model provider', () => {
 
   it('turns a failed finish into a thrown error instead of an empty result', async () => {
     const { llm } = fakeLlm([{ type: 'finish', reason: { kind: 'error', failure: { message: 'transport failed', code: 'TRANSPORT' } } }])
-    await expect(collect(dshProvider(llm, defaultModel))).rejects.toThrow('completion upstream failed: transport failed')
+    // 信息里要能看出是哪条路由断的：否则诊断只能靠猜。
+    await expect(collect(dshProvider(llm, defaultModel))).rejects.toThrow('completion upstream failed (test/test-model): transport failed')
   })
 
   it('returns quietly when the upstream reports an abort', async () => {
