@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import { isAbsolute, relative, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
-import chokidar from 'chokidar'
+import { createWorkspaceWatcher, type WatchHandle } from './watch.ts'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { HostContext } from './context.ts'
 import { codiconAsset, cwdFor, fileIconAsset, katexAsset, monacoAsset, onigWasmAsset, pdfWorkerAsset, uploadFile, workspacePreviewFile } from './host.ts'
@@ -17,18 +17,11 @@ import { dispatch } from './api.ts'
  * 从 index.ts 拆出：那里只留 name / inject / apply 三件事，路由与文件监听放在这里。
  * 静态资源一律走 immutable 缓存；入参来自 URL 的部分都经 trusted() 与包目录包含判断守卫。
  */
-/** chokidar 监听句柄所需的最小能力；测试里用假实现即可。 */
-export interface WatchHandle {
-  on(event: 'all', handler: (event: string, changed: string) => void): unknown
-  off(event: 'all', handler: (event: string, changed: string) => void): unknown
-  close(): unknown
-}
-
 /**
  * 按工作区共享的文件监听。
  *
- * 原先每条 ws/files 连接都自己 chokidar.watch() 一次。实测这个工作区（仓库根）约 1.8 万个
- * 非 node_modules 文件，chokidar 建监听要 3.6 秒，而工作台每次打开、每次重连都要付一遍；
+ * 原先每条 ws/files 连接都自己建一次监听。实测这个工作区（仓库根）约 1.8 万个非
+ * node_modules 文件，遍历式建监听要 3.4 秒，而工作台每次打开、每次重连都要付一遍；
  * 这段时间里宿主是共用的，终端的响应也会被一起拖住（实测宿主 API 往返延迟从 2ms 冲到 146ms）。
  *
  * 现在同一工作区共用一个监听，最后一个使用者离开后再等一小段时间才关，避免「关掉又马上打开」
@@ -197,7 +190,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
   }), 'dsh-vscode-workbench: oniguruma wasm')
 
   const wss = new WebSocketServer({ noServer: true })
-  const watches = new WorkspaceWatch(workspace => chokidar.watch(workspace, { ignoreInitial: true, ignored: /(^|[/\\])(\.git|node_modules|\.next|\.nuxt|\.turbo|\.vite|coverage)([/\\]|$)/, awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 25 } }))
+  const watches = new WorkspaceWatch(createWorkspaceWatcher)
   ctx.effect(() => ctx.webServer.registerUpgrade({
     path: '/dsh-vscode/ws/files', handler(req, socket, head) {
       if (!trusted(req as IncomingMessage, ctx.webRuntime.trustedHosts)) { socket.destroy(); return }
