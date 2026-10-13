@@ -161,6 +161,60 @@ describe('accept granularity', () => {
     expect(calls).toBe(2)
   })
 
+  it('records an accept only when the inserted text continues a candidate', async () => {
+    // Monaco 不执行条目上的 command，采纳靠内容变更识别。这条判断判错过两次，所以正反两面都钉住。
+    const reported: Array<{ kind: string }> = []
+    const accepted: Array<{ filePath: string; start: number; end: number; inline: boolean; text: string }> = []
+    const model = {
+      uri: { path: '/a.ts' },
+      getLanguageId: () => 'typescript',
+      getValue: () => 'const value = useSt',
+      getOffsetAt: (position: { column: number }) => position.column - 1,
+    }
+    const controller = new InlineCompletionController({
+      client: {
+        suggest: async () => ({ candidates: ['ate more'], finishReason: 'done', masked: false, model: 'local-heuristic', experiment: 'control', timing: { requestedAt: 0, rttMs: 12 } }),
+        recordAccept: (payload: { filePath: string; start: number; end: number; inline: boolean; text: string }) => { accepted.push(payload) },
+      } as unknown as CompletionClient,
+      controllerId: 'accept-test',
+      kinds: { automatic: 0 as unknown as monaco.languages.InlineCompletionTriggerKind, explicit: 1 as unknown as monaco.languages.InlineCompletionTriggerKind },
+      emptyRangeAt: () => ({ startLineNumber: 1, startColumn: 3, endLineNumber: 1, endColumn: 3 } as unknown as monaco.Range),
+      editor: {
+        getModel: () => model,
+        getPosition: () => ({ lineNumber: 1, column: 3 }),
+        executeEdits: () => undefined,
+      } as unknown as monaco.editor.IStandaloneCodeEditor,
+      report: event => { reported.push(event) },
+    })
+
+    await controller.provide(
+      model as unknown as monaco.editor.ITextModel,
+      { lineNumber: 1, column: 3 } as unknown as monaco.Position,
+      { triggerKind: 1 } as unknown as monaco.languages.InlineCompletionContext,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) } as unknown as monaco.CancellationToken,
+    )
+
+    const change = (text: string, rangeLength: number) => ({ changes: [{ text, rangeLength, range: { startLineNumber: 1, startColumn: 3, endLineNumber: 1, endColumn: 3 } } as unknown as monaco.editor.IModelContentChange] })
+
+    // 单字符不记：命中候选前缀的概率太高。
+    controller.noteChange(change('a', 0))
+    expect(accepted).toHaveLength(0)
+
+    // 不是候选前缀：不是采纳。
+    controller.noteChange(change('zz', 0))
+    expect(accepted).toHaveLength(0)
+
+    // 换行：不是行内采纳。
+    controller.noteChange(change('at\nen', 0))
+    expect(accepted).toHaveLength(0)
+
+    // 命中：插入的文本是候选的前缀。
+    controller.noteChange(change('ate', 0))
+    // end - start 就是采纳区间，文档 4.5 第 1、2 条判定靠它。
+    expect(accepted).toEqual([{ filePath: 'a.ts', start: 2, end: 5, inline: true, text: 'ate' }])
+    expect(reported.filter(event => event.kind === 'accepted')).toHaveLength(1)
+  })
+
   it('reports shown, accepted and cancelled through the telemetry hook', async () => {
     // 采样点必须真的接上：采纳率的分母是展示次数，取消率来自在途请求被变更作废。
     const reported: Array<{ kind: string; candidateCount?: number; firstByteMs?: number; model?: string; experiment?: string }> = []
