@@ -107,39 +107,30 @@ let shortcutsService: unknown
 interface LayoutLike { selectPanel(id: string | null): void }
 
 /**
- * 工作台显示期间，把 DSH 侧栏底部那个账户/设置入口整行从 DOM 里移除。
+ * 工作台显示期间，DSH 侧栏底部那个账户/设置入口整行会被收起来。
  *
  * 它的行位于 (10, 948)–(270, 990)，伸进工作台活动栏（x 0–48）的区域。被 overlay 盖住之后
  * 它既收不到点击（命中测试落在活动栏上），里面的图标又会从活动栏与侧栏的缝隙里透出来 ——
  * 表现为「两个图标重叠、其中一个点了没反应」。工作台活动栏的设置按钮提供的是同一个入口。
  *
- * 为什么移除整行而不是隐藏、也不是只删 svg：那一行里放什么取决于登录状态 ——
- * 未登录时是 IconEllipsisOutlineMedium（省略号），已登录时是 AccountAvatar（可能是 <img>）。
- * 只删 svg 会在已登录时漏掉头像，所以整行一起摘掉；关闭工作台时按原位插回。
+ * **实现方式是 CSS（见 styles.ts 的 body:has(.dvw-overlay) [class*=_triggerRow]），不是在这里
+ * 移除节点。** 早前用 effect + row.remove() 做过，并且在 visible 变化时把节点插回去；问题是
+ * DSH 在会话切换、重新渲染时会重建那一行 —— 新建的节点不在那次 effect 记录里，effect 也不会
+ * 重跑，于是移除失效、那行又露出来。样式是声明式的，重建多少次都照样生效。
  *
- * 以 triggerRow 类名定位（DSH 的 CSS Module 类，前缀哈希但不影响后缀匹配）。
+ * 为什么收起整行而不是只删 svg：那一行里放什么取决于登录状态 —— 未登录是省略号图标，
+ * 已登录是头像（可能是 <img>）。只删 svg 会在已登录时漏掉头像。
  */
-function useHideShadowedSettingsEntry(visible: boolean): void {
-  useEffect(() => {
-    // 只在工作台显示期间收起：关掉工作台就要把入口还给 DSH，否则用户从侧栏进不去设置。
-    if (!visible) return
-    const rows = [...document.querySelectorAll<HTMLElement>('[class*=_triggerRow]')]
-      .map((row) => ({ row, parent: row.parentElement, next: row.nextSibling }))
-    for (const { row } of rows) row.remove()
-    return () => { for (const { row, parent, next } of rows) parent?.insertBefore(row, next) }
-  }, [visible])
-}
 
 const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { service: VscodeWorkbench }) => {
   // DSH 0.2.0 起 sessions store 不再提供 state.current。官方在 shell 层的取法是
   // 在 state.byId 里找 retainedBy.mainView > 0 的会话（对齐 dsh-client-ui-layout 的 DocumentTitle
   // 与 dsh-client-ui-cordis 的 current 取法）。state.current 读取保留，用于兼容 0.1.x。
   const sessionId = useSessions((state: any) => state.current ?? (Object.values(state.byId ?? {}) as any[]).find((session: any) => (session.retainedBy?.mainView ?? 0) > 0)?.id) as string | undefined
-  // 两个 effect 的声明顺序有意义：先恢复被隐藏的侧栏入口，再触发它。见各自的注释。
-  // 两个 effect 的声明顺序有意义：先按 visible 隐藏/恢复侧栏入口，再注册 opener。
   const [visible, setVisible] = useState(() => service.getSnapshot().visible)
   useEffect(() => service.subscribe(() => setVisible(service.getSnapshot().visible)), [service])
-  useHideShadowedSettingsEntry(visible)
+  // 侧栏入口的收起由 CSS 负责（body:has(.dvw-overlay) [class*=_triggerRow]），不在这里动 DOM ——
+  // 详见该规则的注释：DSH 重建那行时，effect 里的 remove() 会失效。
   useEffect(() => {
     service.setSettingsOpener(openDshSettings)
     return () => { service.setSettingsOpener(() => {}) }
