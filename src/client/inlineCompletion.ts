@@ -8,7 +8,8 @@
  * 「拿到首个候选就返回」把首字节优势用上，而不是等整个流结束。
  */
 import type * as monaco from 'monaco-editor'
-import { DEFAULT_COMPLETION_PARAMS, debounceFor, type CompletionParams } from '../completion/params.ts'
+import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from '../completion/params.ts'
+import { triggerPlan } from './completion.ts'
 import { CompletionClient, type CompletionResponse } from './completion.ts'
 
 /** 最近一次内容变更是否包含换行。换行意味着语句或块结束，按文档跳过防抖。 */
@@ -16,20 +17,6 @@ export interface ChangeTracker {
   lastChangeHadNewline: boolean
 }
 
-/** 是否需要为本轮触发等待防抖：自动触发且上一次变更不是换行时才等。 */
-export function shouldDebounce(tracker: ChangeTracker, triggerKind: monaco.languages.InlineCompletionTriggerKind, explicitKind: monaco.languages.InlineCompletionTriggerKind): boolean {
-  if (triggerKind === explicitKind) return false
-  return !tracker.lastChangeHadNewline
-}
-
-/** 可被取消的等待：取消发生在防抖窗口内时，请求根本不会发出去。 */
-export function delayWithToken(ms: number, token: monaco.CancellationToken): Promise<void> {
-  if (ms <= 0 || token.isCancellationRequested) return Promise.resolve()
-  return new Promise(resolve => {
-    const timer = setTimeout(resolve, ms)
-    token.onCancellationRequested(() => { clearTimeout(timer); resolve() })
-  })
-}
 
 export interface InlineCompletionControllerOptions {
   client: CompletionClient
@@ -79,8 +66,11 @@ export function nextLineOf(text: string): string {
 export class InlineCompletionController {
   readonly tracker: ChangeTracker = { lastChangeHadNewline: false }
   private inFlight: AbortController | undefined
+  private triggerTimer: ReturnType<typeof setTimeout> | undefined
   /** 当前展示的建议：整块之外的采纳粒度都基于它切分。 */
   private current: { text: string; position: { lineNumber: number; column: number }; path: string } | undefined
+  /** 上一次成功产出的候选与它对应的位置，供自动触发直接呈现（文档 4.1：命中缓存不发请求）。 */
+  private lastResult: { candidates: readonly string[]; position: { lineNumber: number; column: number } } | undefined
 
   constructor(private readonly options: InlineCompletionControllerOptions) {}
 
@@ -116,6 +106,17 @@ export class InlineCompletionController {
     return slice
   }
 
+  /** 把候选变成 Monaco 的条目；采纳命令带上位置与控制器标识，便于采纳后记账。 */
+  private toInlineCompletions(candidates: readonly string[], position: monaco.Position, model: monaco.editor.ITextModel): monaco.languages.InlineCompletions | undefined {
+    const path = model.uri.path.replace(/^\//, '')
+    const items = buildInlineCompletionItems(candidates, position, this.options.emptyRangeAt, text => ({
+      id: ACCEPT_COMMAND_ID,
+      title: '记录补全采纳',
+      arguments: [this.acceptPayload(text, position, path)],
+    }))
+    return items.length === 0 ? undefined : { items }
+  }
+
   private offsetAt(position: { lineNumber: number; column: number }): number {
     return this.options.editor.getModel()?.getOffsetAt({ lineNumber: position.lineNumber, column: position.column }) ?? 0
   }
@@ -125,7 +126,7 @@ export class InlineCompletionController {
   }
 
   /**
-   * 接到内容变更：更新换行标记，并作废在途请求（作废不只丢结果，还中止底层连接）。
+   * 接到内容变更：更新换行标记、作废在途请求，并按文档 4.1 的规则调度一次触发。
    *
    * 参数取事件对象而不是变更数组：编辑器给的是事件，而这里只要它的 changes 字段，
    * 写成事件形状既能直接用，也还能手搓一个对象来单测。
@@ -134,15 +135,34 @@ export class InlineCompletionController {
     this.tracker.lastChangeHadNewline = event.changes.some(change => change.text.includes('\n'))
     this.inFlight?.abort()
     this.inFlight = undefined
+    this.scheduleTrigger()
+  }
+
+  /**
+   * 按文档 4.1 的规则调度一次显式触发：换行立即，其余按语言防抖。
+   *
+   * 触发时机由本插件决定，而不是交给 Monaco 的自动触发链路 —— 原因见 provide。
+   */
+  private scheduleTrigger(): void {
+    if (this.triggerTimer !== undefined) clearTimeout(this.triggerTimer)
+    const language = this.options.editor.getModel()?.getLanguageId() ?? 'plaintext'
+    const plan = triggerPlan({ isNewLine: this.tracker.lastChangeHadNewline }, language, this.options.params ?? DEFAULT_COMPLETION_PARAMS)
+    this.triggerTimer = setTimeout(() => {
+      this.triggerTimer = undefined
+      this.options.editor.trigger('dsh-completion', 'editor.action.inlineSuggest.trigger', {})
+    }, plan.delayMs)
   }
 
   async provide(model: monaco.editor.ITextModel, position: monaco.Position, context: monaco.languages.InlineCompletionContext, token: monaco.CancellationToken): Promise<monaco.languages.InlineCompletions | undefined> {
     const params = this.options.params ?? DEFAULT_COMPLETION_PARAMS
     const language = model.getLanguageId()
-    if (shouldDebounce(this.tracker, context.triggerKind, this.options.kinds.explicit)) {
-      await delayWithToken(debounceFor(language, params), token)
-      // 防抖窗口内用户又敲了键：这次触发已经作废，链接都没建立。
-      if (token.isCancellationRequested) return undefined
+    // 自动触发不取新结果：它对上位置一致时直接复用上次候选（文档 4.1：命中缓存直接呈现、不发请求），
+    // 位置不同则放弃 —— 返回空的候选等于清空当前建议，会把刚显示的内容抹掉。
+    if (context.triggerKind !== this.options.kinds.explicit) {
+      const last = this.lastResult
+      if (last === undefined) return undefined
+      if (last.position.lineNumber !== position.lineNumber || last.position.column !== position.column) return undefined
+      return this.toInlineCompletions(last.candidates, position, model)
     }
 
     const controller = new AbortController()
@@ -156,7 +176,6 @@ export class InlineCompletionController {
         document: model.getValue(),
         rewriteAt: { line: position.lineNumber, column: position.column - 1 },
         signal: controller.signal,
-        firstCandidateOnly: true,
       })
     } catch (error) {
       if (controller.signal.aborted) return undefined
@@ -167,15 +186,13 @@ export class InlineCompletionController {
 
     const path = model.uri.path.replace(/^\//, '')
     this.current = { text: response.candidates[0] ?? '', position: { lineNumber: position.lineNumber, column: position.column }, path }
-    const items = buildInlineCompletionItems(response.candidates, position, this.options.emptyRangeAt, text => ({
-      id: ACCEPT_COMMAND_ID,
-      title: '记录补全采纳',
-      arguments: [this.acceptPayload(text, position, path)],
-    }))
-    return items.length === 0 ? undefined : { items }
+    this.lastResult = { candidates: response.candidates, position: { lineNumber: position.lineNumber, column: position.column } }
+    return this.toInlineCompletions(response.candidates, position, model)
   }
 
   dispose(): void {
+    if (this.triggerTimer !== undefined) clearTimeout(this.triggerTimer)
+    this.triggerTimer = undefined
     this.inFlight?.abort()
     this.inFlight = undefined
   }

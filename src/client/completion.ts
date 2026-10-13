@@ -65,13 +65,6 @@ export interface SuggestInput {
   signal?: AbortSignal
   /** 收到增量就回调，用于边流边渲染。 */
   onUpdate?: (candidates: string[]) => void
-  /**
-   * 只要首个候选可用就返回，不等整个流结束。
-   *
-   * Monaco 的行内补全接口一次请求一次返回，增量推不上屏幕；此时「等整个流」只会白等，
-   * 拿到首个候选就收工才能把首字节优势用上。
-   */
-  firstCandidateOnly?: boolean
 }
 
 export interface CompletionClientOptions {
@@ -183,8 +176,6 @@ export class CompletionClient {
     let finishReason = ''
     let masked = false
     let failure: string | undefined
-    // 首个候选已够用：下面收工时会把连接取消掉，不留下没人读的流。
-    let early = false
 
     try {
       while (true) {
@@ -199,14 +190,12 @@ export class CompletionClient {
             const applied = applyEvent(slots, event)
             slots = applied.slots
             input.onUpdate?.(slots)
-            if (input.firstCandidateOnly === true && (slots[0] ?? '') !== '') { early = true; break }
           } else if (event.type === 'error') { failure = `${event.code}: ${event.message}` }
           else if (event.type === 'content_security') { masked = true }
           else if (event.type === 'done') { finishReason = 'done' }
         }
         // 首个候选已够用：把连接取消掉（文档 4.1 要求取消真正生效），但不等待它结算 ——
         // 有在途数据时 cancel 的 Promise 不落地，await 会把 suggest 挂死，调用方因此永远拿不到候选。
-        if (early) { void reader.cancel().catch(() => undefined); break }
       }
     } finally {
       // 同理：取消要发出去，但不能等它结算。
