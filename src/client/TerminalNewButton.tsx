@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TerminalProfile } from '../terminal.ts'
-import { Icon } from './Icon.tsx'
 import { terminalProfiles } from './terminal.ts'
 
 /**
@@ -45,8 +44,8 @@ export function TerminalNewButton({ sessionId }: { sessionId: string }) {
   }, [open])
 
   return <div className="dvw-terminal-new" ref={root}>
-    <button className="dvw-terminal-new-main" type="button" title="新建终端" aria-label="新建终端" onClick={() => create()}><Icon name="add"/></button>
-    <button className="dvw-terminal-new-more" ref={more} type="button" title="新建终端（选择 shell）" aria-label="新建终端（选择 shell）" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(current => !current)}><Icon name="chevron-down"/></button>
+    <button className="dvw-terminal-new-main" type="button" title="新建终端" aria-label="新建终端" onClick={() => create()}><svg className="dvw-terminal-new-plus" viewBox="0 0 8 8" width="8" height="8" aria-hidden="true"><path d="M4 0.5V7.5M0.5 4H7.5" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/></svg></button>
+    <button className="dvw-terminal-new-more" ref={more} type="button" title="新建终端（选择 shell）" aria-label="新建终端（选择 shell）" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(current => !current)}><svg className="dvw-terminal-new-chevron" viewBox="0 0 8 5" width="8" height="5" aria-hidden="true"><path d="M1 1L4 4L7 1" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg></button>
     {open && <div className="dvw-terminal-menu dvw-terminal-new-menu" role="menu" aria-label="新建终端">
       <button type="button" role="menuitem" onClick={() => create()}>新建终端</button>
       <div className="dvw-terminal-menu-sep" role="separator"/>
