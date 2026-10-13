@@ -78,7 +78,8 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
   const snapshot = useSyncExternalStore(workspace.subscribe.bind(workspace), workspace.getSnapshot.bind(workspace))
   const [active, setActive] = useState<string>()
   const [context, setContext] = useState<{ id: string; x: number; y: number }>()
-  const [renaming, setRenaming] = useState<{ id: string; value: string }>()
+  // 改名可能从两个地方发起（顶部标签、右侧列表），输入框只在该处出现，所以记下 where。
+  const [renaming, setRenaming] = useState<{ id: string; value: string; where: 'tab' | 'list' }>()
   const [split, setSplit] = useState<readonly string[]>()
   const [sideWidth, setSideWidth] = useState(220)
   useEffect(() => {
@@ -110,16 +111,26 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
   const splitTerminal = (first = active) => { if (first === undefined) return; void workspace.create().then(value => { setSplit(current => [...(current?.includes(first) ? current : [first]), value.id]); setActive(value.id) }) }
   const shown = (split ?? (active === undefined ? [] : [active])).filter(id => snapshot.terminals.some(value => value.id === id))
   const selectTerminal = (id: string) => { setActive(id); setSplit(current => current?.includes(id) ? current : [id]) }
+  const startRename = (id: string, title: string, where: 'tab' | 'list') => setRenaming({ id, value: title, where })
   // 顶部标签栏。渲染进面板头里留给面板的那块容器（见 service.ts 的 BottomPanelProps.header）：
   // 标签状态属于终端面板，上提到 Workbench 只为了挪个位置会把职责弄乱。
+  const renameInput = (id: string, className: string) => <input className={className} value={renaming?.value ?? ''} autoFocus aria-label="终端名称"
+    onChange={event => setRenaming({ id, value: event.target.value, where: renaming?.where ?? 'tab' })}
+    onKeyDown={event => { if (event.key === 'Enter') saveRename(id); if (event.key === 'Escape') setRenaming(undefined) }}
+    onBlur={() => saveRename(id)}/>
   const tabs = <div className="dvw-bottom-tabs" role="tablist" aria-label="终端标签">
     {snapshot.terminals.map(value => <span key={value.id} className="dvw-bottom-tab" data-active={active === value.id || undefined}>
-      <button type="button" role="tab" aria-selected={active === value.id} className="dvw-bottom-tab-label" title={value.title}
-        onClick={() => selectTerminal(value.id)}
-        onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}>
-        <Icon name="terminal"/><span className="dvw-bottom-tab-name">{value.title}</span>
+      {renaming?.id === value.id && renaming.where === 'tab'
+        ? renameInput(value.id, 'dvw-bottom-tab-rename')
+        : <button type="button" role="tab" aria-selected={active === value.id} className="dvw-bottom-tab-label" title={value.title}
+            onClick={() => selectTerminal(value.id)}
+            onDoubleClick={() => startRename(value.id, value.title, 'tab')}
+            onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}>
+            <Icon name="terminal"/><span className="dvw-bottom-tab-name">{value.title}</span>
+          </button>}
+      <button type="button" className="dvw-bottom-tab-close" title="终止终端" aria-label={`终止 ${value.title}`} onClick={() => closeTerminal(value.id)}>
+        <svg className="dvw-bottom-tab-close-icon" viewBox="0 0 8 8" width="8" height="8" aria-hidden="true"><path d="M1 1L7 7M7 1L1 7" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>
       </button>
-      <button type="button" className="dvw-bottom-tab-close" title="终止终端" aria-label={`终止 ${value.title}`} onClick={() => closeTerminal(value.id)}><Icon name="close"/></button>
     </span>)}
   </div>
   return <div className="dvw-terminal-root">
@@ -139,8 +150,8 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
       window.addEventListener('pointerup', up)
     }}/>
     <aside className="dvw-terminal-tabs" style={{ width: sideWidth }} aria-label="终端会话">
-      <div className="dvw-terminal-list">{snapshot.terminals.map(value => renaming?.id === value.id ? <div key={value.id} className="dvw-terminal-entry" data-active><div className="dvw-terminal-tab"><Icon name="terminal"/><input className="dvw-terminal-rename" value={renaming.value} autoFocus aria-label="终端名称" onChange={event => setRenaming({ id: value.id, value: event.target.value })} onKeyDown={event => { if (event.key === 'Enter') saveRename(value.id); if (event.key === 'Escape') setRenaming(undefined) }} onBlur={() => saveRename(value.id)}/></div></div> : <div key={value.id} className="dvw-terminal-entry" data-active={active === value.id}><button className="dvw-terminal-tab" onClick={() => selectTerminal(value.id)} onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}><Icon name="terminal"/>{value.title}</button><div className="dvw-terminal-entry-actions"><button title="拆分终端" onClick={() => splitTerminal(value.id)}><Icon name="split-horizontal"/></button><button title="终止终端" onClick={() => closeTerminal(value.id)}><Icon name="trash"/></button></div></div>)}</div>
-      {context !== undefined && <div className="dvw-terminal-menu" role="menu" style={{ left: context.x, top: context.y }} onPointerDown={event => event.stopPropagation()}><button role="menuitem" onClick={() => { const terminal = snapshot.terminals.find(value => value.id === context.id); setContext(undefined); if (terminal !== undefined) setRenaming({ id: terminal.id, value: terminal.title }) }}>重命名</button><button className="dvw-terminal-menu-danger" role="menuitem" onClick={() => closeTerminal(context.id)}>终止终端</button></div>}
+      <div className="dvw-terminal-list">{snapshot.terminals.map(value => renaming?.id === value.id && renaming.where === 'list' ? <div key={value.id} className="dvw-terminal-entry" data-active><div className="dvw-terminal-tab"><Icon name="terminal"/>{renameInput(value.id, 'dvw-terminal-rename')}</div></div> : <div key={value.id} className="dvw-terminal-entry" data-active={active === value.id}><button className="dvw-terminal-tab" onClick={() => selectTerminal(value.id)} onDoubleClick={() => startRename(value.id, value.title, 'list')} onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}><Icon name="terminal"/>{value.title}</button><div className="dvw-terminal-entry-actions"><button title="拆分终端" onClick={() => splitTerminal(value.id)}><Icon name="split-horizontal"/></button><button title="终止终端" onClick={() => closeTerminal(value.id)}><Icon name="trash"/></button></div></div>)}</div>
+      {context !== undefined && <div className="dvw-terminal-menu" role="menu" style={{ left: context.x, top: context.y }} onPointerDown={event => event.stopPropagation()}><button role="menuitem" onClick={() => { const terminal = snapshot.terminals.find(value => value.id === context.id); setContext(undefined); if (terminal !== undefined) setRenaming({ id: terminal.id, value: terminal.title, where: 'list' }) }}>重命名</button><button className="dvw-terminal-menu-danger" role="menuitem" onClick={() => closeTerminal(context.id)}>终止终端</button></div>}
     </aside>
   </div>
 }
