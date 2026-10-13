@@ -13,10 +13,74 @@ import { readBody, send, sendError } from './wire.ts'
 export interface TerminalInfo { id: string; title: string; cwd: string; running: boolean; exitCode?: number; sequence: number }
 export interface TerminalOutput { sequence: number; data: string }
 
-interface TerminalHandle { info: TerminalInfo; process: IPty; replay: string; listeners: Set<(output: TerminalOutput) => void> }
+interface TerminalHandle { info: TerminalInfo; process: IPty; replay: ReplayBuffer; listeners: Set<(output: TerminalOutput) => void> }
 const SENSITIVE = /(api[_-]?key|token|credential|secret|password|passwd|private[_-]?key|^dsh_.*(?:key|token|secret))/i
 const MAX_TERMINALS = 8
-const REPLAY_BYTES = 2 * 1024 * 1024
+/** 回放缓冲里最多留这么多字节。 */
+const REPLAY_STORE_BYTES = 512 * 1024
+/** 单次重连最多送回去多少字节。 */
+export const REPLAY_SEND_BYTES = 256 * 1024
+/** 与客户端 xterm 的 scrollback 对齐：它不会显示更多行，多送出去的字节只会被解析后丢掉。 */
+export const REPLAY_LINES = 1000
+/** 一次送出的字符数。整段一次性送出会让客户端在一次解析里卡住。 */
+export const REPLAY_CHUNK_CHARS = 64 * 1024
+
+/**
+ * 回放缓冲。
+ *
+ * 原先是单个字符串：每拿到一块数据就对整段做一次 `Buffer.byteLength`，超限时再整段
+ * `slice`。输出越久，单块越贵，整体是 O(n²)。改成按块保存、增量记账后，单块成本是 O(块长)。
+ *
+ * 保留量按「能显示的部分」定：xterm 的 scrollback 默认 1000 行，超出的字节不会被显示，
+ * 却要在每次重连时序列化、传输、解析。实测保留 2 MiB 时，切一次标签要送 2,331,945 字节，
+ * 主线程被卡 372ms、约 715ms 才恢复。
+ */
+export class ReplayBuffer {
+  private readonly chunks: string[] = []
+  private bytes = 0
+
+  push(data: string): void {
+    this.chunks.push(data)
+    this.bytes += Buffer.byteLength(data)
+    while (this.bytes > REPLAY_STORE_BYTES && this.chunks.length > 1) this.bytes -= Buffer.byteLength(this.chunks.shift() as string)
+    if (this.bytes > REPLAY_STORE_BYTES) {
+      const tail = (this.chunks[0] ?? '').slice(-REPLAY_STORE_BYTES)
+      this.chunks[0] = tail
+      this.bytes = Buffer.byteLength(tail)
+    }
+  }
+
+  /** 重连时该看到的那一段：末尾若干行，并从行边界起算，避免半行或半截转义序列。 */
+  tail(): string {
+    const raw = this.chunks.join('')
+    if (raw === '') return ''
+    const lines = raw.split('\n')
+    const keep = lines.length > REPLAY_LINES ? lines.slice(-REPLAY_LINES).join('\n') : raw
+    if (Buffer.byteLength(keep) <= REPLAY_SEND_BYTES) return keep
+    const cut = keep.slice(-REPLAY_SEND_BYTES)
+    const boundary = cut.indexOf('\n')
+    return boundary === -1 ? cut : cut.slice(boundary + 1)
+  }
+}
+
+/** 按字符切块；不切开代理对。 */
+export function replayChunks(text: string): string[] {
+  if (text.length <= REPLAY_CHUNK_CHARS) return [text]
+  const chunks: string[] = []
+  let index = 0
+  while (index < text.length) {
+    let end = Math.min(index + REPLAY_CHUNK_CHARS, text.length)
+    // 边界落在代理对中间时，把边界往前挪一个码元，让整个字符落进下一块 ——
+    // 直接丢掉这个高代理会让这个字符彻底损坏（低代理会孤零零地留在下一块开头）。
+    if (end < text.length) {
+      const last = text.charCodeAt(end - 1)
+      if (last >= 0xd800 && last <= 0xdbff) end -= 1
+    }
+    chunks.push(text.slice(index, end))
+    index = end
+  }
+  return chunks
+}
 
 /** Remove credentials while retaining ordinary interactive-shell variables. */
 export function sanitizedTerminalEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -131,12 +195,11 @@ export class TerminalManager {
     const { shell, args } = terminalShell(profileId)
     const child = pty.spawn(shell, args, { name: 'xterm-256color', cols: 80, rows: 24, cwd: key, env: sanitizedTerminalEnv(process.env) })
     const info: TerminalInfo = { id: randomUUID(), title: title || basename(shell), cwd: key, running: true, sequence: 0 }
-    const handle: TerminalHandle = { info, process: child, replay: '', listeners: new Set() }
+    const handle: TerminalHandle = { info, process: child, replay: new ReplayBuffer(), listeners: new Set() }
     terminals.set(info.id, handle)
     child.onData(data => {
       info.sequence++
-      handle.replay += data
-      if (Buffer.byteLength(handle.replay) > REPLAY_BYTES) handle.replay = handle.replay.slice(-REPLAY_BYTES)
+      handle.replay.push(data)
       for (const listener of handle.listeners) listener({ sequence: info.sequence, data })
     })
     child.onExit(({ exitCode }) => {
@@ -239,7 +302,11 @@ export function installTerminal(ctx: HostContext): void {
       if (sessionId === null || id === null) { connection.close(1008, 'sessionId and id required'); return }
       const handle = manager.get(cwdFor(ctx, sessionId), id)
       if (handle === undefined) { connection.close(1008, 'terminal not found'); return }
-      if (handle.replay !== '') connection.send(JSON.stringify({ type: 'replay', sequence: handle.info.sequence, data: handle.replay }))
+      const replay = handle.replay.tail()
+      if (replay !== '') {
+        const sequence = handle.info.sequence
+        for (const chunk of replayChunks(replay)) connection.send(JSON.stringify({ type: 'replay', sequence, data: chunk }))
+      }
       const listener = (output: TerminalOutput) => { if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'output', ...output })) }
       handle.listeners.add(listener)
       connection.on('message', raw => {

@@ -33,7 +33,9 @@ function XtermView({ workspace, id, colorScheme }: { workspace: TerminalWorkspac
   const [error, setError] = useState<string>()
   useEffect(() => {
     if (root.current === null) return
-    const terminal = new Terminal({ convertEol: false, cursorBlink: true, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 13, theme: terminalTheme(colorScheme) })
+    // scrollback 写明确：宿主回放时按这个行数裁剪（见 src/terminal.ts 的 REPLAY_LINES），
+    // 两处必须一致，否则要么白送字节、要么回放不够铺满。
+    const terminal = new Terminal({ convertEol: false, cursorBlink: true, scrollback: 1000, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 13, theme: terminalTheme(colorScheme) })
     terminalRef.current = terminal
     const fit = new FitAddon()
     terminal.loadAddon(fit)
