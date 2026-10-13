@@ -10,6 +10,7 @@ import { readGrammar } from './assets.ts'
 import { readBinaryBody, readBody, send, sendError, trusted, WorkbenchError } from './wire.ts'
 import { localBase } from './terminal.ts'
 import { dispatch } from './api.ts'
+import { registerCompletionRoute } from './completion/register.ts'
 
 /**
  * 宿主侧的全部 HTTP / WebSocket 路由。
@@ -124,6 +125,9 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
       } catch (error) { sendError(res, error) }
     },
   }), 'dsh-vscode-workbench: API')
+
+  // 补全走独立的 SSE 端点：它要边算边发，与 /api 的一问一答不同。
+  registerCompletionRoute(ctx, { trusted, readBody, send, sendError, trustedHosts: ctx.webRuntime.trustedHosts })
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/upload', handler: async (req, res) => {

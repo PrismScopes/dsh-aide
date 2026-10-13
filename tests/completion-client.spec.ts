@@ -1,0 +1,158 @@
+import { describe, expect, it, vi } from 'vitest'
+import { applyEvent, CompletionClient, contextFingerprint, triggerPlan } from '../src/client/completion.ts'
+import { encodeSseEvent, type CompletionEvent } from '../src/completion/protocol.ts'
+import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
+
+/** 用给定的分块拼一个流式响应，分块边界故意切在 SSE 记录中间，检验跨块解析。 */
+function streamResponse(chunks: string[], init: { status?: number; onCancel?: () => void } = {}): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+      controller.close()
+    },
+    cancel() { init.onCancel?.() },
+  })
+  return new Response(stream, { status: init.status ?? 200, headers: { 'content-type': 'text/event-stream' } })
+}
+
+const events = (...list: CompletionEvent[]): string[] => list.map(event => encodeSseEvent(event))
+
+const input = (overrides: Partial<Parameters<CompletionClient['suggest']>[0]> = {}) => ({
+  filePath: 'src/a.ts',
+  language: 'typescript',
+  document: 'const value = useSt',
+  rewriteAt: { line: 1, column: 19 },
+  ...overrides,
+})
+
+describe('completion trigger plan', () => {
+  it('triggers immediately on a newline and debounces otherwise', () => {
+    expect(triggerPlan({ isNewLine: true }, 'rust')).toEqual({ immediate: true, delayMs: 0 })
+    expect(triggerPlan({ isNewLine: false }, 'typescript')).toEqual({ immediate: false, delayMs: DEFAULT_COMPLETION_PARAMS.debounceFastMs })
+    expect(triggerPlan({ isNewLine: false }, 'rust')).toEqual({ immediate: false, delayMs: DEFAULT_COMPLETION_PARAMS.debounceSlowMs })
+  })
+})
+
+describe('candidate slots', () => {
+  it('appends to the addressed slot and fills gaps with empty strings', () => {
+    let slots: string[] = []
+    slots = applyEvent(slots, { type: 'output', candidates: [{ index: 0, text: 'a', finishReason: '', elapsedMs: 1 }] }).slots
+    slots = applyEvent(slots, { type: 'output', candidates: [{ index: 2, text: 'c', finishReason: '', elapsedMs: 2 }] }).slots
+    expect(slots).toEqual(['a', '', 'c'])
+    slots = applyEvent(slots, { type: 'output', candidates: [{ index: 0, text: 'b', finishReason: '', elapsedMs: 3 }] }).slots
+    expect(slots).toEqual(['ab', '', 'c'])
+  })
+
+  it('ignores events that carry no candidate text', () => {
+    expect(applyEvent(['a'], { type: 'done' }).slots).toEqual(['a'])
+  })
+})
+
+describe('context fingerprint', () => {
+  it('is stable for the same context and changes with the text around the cursor', () => {
+    const base = input()
+    expect(contextFingerprint(base)).toBe(contextFingerprint({ ...base }))
+    expect(contextFingerprint(base)).not.toBe(contextFingerprint({ ...base, document: 'const value = useSta' }))
+    expect(contextFingerprint(base)).not.toBe(contextFingerprint({ ...base, rewriteAt: { line: 1, column: 15 } }))
+  })
+})
+
+describe('completion client', () => {
+  it('collects streamed candidates and reports the timing triple', async () => {
+    let clock = 100
+    const fetchImpl = vi.fn(async () => streamResponse([
+      encodeSseEvent({ type: 'meta', model: 'm-1' }).slice(0, 12),
+      encodeSseEvent({ type: 'meta', model: 'm-1' }).slice(12),
+      ...events(
+        { type: 'output', candidates: [{ index: 0, text: 'ate', finishReason: '', elapsedMs: 5 }] },
+      ),
+      ...events({ type: 'done' }),
+    ]))
+    const client = new CompletionClient({ endpoint: '/dsh-vscode/completion', sessionId: 's', fetchImpl, now: () => (clock += 5) })
+    const updates: string[][] = []
+    const result = await client.suggest(input({ onUpdate: candidates => updates.push([...candidates]) }))
+    expect(result.candidates).toEqual(['ate'])
+    expect(result.model).toBe('m-1')
+    expect(result.finishReason).toBe('done')
+    expect(result.timing.firstByteAt).toBeDefined()
+    expect(result.timing.rttMs).toBeGreaterThanOrEqual(0)
+    expect(result.timing.lastByteAt).toBeGreaterThanOrEqual(result.timing.firstByteAt ?? 0)
+    expect(updates).toEqual([['ate']])
+  })
+
+  it('serves a repeated request from cache and stops after a recorded accept', async () => {
+    const fetchImpl = vi.fn(async () => streamResponse(events({ type: 'output', candidates: [{ index: 0, text: 'ate', finishReason: '', elapsedMs: 1 }] }, { type: 'done' })))
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
+    await client.suggest(input())
+    await client.suggest(input())
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    client.recordAccept({ filePath: 'src/a.ts', start: 0, end: 3, text: 'ate', inline: true })
+    await client.suggest(input())
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('forgets the cache entry once its lifetime has passed', async () => {
+    let clock = 0
+    const fetchImpl = vi.fn(async () => streamResponse(events({ type: 'done' })))
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl, cacheTtlMs: 10, now: () => clock })
+    await client.suggest(input())
+    clock = 50
+    await client.suggest(input())
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops candidates that fail the filters and applies post-processing', async () => {
+    const fetchImpl = vi.fn(async () => streamResponse(events(
+      { type: 'output', candidates: [{ index: 0, text: 'ate', finishReason: '', elapsedMs: 1 }] },
+      { type: 'output', candidates: [{ index: 1, text: 'x', finishReason: '', elapsedMs: 1 }] },
+      { type: 'output', candidates: [{ index: 2, text: 'call(a', finishReason: '', elapsedMs: 1 }] },
+      { type: 'done' },
+    )))
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
+    // 文档在光标之后是空的，所以候选 'ate' 通过；'x' 太短被丢；'call(a' 补上右括号。
+    const result = await client.suggest(input({ document: 'const value = useSt' }))
+    expect(result.candidates).toEqual(['ate', 'call(a)'])
+  })
+
+  it('drops a candidate identical to the text after the cursor', async () => {
+    const fetchImpl = vi.fn(async () => streamResponse(events({ type: 'output', candidates: [{ index: 0, text: 'ate()', finishReason: '', elapsedMs: 1 }] }, { type: 'done' })))
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
+    const result = await client.suggest(input({ document: 'const value = useState()' }))
+    expect(result.candidates).toEqual([])
+  })
+
+  it('reports an error event as a thrown failure', async () => {
+    const fetchImpl = vi.fn(async () => streamResponse(events({ type: 'error', code: 'completion-timeout', message: 'slow' })))
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
+    await expect(client.suggest(input())).rejects.toThrow('completion-timeout: slow')
+  })
+
+  it('flags a content security hit', async () => {
+    const fetchImpl = vi.fn(async () => streamResponse(events(
+      { type: 'content_security', action: 'mask', ruleId: 'r', ruleName: 'SECRET' },
+      { type: 'output', candidates: [{ index: 0, text: 'safe value', finishReason: '', elapsedMs: 1 }] },
+      { type: 'done' },
+    )))
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
+    const result = await client.suggest(input())
+    expect(result.masked).toBe(true)
+    expect(result.candidates).toEqual(['safe value'])
+  })
+
+  it('forwards the cancellation signal to the request and rejects a failed response', async () => {
+    const controller = new AbortController()
+    const seen: Array<AbortSignal | undefined> = []
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push(init?.signal ?? undefined)
+      return streamResponse(events({ type: 'done' }))
+    })
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
+    await client.suggest(input({ signal: controller.signal }))
+    expect(seen[0]).toBe(controller.signal)
+
+    const failing = vi.fn(async () => new Response('nope', { status: 500 }))
+    const failingClient = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl: failing })
+    await expect(failingClient.suggest(input())).rejects.toThrow('completion request failed: 500')
+  })
+})

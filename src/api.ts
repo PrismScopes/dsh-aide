@@ -1,6 +1,8 @@
 import type { HostContext } from './context.ts'
 import { createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, readDocument, renameEntry, saveDocument, searchWorkspace, uploadFile, workspacePreviewFile } from './host.ts'
 import type { SearchRequest } from './types.ts'
+import { DEFAULT_COMPLETION_PARAMS } from './completion/params.ts'
+import { resolveProvider } from './completion/register.ts'
 import { WorkbenchError, stringField } from './wire.ts'
 
 /**
@@ -11,6 +13,11 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
   const sessionId = stringField(body, 'sessionId'); const cwd = cwdFor(ctx, sessionId)
   switch (method) {
     case 'workspace': return { cwd, name: cwd.split(/[\\/]/).at(-1) || cwd }
+    // 补全参数与提供方由宿主下发，客户端不写死这些值（文档第七节的要求）。
+    case 'completion.config': {
+      const resolved = resolveProvider(ctx)
+      return { source: resolved.source, model: resolved.model, profile: resolved.profile.id, params: DEFAULT_COMPLETION_PARAMS, endpoint: '/dsh-vscode/completion' }
+    }
     case 'fs.list': return listFiles(cwd, stringField(body, 'path'))
     case 'fs.read': return readDocument(cwd, stringField(body, 'path'), body.force === true)
     case 'fs.save': return saveDocument(cwd, stringField(body, 'path'), stringField(body, 'content'), stringField(body, 'revision'))

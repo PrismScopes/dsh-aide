@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import darkPlus from '@shikijs/themes/dark-plus'
 import lightPlus from '@shikijs/themes/light-plus'
 import { installTextMate } from './textmateHighlight.ts'
+import { attachInlineCompletion } from './inlineCompletion.ts'
 
 type Monaco = typeof import('monaco-editor')
 declare global { interface Window { require?: { (ids: string[], done: () => void): void; config(value: unknown): void }; monaco?: Monaco } }
@@ -176,7 +177,7 @@ export function MonacoDiffEditor(props: { uri: string; original: string; modifie
   return error===undefined?<div className="dvw-diff dvw-monaco-diff" data-mode={props.mode} data-render-side-by-side={props.mode==='split'} ref={root}/>:<div className="dvw-error">{error}</div>
 }
 
-export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' | 'light'; line?: number; column?: number; onChange(value: string): void; onSave(): void }) {
+export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' | 'light'; line?: number; column?: number; sessionId?: string; onChange(value: string): void; onSave(): void }) {
   const root = useRef<HTMLDivElement>(null)
   const editor = useRef<import('monaco-editor').editor.IStandaloneCodeEditor>()
   const callbacks = useRef({ onChange: props.onChange, onSave: props.onSave })
@@ -199,7 +200,9 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       const change = instance.onDidChangeModelContent(() => callbacks.current.onChange(instance.getValue()))
       instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => callbacks.current.onSave())
       if (props.line !== undefined) { instance.setPosition({ lineNumber: props.line, column: props.column ?? 1 }); instance.revealLineInCenter(props.line); instance.focus() }
-      return () => { change.dispose() }
+      // 行内补全跟着编辑器实例走：没有 sessionId（比如预览场景）就不接。
+      const detachCompletion = props.sessionId === undefined ? undefined : attachInlineCompletion(monaco, instance, { sessionId: props.sessionId })
+      return () => { detachCompletion?.(); change.dispose() }
     }).catch(error => setError(error instanceof Error ? error.message : String(error)))
     return () => { disposed = true; editor.current?.dispose(); editor.current = undefined }
   }, [props.uri])
