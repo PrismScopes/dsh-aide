@@ -127,7 +127,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
   }), 'dsh-vscode-workbench: API')
 
   // 补全走独立的 SSE 端点：它要边算边发，与 /api 的一问一答不同。
-  registerCompletionRoute(ctx, { trusted, readBody, send, sendError, trustedHosts: ctx.webRuntime.trustedHosts })
+  registerCompletionRoute(ctx, { trusted, readBody, send, sendError, trustedHosts: ctx.webRuntime.trustedHosts, cwdFor: sessionId => cwdFor(ctx, sessionId) })
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/upload', handler: async (req, res) => {

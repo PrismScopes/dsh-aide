@@ -2,7 +2,7 @@ import type { HostContext } from './context.ts'
 import { createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, readDocument, renameEntry, saveDocument, searchWorkspace, uploadFile, workspacePreviewFile } from './host.ts'
 import type { SearchRequest } from './types.ts'
 import { DEFAULT_COMPLETION_PARAMS } from './completion/params.ts'
-import { resolveProvider } from './completion/register.ts'
+import { completionIndexFor, resolveProvider } from './completion/register.ts'
 import { WorkbenchError, stringField } from './wire.ts'
 
 /**
@@ -14,6 +14,9 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
   switch (method) {
     case 'workspace': return { cwd, name: cwd.split(/[\\/]/).at(-1) || cwd }
     // 补全参数与提供方由宿主下发，客户端不写死这些值（文档第七节的要求）。
+    // 索引状态与刷新（文档 5.1 要求上下文服务暴露这两个操作）。
+    case 'completion.index.status': return completionIndexFor(cwd).then(index => index.status())
+    case 'completion.index.refresh': return completionIndexFor(cwd).then(index => index.refresh())
     case 'completion.config': {
       const resolved = resolveProvider(ctx)
       return { source: resolved.source, model: resolved.model, profile: resolved.profile.id, params: DEFAULT_COMPLETION_PARAMS, endpoint: '/dsh-vscode/completion' }

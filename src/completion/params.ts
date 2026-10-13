@@ -23,6 +23,13 @@ export interface CompletionParams {
   /** 注入的检索片段条数与单条上限（第二期用，这里先定型参数）。 */
   snippetCount: number
   snippetChars: number
+  /**
+   * 相似度下限。
+   *
+   * 文档建议 0.7 起步，那是针对真实嵌入模型的尺度。本地哈希嵌入（只嵌代码正文）实测：
+   * 短查询（半行）相关 0.21、无关 0.06；长查询（约 20 行）相关 0.51、无关 0.06。
+   * 默认取 0.15 —— 正好卡在两簇之间。换成真实嵌入模型时应按同样的方法重新实测。
+   */
   similarityThreshold: number
   /** 单次返回的候选数上限。 */
   candidateLimit: number
@@ -42,7 +49,7 @@ export const DEFAULT_COMPLETION_PARAMS: CompletionParams = {
   promptTokens: 3950,
   snippetCount: 4,
   snippetChars: 3000,
-  similarityThreshold: 0.7,
+  similarityThreshold: 0.15,
   candidateLimit: 3,
   completionTimeoutMs: 15_000,
   locateTimeoutMs: 5_000,

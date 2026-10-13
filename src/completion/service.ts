@@ -18,6 +18,11 @@ export interface CompletionServiceOptions {
   signal?: AbortSignal
   /** 便于单测注入的时间源。 */
   now?: () => number
+  /**
+   * 检索钩子：返回要注入上下文的片段文本（文档 4.2 的「片段上下文」）。
+   * 不含则不注入 —— 第一期就是这种形态，检索缺失时链路照常可用。
+   */
+  retrieve?: (request: CompletionRequest, params: CompletionParams) => Promise<readonly string[]> | readonly string[]
 }
 
 /**
@@ -51,16 +56,26 @@ export async function* runCompletion(request: CompletionRequest, options: Comple
   let index = 0
   try {
     const truncated = truncateDocument(request.cursor.document, request.cursor.rewriteAt, params)
+    // 检索失败不能拖垮补全：拿不到片段就按没有片段继续（文档把检索列为可选上下文来源）。
+    // 钩子可能是同步抛错的：必须先把它包进 promise 再 catch，否则异常会直接冒出编排层。
+    const snippets = options.retrieve === undefined ? [] : await Promise.resolve().then(() => options.retrieve?.(request, params)).catch(() => [])
     const assembled = assemblePrompt({
       filePath: request.cursor.filePath,
       language: request.language,
       document: truncated.document,
       rewriteAt: truncated.rewriteAt,
       edits: request.edits,
+      snippets,
     }, params, options.profile)
 
     if (controller.signal.aborted) return
-    yield { type: 'meta', model: options.provider.model, ...(request.environment.experiment === undefined ? {} : { experiment: request.environment.experiment }) }
+    yield {
+      type: 'meta',
+      model: options.provider.model,
+      ...(request.environment.experiment === undefined ? {} : { experiment: request.environment.experiment }),
+      // 注入了几条检索片段：没有它就只能靠猜判断检索有没有生效。
+      snippets: assembled.snippetCount,
+    }
     for await (const chunk of options.provider.complete(assembled.prompt, {
       signal: controller.signal,
       language: request.language,

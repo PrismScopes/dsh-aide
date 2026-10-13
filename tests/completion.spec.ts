@@ -273,7 +273,7 @@ describe('completion service', () => {
   it('emits meta, one output per chunk and a terminal done in order', async () => {
     const events: CompletionEvent[] = []
     for await (const event of runCompletion(request(), { provider: scriptedProvider(['a', 'b', 'c']) })) events.push(event)
-    expect(events[0]).toEqual({ type: 'meta', model: 'scripted-1' })
+    expect(events[0]).toEqual({ type: 'meta', model: 'scripted-1', snippets: 0 })
     expect(events.slice(1, 4).map(event => (event.type === 'output' ? event.candidates[0]?.text : undefined))).toEqual(['a', 'b', 'c'])
     expect(events.at(-1)).toEqual({ type: 'done' })
   })
@@ -325,7 +325,7 @@ describe('completion service', () => {
     }
     const iterator = runCompletion(request(), { provider: hanging, signal: controller.signal })
     const first = await iterator.next()
-    expect(first.value).toEqual({ type: 'meta', model: 'hanging-1' })
+    expect(first.value).toEqual({ type: 'meta', model: 'hanging-1', snippets: 0 })
     controller.abort()
     const after: CompletionEvent[] = []
     for await (const event of iterator) after.push(event)

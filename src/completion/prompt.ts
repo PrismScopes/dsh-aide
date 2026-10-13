@@ -72,9 +72,9 @@ export interface PromptInput {
   document: string
   /** 行号 1 起、列 0 起。 */
   rewriteAt: { line: number; column: number }
-  edits?: EditHistoryEntry[]
-  snippets?: string[]
-  symbols?: string[]
+  edits?: readonly EditHistoryEntry[]
+  snippets?: readonly string[]
+  symbols?: readonly string[]
   repositoryContext?: string
 }
 
@@ -86,6 +86,8 @@ export interface PromptResult {
   dropped: string[]
   /** 组装后的字符数，与 token 预算的近似值一起用于观测。 */
   chars: number
+  /** 实际注入的检索片段条数，用于观测检索是否生效。 */
+  snippetCount: number
 }
 
 /** 把「行号 1 起、列 0 起」换算成文档中的字符偏移。 */
@@ -177,13 +179,20 @@ export function truncateDocument(document: string, rewriteAt: { line: number; co
  * 按文档给的丢弃优先级从低到高判断：先丢仓库级上下文，再丢检索片段，再丢符号定义，
  * 最后才动编辑历史；前后缀属于生成必要输入，不在这里处理。
  */
-export function assembleContext(input: PromptInput, budgetChars: number): { context: string; dropped: string[] } {
+export function assembleContext(input: PromptInput, budgetChars: number, symbolBudgetChars = Number.POSITIVE_INFINITY): { context: string; dropped: string[] } {
   const dropped: string[] = []
   // 顺序即优先级：越靠前越先被丢。丢弃单位是整类，不做类内截断 —— 半条编辑历史没有意义。
   const parts: Array<{ label: string; text: string }> = []
   if (input.repositoryContext !== undefined && input.repositoryContext.trim() !== '') parts.push({ label: '仓库级上下文', text: input.repositoryContext })
   for (const snippet of input.snippets ?? []) if (snippet.trim() !== '') parts.push({ label: '检索片段', text: snippet })
-  for (const symbol of input.symbols ?? []) if (symbol.trim() !== '') parts.push({ label: '符号定义', text: symbol })
+  // 符号定义有独立的小额度（文档 5.4：符号占一成余），超出额度的那部分按类丢弃。
+  let symbolChars = 0
+  for (const symbol of input.symbols ?? []) {
+    if (symbol.trim() === '') continue
+    symbolChars += symbol.length
+    if (symbolChars > symbolBudgetChars) { dropped.push('符号定义'); continue }
+    parts.push({ label: '符号定义', text: symbol })
+  }
   const history = (input.edits ?? []).map(entry => `- 改前：${entry.before}\n  改后：${entry.after}`).join('\n')
   if (history !== '') parts.push({ label: '编辑历史', text: history })
 
@@ -239,11 +248,13 @@ export function assemblePrompt(input: PromptInput, params: CompletionParams = DE
   const suffix = truncateSuffix(rawSuffix, params)
 
   const totalBudget = charBudgetForPrompt(params)
-  // 先给上下文段分配预算，再把剩下的留给生成段；两段都装不下时优先保生成段。
-  const contextBudget = Math.max(0, Math.floor(totalBudget * 0.3))
-  const { context, dropped } = assembleContext(input, contextBudget)
+  // 上下文段拿到的是「总预算减去前后缀实际占用」：前后缀是生成必要输入（文档 6.2 里它们的裁剪优先级
+  // 最低，但也不能被上下文挤掉），剩下的才分给片段、符号与编辑历史。
+  const contextBudget = Math.max(0, totalBudget - prefix.length - suffix.length)
+  // 符号定义另有一成额度（文档 5.4 的比例分配）。
+  const { context, dropped } = assembleContext(input, contextBudget, Math.floor(totalBudget * 0.1))
   const generation = `# 文件：${input.filePath}\n${renderPrompt(prefix, suffix, profile)}`
   const prompt = context === '' ? generation : `${context}\n\n${generation}`
 
-  return { prompt, prefix, suffix, dropped, chars: prompt.length }
+  return { prompt, prefix, suffix, dropped, chars: prompt.length, snippetCount: input.snippets?.length ?? 0 }
 }

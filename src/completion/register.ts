@@ -11,6 +11,7 @@ import { dshProvider, type DshDefaultModelService, type DshLlmService } from './
 import { localProvider, type CompletionProvider } from './provider.ts'
 import { DEFAULT_PROMPT_PROFILE, INSTRUCTION_PROMPT_PROFILE, type PromptProfile } from './prompt.ts'
 import { runCompletion } from './service.ts'
+import { WorkspaceIndex } from './workspaceIndex.ts'
 
 /** 只是把 cordis 的可选服务读取收窄到本模块需要的形状。 */
 export interface CompletionContextLike { get(name: string): unknown }
@@ -69,6 +70,8 @@ export interface CompletionRouteHelpers {
   send(res: ServerResponse, status: number, payload: unknown): void
   sendError(res: ServerResponse, error: unknown): void
   trustedHosts: readonly string[]
+  /** 把会话解析成工作区根目录：索引按项目分库，检索要按同一个根目录进行。 */
+  cwdFor(sessionId: string): string
 }
 
 /**
@@ -97,6 +100,8 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
       res.once('close', () => controller.abort())
 
       const resolved = resolveProvider(ctx, params)
+      const cwd = safeCwd(ctx, helpers, request.sessionId)
+      const index = await completionIndexFor(cwd, params)
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-cache, no-transform',
@@ -104,7 +109,11 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
         'x-accel-buffering': 'no',
       })
       try {
-        for await (const event of runCompletion(request, { provider: resolved.provider, params, profile: resolved.profile, signal: controller.signal })) {
+        for await (const event of runCompletion(request, {
+          provider: resolved.provider, params, profile: resolved.profile, signal: controller.signal,
+          // 索引没就绪就先不注入片段：刷新在后台跑，补全不等它。
+          retrieve: current => index.retrieve(current),
+        })) {
           if (res.writableEnded) break
           res.write(encodeSseEvent(event))
         }
@@ -116,4 +125,28 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
       }
     },
   }), 'dsh-vscode-workbench: inline completion')
+}
+
+/** 每个工作区一份索引，进程内复用；索引文件本身由 WorkspaceIndex 落到工作区里。 */
+const indexes = new Map<string, Promise<WorkspaceIndex>>()
+
+export function completionIndexFor(cwd: string, params: CompletionParams = DEFAULT_COMPLETION_PARAMS): Promise<WorkspaceIndex> {
+  const existing = indexes.get(cwd)
+  if (existing !== undefined) return existing
+  const created = WorkspaceIndex.open({ root: cwd, params }).then(index => {
+    // 首次或过期时在后台刷新，补全请求不等它。
+    void index.ensureFresh()?.catch(() => undefined)
+    return index
+  })
+  indexes.set(cwd, created)
+  return created
+}
+
+/** 会话解析失败时退回进程工作目录：补全不该因为解析不到工作区就整体失败。 */
+function safeCwd(ctx: CompletionContextLike, helpers: CompletionRouteHelpers, sessionId: string): string {
+  try {
+    return helpers.cwdFor(sessionId)
+  } catch {
+    return (ctx.get('workspaceRoot') as string | undefined) ?? process.cwd()
+  }
 }

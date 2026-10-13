@@ -55,7 +55,7 @@ export interface CompletionRequest {
 export interface CompletionCandidate { index: number; text: string; finishReason: string; elapsedMs: number }
 
 export type CompletionEvent =
-  | { type: 'meta'; model: string; experiment?: string }
+  | { type: 'meta'; model: string; experiment?: string; snippets?: number }
   | { type: 'output'; candidates: CompletionCandidate[] }
   | { type: 'error'; code: string; message: string }
   | { type: 'content_security'; action: 'block' | 'mask'; ruleId: string; ruleName: string }
