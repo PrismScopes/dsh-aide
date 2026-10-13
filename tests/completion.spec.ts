@@ -28,7 +28,7 @@ import {
   type FilterState,
 } from '../src/completion/filter.ts'
 import { identifiersStartingWith, localCompletion, trailingIdentifier, unclosedClosers } from '../src/completion/provider.ts'
-import { findSecurityHit, runCompletion } from '../src/completion/service.ts'
+import { runCompletion } from '../src/completion/service.ts'
 import type { CompletionProvider } from '../src/completion/provider.ts'
 import type { CompletionRequest } from '../src/completion/protocol.ts'
 
@@ -356,9 +356,45 @@ describe('completion service', () => {
     expect(events.at(-1)).toEqual({ type: 'error', code: 'completion-timeout', message: 'no completion within 20 ms' })
   })
 
-  it('matches security rules by rule name', () => {
-    expect(findSecurityHit('has SECRET inside', { rules: [{ id: 'r', name: 'SECRET', action: 'mask' }] })).toEqual({ action: 'mask', ruleId: 'r', ruleName: 'SECRET' })
-    expect(findSecurityHit('clean', { rules: [{ id: 'r', name: 'SECRET', action: 'mask' }] })).toBeUndefined()
-    expect(findSecurityHit('clean', undefined)).toBeUndefined()
+  it('catches a secret split across two chunks, which per-chunk matching would miss', async () => {
+    // 同一个候选被切成两半：单独看哪一半都不含完整模式。
+    const split: CompletionProvider = { id: 'split', model: 'split', async *complete() {
+      yield { text: 'key = -----BEGIN RSA ', done: false }
+      yield { text: 'PRIVATE KEY-----\nAAAA', done: false }
+      yield { text: '', done: true }
+    } }
+    const events: CompletionEvent[] = []
+    const secrets: Array<{ id: string; action: string }> = []
+    for await (const event of runCompletion(request(), { provider: split, onSecurityHit: hit => { secrets.push({ id: hit.ruleId, action: hit.action }) } })) events.push(event)
+    expect(events.some(event => event.type === 'content_security' && event.ruleId === 'private-key-block' && event.action === 'block')).toBe(true)
+    // 拦截之后不再产出后续内容，且命中要交给审计回调。
+    expect(secrets).toEqual([{ id: 'private-key-block', action: 'block' }])
+    expect(events.at(-1)?.type).toBe('content_security')
+  })
+
+  it('marks a masked hit and keeps the completion going', async () => {
+    const credential: CompletionProvider = { id: 'cred', model: 'cred', async *complete() {
+      yield { text: 'const apiKey = \'abcdef123456\'', done: false }
+      yield { text: '\nmore()', done: false }
+      yield { text: '', done: true }
+    } }
+    const events: CompletionEvent[] = []
+    for await (const event of runCompletion(request(), { provider: credential })) events.push(event)
+    expect(events.some(event => event.type === 'content_security' && event.action === 'mask' && event.ruleId === 'generic-credential')).toBe(true)
+    expect(events.some(event => event.type === 'output' && event.candidates[0]?.text.includes('more()'))).toBe(true)
+  })
+
+  it('uses the tenant rules as given, and an empty set turns the gate off', async () => {
+    const tenant = { rules: [{ id: 't', name: '内部主机', action: 'mask' as const, pattern: '\\.internal\\.' }] }
+    const provider: CompletionProvider = { id: 'host', model: 'host', async *complete() {
+      yield { text: 'fetch("http://api.internal.svc")', done: false }
+      yield { text: '', done: true }
+    } }
+    const tenantEvents: CompletionEvent[] = []
+    for await (const event of runCompletion(request({ security: tenant }), { provider })) tenantEvents.push(event)
+    expect(tenantEvents.some(event => event.type === 'content_security' && event.ruleId === 't')).toBe(true)
+    const offEvents: CompletionEvent[] = []
+    for await (const event of runCompletion(request({ security: { rules: [] } }), { provider })) offEvents.push(event)
+    expect(offEvents.some(event => event.type === 'content_security')).toBe(false)
   })
 })

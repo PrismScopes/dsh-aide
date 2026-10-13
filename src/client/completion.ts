@@ -49,8 +49,10 @@ export interface CompletionResponse {
   finishReason: string
   model?: string
   experiment?: string
-  /** 是否被内容安全策略处理过。 */
+  /** 是否被内容安全策略处理过（脱敏时为真）。 */
   masked: boolean
+  /** 内容安全命中（文档 6.4）：动作、规则标识与名称。拦截时候选已被丢弃。 */
+  security?: { action: 'block' | 'mask'; ruleId: string; ruleName: string }
   timing: CompletionTiming
 }
 
@@ -175,6 +177,7 @@ export class CompletionClient {
     let experiment: string | undefined
     let finishReason = ''
     let masked = false
+    let security: { action: 'block' | 'mask'; ruleId: string; ruleName: string } | undefined
     let failure: string | undefined
 
     try {
@@ -191,7 +194,10 @@ export class CompletionClient {
             slots = applied.slots
             input.onUpdate?.(slots)
           } else if (event.type === 'error') { failure = `${event.code}: ${event.message}` }
-          else if (event.type === 'content_security') { masked = true }
+          else if (event.type === 'content_security') {
+            if (event.action === 'mask') masked = true
+            security = { action: event.action, ruleId: event.ruleId, ruleName: event.ruleName }
+          }
           else if (event.type === 'done') { finishReason = 'done' }
         }
         // 首个候选已够用：把连接取消掉（文档 4.1 要求取消真正生效），但不等待它结算 ——
@@ -207,12 +213,14 @@ export class CompletionClient {
     if (failure !== undefined) throw new Error(failure)
 
     const filtered = filterCandidates(slots, this.filterState(input, slots), this.filterOptions)
-    const candidates = filtered
+    const processed = filtered
       .filter((entry): entry is { text: string } => entry.dropped === undefined)
       .map(entry => postProcess(entry.text, { document: input.document, offset: this.offsetOf(input) }))
       .filter(text => text !== '')
+    // 拦截（文档 6.4）：整条候选作废 —— 已经流过来的那部分也不能给出去，否则拦截等于没做。
+    const candidates = security?.action === 'block' ? [] : processed
 
-    const result: CompletionResponse = { candidates, finishReason, masked, timing, ...(model === undefined ? {} : { model }), ...(experiment === undefined ? {} : { experiment }) }
+    const result: CompletionResponse = { candidates, finishReason, masked, timing, ...(model === undefined ? {} : { model }), ...(experiment === undefined ? {} : { experiment }), ...(security === undefined ? {} : { security }) }
     this.cache = { key, at: this.now(), response: result }
     return result
   }

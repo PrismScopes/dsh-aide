@@ -204,6 +204,41 @@ describe('completion client', () => {
     expect(result.candidates).toEqual(['SyncExternalStore', 'State'])
   })
 
+  it('discards every candidate when the host reports a blocking security hit', async () => {
+    // 拦截的语义是「中止本次补全」：已经流过来的候选也不能给出去。
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'output', candidates: [{ index: 0, text: 'key = -----BEGIN', finishReason: '', elapsedMs: 1 }] })))
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'content_security', action: 'block', ruleId: 'private-key-block', ruleName: '私钥块' })))
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'done' })))
+        controller.close()
+      },
+    })
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl: async () => new Response(stream, { status: 200 }) })
+    const result = await client.suggest(input({}))
+    expect(result.candidates).toEqual([])
+    expect(result.security).toEqual({ action: 'block', ruleId: 'private-key-block', ruleName: '私钥块' })
+    expect(result.masked).toBe(false)
+  })
+
+  it('keeps the candidate but marks it when the hit is only a mask', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'output', candidates: [{ index: 0, text: 'ate', finishReason: '', elapsedMs: 1 }] })))
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'content_security', action: 'mask', ruleId: 'generic-credential', ruleName: '硬编码凭据' })))
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'done' })))
+        controller.close()
+      },
+    })
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl: async () => new Response(stream, { status: 200 }) })
+    const result = await client.suggest(input({}))
+    expect(result.candidates).toEqual(['ate'])
+    expect(result.masked).toBe(true)
+    expect(result.security?.ruleId).toBe('generic-credential')
+  })
+
   it('reports an error event as a thrown failure', async () => {
     const fetchImpl = vi.fn(async () => streamResponse(events({ type: 'error', code: 'completion-timeout', message: 'slow' })))
     const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })

@@ -6,8 +6,9 @@
  */
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from './params.ts'
 import { assemblePrompt, truncateDocument, type PromptProfile } from './prompt.ts'
-import type { CompletionEvent, CompletionRequest, CompletionSecurityRules } from './protocol.ts'
+import type { CompletionEvent, CompletionRequest } from './protocol.ts'
 import type { CompletionProvider } from './provider.ts'
+import { evaluateSecurity, rulesForRequest, type SecurityHit } from './security.ts'
 
 export interface CompletionServiceOptions {
   provider: CompletionProvider
@@ -23,20 +24,13 @@ export interface CompletionServiceOptions {
    * 不含则不注入 —— 第一期就是这种形态，检索缺失时链路照常可用。
    */
   retrieve?: (request: CompletionRequest, params: CompletionParams) => Promise<readonly string[]> | readonly string[]
+  /**
+   * 内容安全命中回调。文档 6.4 要求拦截与脱敏两种动作都写入审计日志；
+   * 这里只把命中交出去，落盘方式由宿主决定（它才知道工作区在哪、日志写到哪里）。
+   */
+  onSecurityHit?: (hit: SecurityHit, request: CompletionRequest) => void
 }
 
-/**
- * 内容安全预过滤（文档 6.4 的请求前一道）。
- *
- * 这里只做「按规则名做子串匹配」这一层，真正的规则引擎属于第四期；现在把事件与动作类型
- * （拦截 / 脱敏）的链路先接通，免得到第四期再改协议。
- */
-export function findSecurityHit(text: string, rules: CompletionSecurityRules | undefined): { action: 'block' | 'mask'; ruleId: string; ruleName: string } | undefined {
-  for (const rule of rules?.rules ?? []) {
-    if (rule.name !== '' && text.includes(rule.name)) return { action: rule.action, ruleId: rule.id, ruleName: rule.name }
-  }
-  return undefined
-}
 
 export async function* runCompletion(request: CompletionRequest, options: CompletionServiceOptions): AsyncGenerator<CompletionEvent> {
   const params = options.params ?? DEFAULT_COMPLETION_PARAMS
@@ -54,6 +48,9 @@ export async function* runCompletion(request: CompletionRequest, options: Comple
   let timedOut = false
   const timer = setTimeout(() => { timedOut = true; controller.abort() }, params.completionTimeoutMs)
   let index = 0
+  // 判定对象是累积到目前的候选文本：流式输出会把一条模式切成两半，逐块匹配必然漏。
+  let accumulated = ''
+  const securityRules = rulesForRequest(request.security)
   try {
     const truncated = truncateDocument(request.cursor.document, request.cursor.rewriteAt, params)
     // 检索失败不能拖垮补全：拿不到片段就按没有片段继续（文档把检索列为可选上下文来源）。
@@ -86,9 +83,11 @@ export async function* runCompletion(request: CompletionRequest, options: Comple
       // 取消后上游可能还会吐出已经发出去的增量：这里必须丢掉，否则客户端会收到作废内容。
       if (controller.signal.aborted) return
       if (chunk.done || chunk.text === '') continue
-      const hit = findSecurityHit(chunk.text, request.security)
+      accumulated += chunk.text
+      const hit = evaluateSecurity(accumulated, securityRules)
       if (hit !== undefined) {
         yield { type: 'content_security', ...hit }
+        options.onSecurityHit?.(hit, request)
         if (hit.action === 'block') return
       }
       yield { type: 'output', candidates: [{ index: index++, text: chunk.text, finishReason: '', elapsedMs: now() - started }] }

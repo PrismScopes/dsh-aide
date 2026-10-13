@@ -12,6 +12,9 @@ import { localProvider, type CompletionProvider } from './provider.ts'
 import { DEFAULT_PROMPT_PROFILE, INSTRUCTION_PROMPT_PROFILE, type PromptProfile } from './prompt.ts'
 import { runCompletion } from './service.ts'
 import { WorkspaceIndex } from './workspaceIndex.ts'
+import type { SecurityHit } from './security.ts'
+import { appendFile } from 'node:fs/promises'
+import path from 'node:path'
 
 /** 只是把 cordis 的可选服务读取收窄到本模块需要的形状。 */
 export interface CompletionContextLike { get(name: string): unknown }
@@ -113,6 +116,7 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
           provider: resolved.provider, params, profile: resolved.profile, signal: controller.signal,
           // 索引没就绪就先不注入片段：刷新在后台跑，补全不等它。
           retrieve: current => index.retrieve(current),
+          onSecurityHit: (hit, current) => { appendSecurityAudit(cwd, hit, current) },
         })) {
           if (res.writableEnded) break
           res.write(encodeSseEvent(event))
@@ -125,6 +129,17 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
       }
     },
   }), 'dsh-vscode-workbench: inline completion')
+}
+
+/**
+ * 内容安全审计（文档 6.4：拦截与脱敏两种动作都要写入审计日志）。
+ *
+ * 写在索引同一个工作区目录下（那里已经被索引自带的 .gitignore 排除），一行一条，便于事后追查。
+ * 落盘失败不影响补全：审计是旁路，不能因为它把补全拖垮。
+ */
+function appendSecurityAudit(cwd: string, hit: SecurityHit, request: CompletionRequest): void {
+  const line = JSON.stringify({ at: new Date().toISOString(), action: hit.action, ruleId: hit.ruleId, ruleName: hit.ruleName, sessionId: request.sessionId, filePath: request.cursor.filePath, language: request.language }) + '\n'
+  void appendFile(path.join(cwd, '.dsh-workbench', 'audit.jsonl'), line, 'utf8').catch(() => undefined)
 }
 
 /** 每个工作区一份索引，进程内复用；索引文件本身由 WorkspaceIndex 落到工作区里。 */
