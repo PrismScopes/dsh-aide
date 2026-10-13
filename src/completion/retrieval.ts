@@ -8,6 +8,7 @@
  *
  * 维护策略按文档 5.3：首次全量、按周期重建、文件变更增量更新、预算上限封顶。
  */
+import { createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { DEFAULT_CHUNK_LIMITS, extractChunks, shouldSkipFile, type Chunk, type ChunkLimits } from './chunks.ts'
@@ -65,7 +66,19 @@ export function snippetKey(snippet: Pick<RetrievedSnippet, 'path' | 'startLine' 
   return `${snippet.path}:${snippet.startLine}-${snippet.endLine}`
 }
 
-type StoredChunk = Omit<Chunk, 'text' | 'embeddingText' | 'language'> & { vector: string }
+/**
+ * 分块内容哈希（文档 5.2 的去重依据）。
+ *
+ * 用 SHA-1 而不是短哈希：短哈希碰撞会让一段合法代码被当成重复丢掉，而这里哈希只是内存与
+ * 索引文件里的一份字符串，代价可以忽略。
+ */
+const hashOf = (text: string): string => createHash('sha1').update(text).digest('hex')
+
+type StoredChunk = Omit<Chunk, 'text' | 'embeddingText' | 'language'> & {
+  vector: string
+  /** 内容哈希：文档 5.2 要求同一实体在多处出现时只保留一个，靠它判重。 */
+  hash: string
+}
 
 /** 向量按 Float32 的 base64 落盘：JSON 数组里每个分量约 19 个字符，实测索引体积的绝大部分是它。 */
 export function encodeVector(vector: Float32Array): string {
@@ -78,7 +91,7 @@ export function decodeVector(encoded: string): Float32Array {
 }
 
 interface StoreFile {
-  version: 1
+  version: 2
   embedder: string
   builtAt: number
   files: Record<string, { mtimeMs: number; size: number; chunks: number }>
@@ -108,6 +121,8 @@ export class RetrievalIndex {
   private readonly limits: IndexLimits
   private readonly options: RetrievalOptions
   private stored = new Map<string, StoredChunk[]>()
+  /** 已入库分块的内容哈希：文档 5.2 的去重依据。重建与载入时一并恢复。 */
+  private readonly hashes = new Set<string>()
   private files = new Map<string, { mtimeMs: number; size: number; chunks: number }>()
   private builtAt = 0
   private dirty = false
@@ -138,14 +153,17 @@ export class RetrievalIndex {
   async load(): Promise<void> {
     try {
       const parsed = JSON.parse(await readFile(this.options.storePath, 'utf8')) as StoreFile
-      if (parsed.version !== 1 || parsed.embedder !== this.embedder.id) return
+      // 版本不符就当作空索引：旧索引里没有内容哈希，无法迁移，重建比猜测便宜。
+      if (parsed.version !== 2 || parsed.embedder !== this.embedder.id) return
       this.builtAt = parsed.builtAt
       this.files = new Map(Object.entries(parsed.files))
       this.stored = new Map()
+      this.hashes.clear()
       for (const chunk of parsed.chunks) {
         const list = this.stored.get(chunk.path) ?? []
         list.push(chunk)
         this.stored.set(chunk.path, list)
+        this.hashes.add(chunk.hash)
       }
     } catch { /* 首次运行没有索引文件，或文件损坏：都从空索引开始。 */ }
   }
@@ -154,7 +172,7 @@ export class RetrievalIndex {
     if (!this.dirty) return
     const chunks: StoredChunk[] = []
     for (const list of this.stored.values()) chunks.push(...list)
-    const payload: StoreFile = { version: 1, embedder: this.embedder.id, builtAt: this.builtAt, files: Object.fromEntries(this.files), chunks }
+    const payload: StoreFile = { version: 2, embedder: this.embedder.id, builtAt: this.builtAt, files: Object.fromEntries(this.files), chunks }
     await mkdir(dirname(this.options.storePath), { recursive: true })
     await writeFile(this.options.storePath, JSON.stringify(payload), 'utf8')
     this.dirty = false
@@ -192,23 +210,36 @@ export class RetrievalIndex {
     for (const list of this.stored.values()) totalChunks += list.length
     if (totalChunks >= this.limits.maxChunks) return 'skipped'
 
-    const chunks = extractChunks(file.path, file.language, file.text, this.chunkLimits).map<StoredChunk>(chunk => ({
+    // 先按内容判重，再算向量：重复的分块连嵌入都不必做。
+    // 判重时的写入发生在过滤这一步，同一文件内部的重复也因此被挡掉（同一个函数体常常既落入
+    // 实体分块、又落入窗口分块）。
+    const seen = this.hashes
+    const unique = extractChunks(file.path, file.language, file.text, this.chunkLimits).filter(chunk => {
+      const hash = hashOf(chunk.embeddingText)
+      if (seen.has(hash)) return false
+      seen.add(hash)
+      return true
+    })
+    const chunks = unique.map<StoredChunk>(chunk => ({
       path: chunk.path,
       kind: chunk.kind,
       ...(chunk.name === undefined ? {} : { name: chunk.name }),
       startLine: chunk.startLine,
       endLine: chunk.endLine,
+      hash: hashOf(chunk.embeddingText),
       vector: encodeVector(this.embedder.embed(chunk.embeddingText)),
     }))
-    if (chunks.length === 0) return 'skipped'
+    // 全部被去重掉的文件也要记一笔：否则每次扫描都会重新读它再判一次重复。
     this.stored.set(file.path, chunks)
     this.files.set(file.path, { mtimeMs: file.mtimeMs, size: file.size, chunks: chunks.length })
     this.builtAt = Date.now()
     this.dirty = true
-    return 'indexed'
+    return chunks.length === 0 ? 'skipped' : 'indexed'
   }
 
   remove(path: string): void {
+    // 一并释放内容哈希，否则这个文件腾出来的位置再也放不进别的分块。
+    for (const chunk of this.stored.get(path) ?? []) this.hashes.delete(chunk.hash)
     if (this.stored.delete(path)) { this.dirty = true }
     if (this.files.delete(path)) { this.dirty = true }
   }
@@ -216,6 +247,7 @@ export class RetrievalIndex {
   clear(): void {
     this.stored.clear()
     this.files.clear()
+    this.hashes.clear()
     this.builtAt = 0
     this.dirty = true
   }

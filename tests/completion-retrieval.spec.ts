@@ -141,6 +141,31 @@ describe('retrieval index', () => {
     expect(status.stale).toBe(false)
   })
 
+  it('keeps one copy of a chunk that appears in several files', async () => {
+    // 文档 5.2：同一实体在多处出现时保留一个 —— 否则样板代码会占掉多个片段名额。
+    const store = join(mkdtempSync(join(tmpdir(), 'dvw-dedup-')), 'index.json')
+    const index = new RetrievalIndex(indexOptions(store))
+    const text = reactFile.text
+    expect(index.update({ ...reactFile, path: 'a.ts' })).toBe('indexed')
+    expect(index.update({ ...reactFile, path: 'b.ts' })).toBe('skipped')
+    // 两个文件都记了账（否则每次扫描都会重新读它），但内容只入库一份。
+    expect(index.status().files).toBe(2)
+    expect(index.status().chunks).toBe(1)
+    expect(text.length).toBeGreaterThan(0)
+  })
+
+  it('remembers which chunks were deduplicated across a reload', async () => {
+    const store = join(mkdtempSync(join(tmpdir(), 'dvw-dedup-reload-')), 'index.json')
+    const index = new RetrievalIndex(indexOptions(store))
+    index.update({ ...reactFile, path: 'a.ts' })
+    await index.save()
+    const second = new RetrievalIndex(indexOptions(store))
+    await second.load()
+    // 载入之后同一段内容仍应判为重复：否则每次重启都会把重复分块重新收进来。
+    expect(second.update({ ...reactFile, path: 'b.ts' })).toBe('skipped')
+    expect(second.status().chunks).toBe(1)
+  })
+
   it('reports the capacity limits and whether they were hit', async () => {
     // 触顶后索引不完整，必须能从状态里看出来：否则使用者只会觉得「检索效果一般」。
     const store = join(mkdtempSync(join(tmpdir(), 'dvw-cap-')), 'index.json')
@@ -223,7 +248,8 @@ describe('workspace index', () => {
     const report = await index.refresh()
     expect(report.scanned).toBe(2)
     expect(report.indexed).toBe(2)
-    expect(index.status().chunks).toBeGreaterThan(2)
+    // 去重之后不再包含重复内容，因此数量比文件数与实体数简单相加要少。
+    expect(index.status().chunks).toBeGreaterThanOrEqual(2)
     expect(existsSync(join(root, '.dsh-workbench', 'index.json'))).toBe(true)
     // node_modules 与 markdown 都不在索引里。
     expect(index.status().files).toBe(2)
@@ -237,7 +263,7 @@ describe('workspace index', () => {
     const report = await second.refresh()
     expect(report.unchanged).toBe(2)
     expect(report.indexed).toBe(0)
-    expect(second.status().chunks).toBeGreaterThan(2)
+    expect(second.status().chunks).toBeGreaterThanOrEqual(2)
     // 索引里的块不包含自己产出的索引文件。
     expect(second.status().files).toBe(2)
   })
