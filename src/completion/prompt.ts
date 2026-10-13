@@ -220,7 +220,7 @@ export function renderPrompt(prefix: string, suffix: string, profile: PromptProf
   }
   if (profile.layout === 'instruction') {
     return [
-      '你是代码补全引擎。只输出应当插入在光标处的内容，不要解释，不要加代码块围栏，不要复述光标之前已经写过的代码。',
+      '你是代码补全引擎。只输出应当插入在光标处的内容，不要解释，不要加代码块围栏，不要复述光标之前已经写过的代码，也不要重复光标之后已有的代码。',
       '如果补不出内容，输出空行。',
       '',
       `光标位置标为 ${CURSOR_MARKER}。`,

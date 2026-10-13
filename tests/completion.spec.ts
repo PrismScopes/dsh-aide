@@ -134,6 +134,8 @@ describe('prompt assembly', () => {
     expect(renderPrompt('P', 'S', { ...PSM, layout: 'begin-hole-end', markers: FIM_MARKERS.hole })).toBe('<fim_begin>P<fim_hole>S<fim_end>')
     const instruction = renderPrompt('P', 'S', INSTRUCTION_PROMPT_PROFILE)
     expect(instruction).toContain('代码补全引擎')
+    expect(instruction).toContain('不要复述光标之前已经写过的代码')
+    expect(instruction).toContain('不要重复光标之后已有的代码')
     expect(instruction).toContain(`P${CURSOR_MARKER}S`)
   })
 
