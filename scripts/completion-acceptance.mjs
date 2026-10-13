@@ -72,6 +72,7 @@ line('检索索引（文档 5.3）')
 try {
   const status = await callApi('completion.index.status')
   check('索引可用', status.files > 0 && status.chunks > 0, `${status.files} 个文件 / ${status.chunks} 个分块`)
+  if (status.files === 0) console.log('  提示  刚启动时索引在后台构建，稍等片刻再跑一次')
   check('上限可见', typeof status.limits?.maxChunks === 'number', `maxChunks=${status.limits?.maxChunks}`)
   console.log(`  提示  触顶=${status.capped}（为真表示索引不完整，检索质量会低于规模所暗示的水平）`)
 } catch (error) {

@@ -61,6 +61,15 @@ export interface RetrievedSnippet {
   score: number
 }
 
+/** 常见语言关键字与类型名：它们几乎出现在每个分块里，不构成「相关」的证据。 */
+const COMMON_TOKENS = new Set([
+  'const', 'let', 'var', 'function', 'return', 'import', 'export', 'default', 'async', 'await',
+  'class', 'interface', 'type', 'enum', 'extends', 'implements', 'public', 'private', 'protected',
+  'static', 'readonly', 'string', 'number', 'boolean', 'void', 'null', 'undefined', 'true', 'false',
+  'this', 'super', 'new', 'typeof', 'instanceof', 'while', 'for', 'switch', 'case', 'break',
+  'catch', 'finally', 'throw', 'error', 'value', 'items', 'index', 'length', 'name', 'path', 'text',
+])
+
 /** 片段正文的取用键：同一文件的不同行范围必须能区分开。 */
 export function snippetKey(snippet: Pick<RetrievedSnippet, 'path' | 'startLine' | 'endLine'>): string {
   return `${snippet.path}:${snippet.startLine}-${snippet.endLine}`
@@ -76,6 +85,8 @@ const hashOf = (text: string): string => createHash('sha1').update(text).digest(
 
 type StoredChunk = Omit<Chunk, 'text' | 'embeddingText' | 'language'> & {
   vector: string
+  /** 正文词元（去重、限量）：检索阶段拿不到正文，靠它判断查询与这个分块是否真的重合。 */
+  tokens?: string[]
   /** 内容哈希：文档 5.2 要求同一实体在多处出现时只保留一个，靠它判重。 */
   hash: string
 }
@@ -91,7 +102,7 @@ export function decodeVector(encoded: string): Float32Array {
 }
 
 interface StoreFile {
-  version: 2
+  version: 3
   embedder: string
   builtAt: number
   files: Record<string, { mtimeMs: number; size: number; chunks: number }>
@@ -154,7 +165,7 @@ export class RetrievalIndex {
     try {
       const parsed = JSON.parse(await readFile(this.options.storePath, 'utf8')) as StoreFile
       // 版本不符就当作空索引：旧索引里没有内容哈希，无法迁移，重建比猜测便宜。
-      if (parsed.version !== 2 || parsed.embedder !== this.embedder.id) return
+      if (parsed.version !== 3 || parsed.embedder !== this.embedder.id) return
       this.builtAt = parsed.builtAt
       this.files = new Map(Object.entries(parsed.files))
       this.stored = new Map()
@@ -172,7 +183,7 @@ export class RetrievalIndex {
     if (!this.dirty) return
     const chunks: StoredChunk[] = []
     for (const list of this.stored.values()) chunks.push(...list)
-    const payload: StoreFile = { version: 2, embedder: this.embedder.id, builtAt: this.builtAt, files: Object.fromEntries(this.files), chunks }
+    const payload: StoreFile = { version: 3, embedder: this.embedder.id, builtAt: this.builtAt, files: Object.fromEntries(this.files), chunks }
     await mkdir(dirname(this.options.storePath), { recursive: true })
     await writeFile(this.options.storePath, JSON.stringify(payload), 'utf8')
     this.dirty = false
@@ -227,6 +238,7 @@ export class RetrievalIndex {
       startLine: chunk.startLine,
       endLine: chunk.endLine,
       hash: hashOf(chunk.embeddingText),
+      tokens: Array.from(new Set(tokenizeCode(chunk.embeddingText))).slice(0, 48),
       vector: encodeVector(this.embedder.embed(chunk.embeddingText)),
     }))
     // 全部被去重掉的文件也要记一笔：否则每次扫描都会重新读它再判一次重复。
@@ -259,15 +271,21 @@ export class RetrievalIndex {
    */
   search(query: string, excludePath?: string, now = Date.now()): RetrievedSnippet[] {
     const queryVector = this.embedder.embed(query)
-    const queryTokens = new Set(tokenizeCode(query))
+    // 只留有区分度的查询词元：短词与语言关键字几乎出现在每个分块里，拿它们判重合没有意义。
+    const queryTokens = new Set(tokenizeCode(query).filter(token => token.length >= 4 && !COMMON_TOKENS.has(token.toLowerCase())))
     const scored: Array<{ chunk: StoredChunk; cosine: number; score: number }> = []
     for (const [path, list] of this.stored) {
       if (path === excludePath) continue
       for (const chunk of list) {
         const cosine = cosineSimilarity(queryVector, decodeVector(chunk.vector))
         if (cosine < this.options.similarityThreshold) continue
-        // 重排用两族的加权和：余弦看整体语义，Jaccard 看词元重合。
-        const rerank = 0.7 * cosine + 0.3 * jaccardOfTokens(queryTokens, new Set(tokenizeCode(`${chunk.path} ${chunk.name ?? ''}`)))
+        // 打分以正文词元的重合为主：哈希嵌入只给一个很弱的语义信号，重合度才是可靠的那一半。
+        const overlap = queryTokens.size === 0
+          ? 0
+          : [...queryTokens].filter(token => chunk.tokens?.includes(token) === true).length / queryTokens.size
+        // 一个词元都不重合的分块不是「相关代码」，只是碰巧向量近 —— 宁可少注入，也不注入噪音。
+        if (queryTokens.size > 0 && overlap === 0) continue
+        const rerank = 0.5 * cosine + 0.5 * overlap
         scored.push({ chunk, cosine, score: rerank })
       }
     }

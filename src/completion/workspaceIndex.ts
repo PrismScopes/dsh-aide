@@ -100,6 +100,8 @@ export class WorkspaceIndex {
   private async runRefresh(): Promise<RefreshReport> {
     const started = Date.now()
     const report: RefreshReport = { scanned: 0, indexed: 0, unchanged: 0, skipped: 0, chunks: 0, durationMs: 0 }
+    // 先收集候选再入库：入库顺序决定上限用完之后谁被留下，这件事不该由目录的字母序决定。
+    const candidates: Array<{ absolute: string; path: string; language: string; mtimeMs: number; size: number }> = []
     const walk = async (directory: string): Promise<void> => {
       let entries
       try {
@@ -116,24 +118,29 @@ export class WorkspaceIndex {
         const dot = entry.name.lastIndexOf('.')
         const language = dot === -1 ? undefined : LANGUAGE_BY_EXTENSION.get(entry.name.slice(dot).toLowerCase())
         if (language === undefined) continue
-        const path = relative(this.options.root, absolute).split(sep).join('/')
         report.scanned++
         let info
         try {
           info = await stat(absolute)
         } catch { report.skipped++; continue }
-        if (!this.index.needsUpdate(path, info.mtimeMs, info.size)) { report.unchanged++; continue }
-        let text
-        try {
-          text = await readFile(absolute, 'utf8')
-        } catch { report.skipped++; continue }
-        const outcome = this.index.update({ path, language, text, mtimeMs: info.mtimeMs, size: info.size })
-        if (outcome === 'indexed') report.indexed++
-        else if (outcome === 'unchanged') report.unchanged++
-        else report.skipped++
+        candidates.push({ absolute, path: relative(this.options.root, absolute).split(sep).join('/'), language, mtimeMs: info.mtimeMs, size: info.size })
       }
     }
     await walk(this.options.root)
+
+    // 最近修改的排前面：用户正在动的代码最可能被检索到，而已入库的旧文件不会被顶掉。
+    candidates.sort((left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path))
+    for (const candidate of candidates) {
+      if (!this.index.needsUpdate(candidate.path, candidate.mtimeMs, candidate.size)) { report.unchanged++; continue }
+      let text
+      try {
+        text = await readFile(candidate.absolute, 'utf8')
+      } catch { report.skipped++; continue }
+      const outcome = this.index.update({ path: candidate.path, language: candidate.language, text, mtimeMs: candidate.mtimeMs, size: candidate.size })
+      if (outcome === 'indexed') report.indexed++
+      else if (outcome === 'unchanged') report.unchanged++
+      else report.skipped++
+    }
     await this.index.save()
     report.chunks = this.index.status().chunks
     report.durationMs = Date.now() - started
