@@ -88,7 +88,7 @@ export function sanitizedTerminalEnv(env: NodeJS.ProcessEnv): Record<string, str
 }
 
 /**
- * 选择用户的交互式 shell。
+ * 平台默认的交互式 shell —— 也是「默认终端」在本机没有 PowerShell 7 时的落点。
  *
  * Windows 上用 COMSPEC —— 也就是用户自己的命令解释器 —— 原样启动，不替换成别的、也不加
  * 抑制启动横幅的参数。原先的写法是「COMSPEC 指向 powershell 就用它，否则一律 powershell.exe
@@ -171,12 +171,45 @@ export function terminalProfiles(platform: NodeJS.Platform = process.platform, e
   return resolvedTerminalProfiles(platform, env, probe).map(({ id, label }) => ({ id, label }))
 }
 
-/** 按 profile id 解析出要启动的 shell；id 缺失时用平台默认（COMSPEC / SHELL）。 */
+/**
+ * 按 profile id 解析出要启动的 shell。
+ *
+ * id 缺失时是「默认终端」：本机装了 PowerShell 7 就用 pwsh，否则仍是用户自己的命令解释器
+ * （Windows 上 COMSPEC 原样启动，类 Unix 上是 SHELL）。菜单里的「新建终端」与命令入口走的都是
+ * 这条缺省路径。
+ */
 export function terminalShell(profileId?: string, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, probe: ProfileProbe = systemProbe(env)): { shell: string; args: string[] } {
-  if (profileId === undefined || profileId === '') return defaultTerminalShell(platform, env)
-  const profile = resolvedTerminalProfiles(platform, env, probe).find(candidate => candidate.id === profileId)
+  const profiles = resolvedTerminalProfiles(platform, env, probe)
+  if (profileId === undefined || profileId === '') {
+    const preferred = profiles.find(candidate => candidate.id === 'pwsh')
+    return preferred === undefined ? defaultTerminalShell(platform, env) : { shell: preferred.shell, args: preferred.args }
+  }
+  const profile = profiles.find(candidate => candidate.id === profileId)
   if (profile === undefined) throw new Error(`unknown terminal profile: ${profileId}`)
   return { shell: profile.shell, args: profile.args }
+}
+
+/** 默认标题：可执行名去掉扩展名 —— cmd.exe → cmd、pwsh.exe → pwsh、/bin/bash → bash。 */
+export function terminalTitleBase(shell: string): string {
+  const name = shell.split(/[\\/]/).filter(part => part !== '').pop() ?? shell
+  return name.replace(/\.(exe|com|cmd|bat)$/i, '') || name
+}
+
+/**
+ * 同名终端补序号：cmd、cmd (1)、cmd (2)。
+ *
+ * 原先默认标题取的是可执行文件名，于是同一个 shell 开几个都叫 `cmd.exe` —— 标签栏和右侧
+ * 列表完全分不出谁是谁。这里按「当前有没有被占用」挑最小序号；手动改过的名字只是占用一个位置，
+ * 不影响后来新建的基础名。
+ */
+export function uniqueTerminalTitle(base: string, taken: Iterable<string>): string {
+  const used = new Set(taken)
+  if (!used.has(base)) return base
+  for (let index = 1; index < 10000; index++) {
+    const candidate = `${base} (${index})`
+    if (!used.has(candidate)) return candidate
+  }
+  return `${base} (${used.size})`
 }
 
 /** Own interactive terminals by their canonical workspace directory. */
@@ -194,7 +227,7 @@ export class TerminalManager {
     if (terminals.size >= MAX_TERMINALS) throw new Error(`terminal limit reached (${MAX_TERMINALS})`)
     const { shell, args } = terminalShell(profileId)
     const child = pty.spawn(shell, args, { name: 'xterm-256color', cols: 80, rows: 24, cwd: key, env: sanitizedTerminalEnv(process.env) })
-    const info: TerminalInfo = { id: randomUUID(), title: title || basename(shell), cwd: key, running: true, sequence: 0 }
+    const info: TerminalInfo = { id: randomUUID(), title: title || uniqueTerminalTitle(terminalTitleBase(shell), [...terminals.values()].map(handle => handle.info.title)), cwd: key, running: true, sequence: 0 }
     const handle: TerminalHandle = { info, process: child, replay: new ReplayBuffer(), listeners: new Set() }
     terminals.set(info.id, handle)
     child.onData(data => {
