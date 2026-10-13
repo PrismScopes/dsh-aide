@@ -137,7 +137,7 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
     {header !== undefined && header !== null && createPortal(tabs, header)}
     <div className="dvw-terminal-main">
       {snapshot.error !== undefined && <div className="dvw-terminal-error">{snapshot.error}</div>}
-      <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>{snapshot.terminals.length === 0 ? <div className="dvw-terminal-empty"><span>没有终端</span><button type="button" className="dvw-mode-button" onClick={() => void workspace.create().then(value => setActive(value.id))}><Icon name="add"/>新建终端</button><span className="dvw-terminal-empty-hint">也可以点上方 + 选择 shell</span></div> : shown.map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} />)}</div>
+      <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>{snapshot.terminals.length === 0 ? <div className="dvw-terminal-empty">没有找到终端</div> : shown.map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} />)}</div>
     </div>
     <div className="dvw-terminal-resizer" role="separator" aria-label="终端列表宽度" aria-orientation="vertical" onPointerDown={event => {
       if (event.button !== 0) return
