@@ -84,11 +84,9 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
   const [renaming, setRenaming] = useState<{ id: string; value: string; where: 'tab' | 'list' }>()
   const [split, setSplit] = useState<readonly string[]>()
   const [sideWidth, setSideWidth] = useState(220)
-  useEffect(() => {
-    let cancelled = false
-    void workspace.refresh().then(() => { if (!cancelled && workspace.getSnapshot().terminals.length === 0) void workspace.create().then(value => { if (!cancelled) setActive(value.id) }) })
-    return () => { cancelled = true }
-  }, [workspace])
+  // 打开面板只把已有的终端列出来，不自动新建：启动时不该凭空多出一个 shell。
+  // 当前终端由下面那条 effect 按列表挑，这里不需要自己设。
+  useEffect(() => { void workspace.refresh() }, [workspace])
   useEffect(() => { if (snapshot.terminals.length > 0 && (!active || !snapshot.terminals.some(value => value.id === active))) setActive(snapshot.terminals[0]?.id) }, [snapshot.terminals, active])
   // profile 从事件 detail 里拿：面板头部那个分体按钮选中某个 shell 时会带上它。
   // 命令入口（terminal.new）派发的是不带 detail 的普通事件，走平台默认 shell。
@@ -139,7 +137,7 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
     {header !== undefined && header !== null && createPortal(tabs, header)}
     <div className="dvw-terminal-main">
       {snapshot.error !== undefined && <div className="dvw-terminal-error">{snapshot.error}</div>}
-      <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>{shown.map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} />)}</div>
+      <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>{snapshot.terminals.length === 0 ? <div className="dvw-terminal-empty"><span>没有终端</span><button type="button" className="dvw-mode-button" onClick={() => void workspace.create().then(value => setActive(value.id))}><Icon name="add"/>新建终端</button><span className="dvw-terminal-empty-hint">也可以点上方 + 选择 shell</span></div> : shown.map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} />)}</div>
     </div>
     <div className="dvw-terminal-resizer" role="separator" aria-label="终端列表宽度" aria-orientation="vertical" onPointerDown={event => {
       if (event.button !== 0) return
