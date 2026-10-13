@@ -106,6 +106,30 @@ function terminalRequestAllowed(req: IncomingMessage): boolean {
   try { return origin === undefined || new URL(origin).host === host } catch { return false }
 }
 
+/**
+ * 本机地址，供客户端拼 WebSocket 用。
+ *
+ * 为什么需要它：桌面端(Electron)的页面跑在 `dsh-app://app/` 下，`location.host` 是 `app`，
+ * 客户端按它拼出来的 `ws://app/…` 根本无法连接（实测 close code 1006）。桌面端把 HTTP 请求
+ * 经自定义协议转发给宿主，但 **WebSocket 的 upgrade 不经过那条转发**，所以必须给客户端一个
+ * 宿主的绝对地址。
+ *
+ * 两个来源，按可靠性排序：
+ *   1. `DSH_WEB_URL` —— DSH 的 web-app 包写入的本机规范地址；
+ *   2. **请求自身的 `req.socket.localPort`** —— 宿主正在监听的端口。
+ * 实测桌面端的宿主进程里没有 `DSH_WEB_URL`（API 因此没带回该字段），所以第 2 条才是真正兜住的。
+ * 只暴露回环地址：客户端就在本机，没有理由把对外地址交出去。
+ */
+function localBase(req: IncomingMessage): string | undefined {
+  const fromEnv = process.env.DSH_WEB_URL?.trim()
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv.replace(/\/+$/, '')
+  const port = req.socket.localPort
+  if (typeof port !== 'number' || port <= 0) return undefined
+  // 客户端只可能来自本机，所以一律用回环地址。
+  const host = req.socket.localAddress === '::1' ? '[::1]' : '127.0.0.1'
+  return `http://${host}:${port}`
+}
+
 /** Register the private local terminal API and WebSocket transport. */
 export function installTerminal(ctx: HostContext): void {
   const manager = new TerminalManager()
@@ -124,7 +148,8 @@ export function installTerminal(ctx: HostContext): void {
       else if (method === 'close') { manager.close(cwd, typeof body.id === 'string' ? body.id : ''); value = manager.list(cwd) }
       else if (method === 'rename') value = manager.rename(cwd, typeof body.id === 'string' ? body.id : '', typeof body.title === 'string' ? body.title : '')
       else throw new Error('unknown terminal method')
-      send(res, 200, { ok: true, value })
+      // 把本机地址一并带上，供客户端拼 WebSocket 用（桌面端按 location.host 拼不出可连的地址）。
+      send(res, 200, { ok: true, value, wsBase: localBase(req) })
     } catch (error) { sendError(res, error) }
   } }), 'dsh-vscode-workbench: terminal API')
 

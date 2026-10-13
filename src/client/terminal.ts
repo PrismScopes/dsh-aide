@@ -20,13 +20,34 @@ export interface TerminalWorkspace {
   subscribe(listener: () => void): () => void
 }
 
-async function request<T>(method: string, body: Record<string, unknown>): Promise<T> {
+/**
+ * 拼出终端 WebSocket 的地址。
+ *
+ * 优先用宿主给的规范地址（`wsBase`，形如 http://127.0.0.1:19387）。原因是桌面端
+ * (Electron) 的页面跑在 `dsh-app://app/` 下，`location.host` 是 `app`，按它拼出来的
+ * `ws://app/…` 连不上（实测 close code 1006）—— 桌面端把 HTTP 请求经自定义协议转发给
+ * 宿主，但 **WebSocket 的 upgrade 不走那条转发**。所以桌面端必须用绝对地址。
+ *
+ * 拿不到 wsBase 时退回原先按 location 拼的方式（Web 端与旧宿主下仍然正确）。
+ */
+export function webSocketUrl(sessionId: string, id: string, wsBase?: string): string {
+  const query = `sessionId=${encodeURIComponent(sessionId)}&id=${encodeURIComponent(id)}`
+  if (wsBase !== undefined && wsBase !== '') {
+    return `${wsBase.replace(/^http/i, 'ws').replace(/\/+$/, '')}/dsh-vscode-terminal/ws?${query}`
+  }
+  const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${protocol}://${location.host}/dsh-vscode-terminal/ws?${query}`
+}
+
+interface HostAnswer<T> { ok?: boolean; value?: T; wsBase?: string; error?: { message?: string } }
+
+async function request<T>(method: string, body: Record<string, unknown>): Promise<{ value: T; wsBase?: string }> {
   const response = await fetch(`/dsh-vscode-terminal/api/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   const text = await response.text()
-  let answer: { ok?: boolean; value?: T; error?: { message?: string } }
-  try { answer = JSON.parse(text) as { ok?: boolean; value?: T; error?: { message?: string } } } catch { throw new Error(`terminal request returned invalid JSON (${response.status})`) }
+  let answer: HostAnswer<T>
+  try { answer = JSON.parse(text) as HostAnswer<T> } catch { throw new Error(`terminal request returned invalid JSON (${response.status})`) }
   if (!response.ok || answer.ok !== true) throw new Error(answer.error?.message ?? 'terminal request failed')
-  return answer.value as T
+  return { value: answer.value as T, wsBase: typeof answer.wsBase === 'string' ? answer.wsBase : undefined }
 }
 
 class SocketConnection implements TerminalConnection {
@@ -34,9 +55,8 @@ class SocketConnection implements TerminalConnection {
   private readonly listeners = new Set<(output: { sequence: number; data: string; replay?: boolean }) => void>()
   private queue: string[] = []
 
-  constructor(sessionId: string, id: string) {
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-    this.socket = new WebSocket(`${protocol}://${location.host}/dsh-vscode-terminal/ws?sessionId=${encodeURIComponent(sessionId)}&id=${encodeURIComponent(id)}`)
+  constructor(sessionId: string, id: string, wsBase?: string) {
+    this.socket = new WebSocket(webSocketUrl(sessionId, id, wsBase))
     this.socket.onopen = () => { for (const value of this.queue) this.socket.send(value); this.queue = [] }
     this.socket.onmessage = event => {
       try {
@@ -67,16 +87,22 @@ export class TerminalWorkspaceController implements TerminalWorkspace {
 
   constructor(private readonly sessionId: string) {}
 
+  /** 宿主给的规范地址；每次 API 响应都会带回，用于拼 WebSocket 的绝对地址。 */
+  private wsBase: string | undefined
+
   async refresh(): Promise<void> {
     this.set({ ...this.snapshot, loading: true, error: undefined })
-    try { this.set({ terminals: await request<TerminalInfo[]>('list', { sessionId: this.sessionId }), loading: false }) }
-    catch (error) { this.set({ ...this.snapshot, loading: false, error: error instanceof Error ? error.message : String(error) }) }
+    try {
+      const answer = await request<TerminalInfo[]>('list', { sessionId: this.sessionId })
+      this.wsBase = answer.wsBase ?? this.wsBase
+      this.set({ terminals: answer.value, loading: false })
+    } catch (error) { this.set({ ...this.snapshot, loading: false, error: error instanceof Error ? error.message : String(error) }) }
   }
 
-  async create(title?: string): Promise<TerminalInfo> { const terminal = await request<TerminalInfo>('create', { sessionId: this.sessionId, ...(title === undefined ? {} : { title }) }); await this.refresh(); return terminal }
+  async create(title?: string): Promise<TerminalInfo> { const answer = await request<TerminalInfo>('create', { sessionId: this.sessionId, ...(title === undefined ? {} : { title }) }); this.wsBase = answer.wsBase ?? this.wsBase; await this.refresh(); return answer.value }
   async close(id: string): Promise<void> { await request('close', { sessionId: this.sessionId, id }); await this.refresh() }
   async rename(id: string, title: string): Promise<void> { await request('rename', { sessionId: this.sessionId, id, title }); await this.refresh() }
-  connect(id: string): TerminalConnection { return new SocketConnection(this.sessionId, id) }
+  connect(id: string): TerminalConnection { return new SocketConnection(this.sessionId, id, this.wsBase) }
   getSnapshot(): TerminalWorkspaceSnapshot { return this.snapshot }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   private set(snapshot: TerminalWorkspaceSnapshot): void { this.snapshot = snapshot; for (const listener of this.listeners) listener() }
