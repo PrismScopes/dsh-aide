@@ -23,9 +23,20 @@ export function sanitizedTerminalEnv(env: NodeJS.ProcessEnv): Record<string, str
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => value !== undefined && !SENSITIVE.test(key)) as Array<[string, string]>)
 }
 
-/** Select the user's interactive shell with platform-specific fallbacks. */
+/**
+ * 选择用户的交互式 shell。
+ *
+ * Windows 上用 COMSPEC —— 也就是用户自己的命令解释器 —— 原样启动，不替换成别的、也不加
+ * 抑制启动横幅的参数。原先的写法是「COMSPEC 指向 powershell 就用它，否则一律 powershell.exe
+ * 加 -NoLogo」：当用户的 COMSPEC 是 cmd.exe 时，它会被悄悄换成 PowerShell，于是终端里看到的
+ * 是 PS 提示符，用户熟悉的 cmd 横幅（Microsoft Windows [版本 …]）永远不会出现。终端应当呈现
+ * 用户自己的环境。
+ */
 export function defaultTerminalShell(platform = process.platform, env = process.env): { shell: string; args: string[] } {
-  if (platform === 'win32') return { shell: env.COMSPEC?.toLowerCase().includes('powershell') ? env.COMSPEC : 'powershell.exe', args: ['-NoLogo'] }
+  if (platform === 'win32') {
+    const comspec = env.COMSPEC?.trim()
+    return { shell: comspec !== undefined && comspec !== '' ? comspec : 'powershell.exe', args: [] }
+  }
   return { shell: env.SHELL || (platform === 'darwin' ? '/bin/zsh' : '/bin/bash'), args: ['-l'] }
 }
 

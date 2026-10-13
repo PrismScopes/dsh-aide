@@ -9,7 +9,13 @@ describe('terminal host settings', () => {
 
   it('selects the platform interactive shell', () => {
     expect(defaultTerminalShell('linux', { SHELL: '/usr/bin/fish' })).toEqual({ shell: '/usr/bin/fish', args: ['-l'] })
-    expect(defaultTerminalShell('win32', { COMSPEC: 'C:\\Windows\\System32\\cmd.exe' })).toEqual({ shell: 'powershell.exe', args: ['-NoLogo'] })
+    // Windows 上 COMSPEC 原样启动。原先这里会把 cmd 换成 powershell.exe -NoLogo，
+    // 于是用户的 cmd 环境与启动横幅（Microsoft Windows [版本 …]）永远看不到 ——
+    // 终端应当呈现用户自己的环境。
+    expect(defaultTerminalShell('win32', { COMSPEC: 'C:\\Windows\\System32\\cmd.exe' })).toEqual({ shell: 'C:\\Windows\\System32\\cmd.exe', args: [] })
+    expect(defaultTerminalShell('win32', { COMSPEC: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' })).toEqual({ shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', args: [] })
+    // 只有 COMSPEC 缺失时才回退。
+    expect(defaultTerminalShell('win32', {})).toEqual({ shell: 'powershell.exe', args: [] })
   })
 
   it('identifies terminal protocol replies emitted while replaying output', () => {
