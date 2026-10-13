@@ -114,18 +114,18 @@ function terminalRequestAllowed(req: IncomingMessage): boolean {
  * 经自定义协议转发给宿主，但 **WebSocket 的 upgrade 不经过那条转发**，所以必须给客户端一个
  * 宿主的绝对地址。
  *
- * 两个来源，按可靠性排序：
- *   1. `DSH_WEB_URL` —— DSH 的 web-app 包写入的本机规范地址；
- *   2. **请求自身的 `req.socket.localPort`** —— 宿主正在监听的端口。
- * 实测桌面端的宿主进程里没有 `DSH_WEB_URL`（API 因此没带回该字段），所以第 2 条才是真正兜住的。
- * 只暴露回环地址：客户端就在本机，没有理由把对外地址交出去。
+ * **只用 `req.socket.localPort`** —— 它回答的是「这个请求打到了哪个端口」，是第一手事实。
+ *
+ * 明确不用 `DSH_WEB_URL`：它由 DSH 的 web-app 注册在 shellEnv 上，描述的是 **shell 命令所在
+ * 那个 Harness 实例**的地址，未必是当前宿主。实测代价很直观 —— 在桌面端内启动的 Web 测试实例
+ * 会继承 `DSH_WEB_URL=http://127.0.0.1:19387`，于是 Web 端的终端跑去连桌面端的端口，连接失败
+ * （close 1006）、终端空白。两个来源在这种情况下会给出互相矛盾的答案，而 localPort 是对的。
+ *
+ * 只输出回环地址：客户端就在本机，没有理由把对外地址交出去。
  */
 function localBase(req: IncomingMessage): string | undefined {
-  const fromEnv = process.env.DSH_WEB_URL?.trim()
-  if (fromEnv !== undefined && fromEnv !== '') return fromEnv.replace(/\/+$/, '')
   const port = req.socket.localPort
   if (typeof port !== 'number' || port <= 0) return undefined
-  // 客户端只可能来自本机，所以一律用回环地址。
   const host = req.socket.localAddress === '::1' ? '[::1]' : '127.0.0.1'
   return `http://${host}:${port}`
 }
