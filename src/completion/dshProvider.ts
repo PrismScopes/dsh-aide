@@ -34,8 +34,13 @@ export interface DshCallConfig {
   stop?: string[]
 }
 
-/** 结束原因：正常结束、被中止，或失败（失败时带错误信息）。 */
-export interface DshFinishReason { kind?: string; failure?: { message?: string; code?: string } }
+/**
+ * 结束原因：正常结束、被中止，或失败。
+ *
+ * 失败时带上提供方返回的 HTTP 状态与机器码：这条路径的 message 是适配器包装过的通用文案，
+ * 真正的原因（鉴权、路由、网络）只能从状态码区分。
+ */
+export interface DshFinishReason { kind?: string; failure?: { message?: string; code?: string; status?: number } }
 
 /** 适配器产出的增量；只关心文本增量与结束。 */
 export interface DshStreamChunk { type: string; text?: string; reason?: DshFinishReason }
@@ -100,7 +105,16 @@ export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelSer
           // 失败的结束必须抛出去：否则调用方只看到一个空结果，把上游故障当成"模型没想出内容"。
           const kind = chunk.reason?.kind
           // 带上路由：失败信息里没有提供方与模型时，只能靠猜是哪条路断了。
-          if (kind === 'error') throw new Error(`completion upstream failed (${chosen.provider}/${chosen.model}): ${chunk.reason?.failure?.message ?? 'unknown error'}`)
+          if (kind === 'error') {
+            // 状态码与机器码一并带出：message 是适配器包装过的通用文案，区分鉴权 / 路由 / 网络只能靠它们。
+            const failure = chunk.reason?.failure
+            const parts = [
+              failure?.message ?? 'unknown error',
+              failure?.code,
+              failure?.status === undefined ? undefined : `status ${failure.status}`,
+            ].filter(part => part !== undefined).map(part => String(part))
+            throw new Error(`completion upstream failed (${chosen.provider}/${chosen.model}): ${parts.join(' · ')}`)
+          }
           if (kind === 'aborted') return
           break
         }
