@@ -40,6 +40,10 @@
 - **Search and Git**: `@vscode/ripgrep` supports case, whole-word, regex, and path filters; Git covers stage, unstage, discard, commit, branches, diffs, commit files, and the graph.
 - **Terminal**: `node-pty` and xterm with up to eight sessions, rename, a right-side switcher, splits, ANSI output, and Ctrl+C.
 - **Layout and DSH**: the primary view, terminal panel, and DSH conversation sidebar can be shown and resized independently; settings manage theme and widths.
+- **Inline completion**: ghost-text suggestions at the cursor, served by a real model or a local fallback;
+  cycle through candidates and accept by block, by line, or by word. Context comes from the current file
+  and a local retrieval index that never leaves the workspace directory.
+  See [docs/inline-completion.md](docs/inline-completion.md) for implementation and verification status.
 - **Sync and restore**: workspace file changes stream to the UI, while reload restores views, tabs, expanded directories, panels, and layout.
 
 The workbench mounts through the official `sidebar.footer.action` and `shell.overlay` extension points. It does not replace or disable `ui-layout`.
@@ -97,6 +101,10 @@ pnpm can also delay versions published less than 24 hours ago. Retry after the w
 | `Ctrl+Alt+B` | Toggle the DSH conversation panel |
 | `Ctrl+\`` | Show or hide the terminal |
 | `Ctrl+Shift+\`` | Create a terminal |
+| `Tab` | Accept the whole suggestion |
+| `Ctrl+Right` | Accept the next segment |
+| `Ctrl+Alt+Right` | Accept the next line |
+| `Alt+[` / `Alt+]` | Previous or next candidate |
 
 ## Security
 
