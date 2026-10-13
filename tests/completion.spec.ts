@@ -243,6 +243,20 @@ describe('candidate post-processing', () => {
     expect(truncateAfterCompleteBlock('no block here')).toBe('no block here')
   })
 
+  it('keeps the output usable on Windows and after a doubled answer', () => {
+    const document = 'const a = useState(0)\nconst b = useSt'
+    const at = () => baseState({ document, offset: document.length })
+
+    // CRLF：模型常带 \r，插进文档会留下看不见的字符。
+    expect(postProcess('ate(0)\r\nfoo()', at())).toBe('ate(0)\nfoo()')
+
+    // 整段重复两遍：逐行规则看不出来（每行只出现两次），整段比对才认得出。
+    expect(postProcess('ate(0)\nfoo()\nate(0)\nfoo()', at())).toBe('ate(0)\nfoo()')
+
+    // 开头的空行是模型的分隔，不是要插入的内容。
+    expect(postProcess('\nate(0)', at())).toBe('ate(0)')
+  })
+
   it('keeps presentation junk out of the inserted text', () => {
     const document = 'const a = useState(0)\nconst b = useSt'
     const at = () => baseState({ document, offset: document.length })

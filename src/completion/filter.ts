@@ -268,13 +268,40 @@ export function stripContextHeader(candidate: string): string {
   return index === 0 ? candidate : lines.slice(index).join('\n')
 }
 
+/**
+ * 后处理：把候选的换行符换成文档使用的那一个。
+ *
+ * 模型常按自己的习惯输出换行，与文档不一致时会在插入的文本里留下多余的字符；而且后续的逐行规则
+ * 以换行为界，不先对齐就会把「同一行」判成不同行。
+ */
+export function alignLineEndings(candidate: string, document: string): string {
+  return document.includes('\r\n')
+    ? candidate.replace(/\r\n|\r|\n/g, '\r\n')
+    : candidate.replace(/\r\n|\r/g, '\n')
+}
+
+/**
+ * 后处理：模型把同一段答案说了两遍时只留一遍。
+ *
+ * 逐行规则认不出这种重复：每一行只出现两次，达不到「连续三次」的门槛。只有按整段比对才看得出来。
+ * 只在前后两半逐字相等时动手，避免误伤结构相似但内容不同的候选。
+ */
+export function collapseDuplicatedBlock(candidate: string): string {
+  const lines = candidate.split('\n')
+  if (lines.length < 2 || lines.length % 2 !== 0) return candidate
+  const half = lines.length / 2
+  const head = lines.slice(0, half).join('\n')
+  return head === lines.slice(half).join('\n') ? head : candidate
+}
+
 /** 后处理五件事的组合入口，顺序按文档给出的次序。 */
 export function postProcess(candidate: string, state: Pick<FilterState, 'document' | 'offset'>): string {
-  let text = stripCodeFence(candidate)
+  let text = alignLineEndings(stripCodeFence(candidate), state.document)
   text = stripContextHeader(text)
   text = stripInlineMarkdown(text)
   text = trimPrefixOverlap(text, state.document, state.offset)
   text = collapseRepeatedLines(text)
+  text = collapseDuplicatedBlock(text)
   text = trimDuplicateTrailingSymbol(text, state.document, state.offset)
   text = closeBrackets(text)
   text = truncateAfterCompleteBlock(text)
