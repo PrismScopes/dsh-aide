@@ -243,6 +243,29 @@ describe('candidate post-processing', () => {
     expect(truncateAfterCompleteBlock('no block here')).toBe('no block here')
   })
 
+  it('keeps presentation junk out of the inserted text', () => {
+    const document = 'const a = useState(0)\nconst b = useSt'
+    const at = () => baseState({ document, offset: document.length })
+    const pipeline = (raw: string) => {
+      const state = { document, offset: document.length, edits: [], diagnostics: [] as string[], lastAccepted: undefined }
+      const [candidate] = filterCandidates([raw], state as unknown as Parameters<typeof filterCandidates>[1])
+      if (candidate === undefined || candidate.dropped !== undefined) return '<丢弃：' + (candidate?.dropped ?? 'none') + '>'
+      return postProcess(candidate.text, at())
+    }
+
+    // 行内反引号包裹的片段：反引号是 Markdown 记号，不是代码。
+    expect(pipeline('`ate`')).toBe('ate')
+    // 加粗：同理。
+    expect(pipeline('**ate**')).toBe('ate')
+    // 复述文件路径：那是给模型的上下文，不该插回去。
+    expect(pipeline('# 文件：a.ts\nate')).toBe('ate')
+    // 纯解释不会被丢：规则只看「有没有语言字符」，而中文也是语言字符 —— 中文完全可能出现在合法补全里
+    // （字符串字面量、注释），按「含中文就丢」处理会误伤。模型说「补不出」的正当出口是输出空行，
+    // 空候选由 empty-change 规则丢掉；指令里已经这么要求。
+    expect(pipeline('无法补全。')).toBe('无法补全。')
+    expect(pipeline('')).toBe('<丢弃：empty-change>')
+  })
+
   it('runs the whole post-processing chain', () => {
     expect(postProcess('call(a', baseState({ document: ')', offset: 0 }))).toBe('call(a)')
   })

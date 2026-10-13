@@ -236,9 +236,43 @@ export function stripCodeFence(candidate: string): string {
   return body.join('\n')
 }
 
+/**
+ * 后处理：去掉包裹整条候选的行内 Markdown 记号。
+ *
+ * 对话模型常把片段包在反引号或加粗记号里。只处理「整条被一对标记包住」的形态，且内部不含反引号或
+ * 美元花括号 —— 后者是模板字面量，剥掉反引号会把候选弄坏。
+ */
+export function stripInlineMarkdown(candidate: string): string {
+  const trimmed = candidate.trim()
+  if (trimmed.length >= 4 && trimmed.startsWith('**') && trimmed.endsWith('**')) return trimmed.slice(2, -2)
+  const quote = String.fromCharCode(96)
+  if (trimmed.length >= 2 && trimmed.startsWith(quote) && trimmed.endsWith(quote)) {
+    const inner = trimmed.slice(1, -1)
+    if (!inner.includes(quote) && !inner.includes('${')) return inner
+  }
+  return candidate
+}
+
+/**
+ * 后处理：去掉模型复述回来的上下文头。
+ *
+ * 提示词里带着以井号开头的文件行；模型有时会连同它一起吐回来，而那是给模型的，插进代码毫无意义。
+ * 只去掉开头连续的这种行。
+ */
+export function stripContextHeader(candidate: string): string {
+  const lines = candidate.split('\n')
+  let index = 0
+  // 中文后面接的是全角冒号，那里不存在词边界，所以  只能加在英文分支上。
+  while (index < lines.length && /^\s*#\s*(?:文件|file\b|path\b)/i.test(lines[index] ?? '')) index++
+  while (index < lines.length && (lines[index] ?? '').trim() === '') index++
+  return index === 0 ? candidate : lines.slice(index).join('\n')
+}
+
 /** 后处理五件事的组合入口，顺序按文档给出的次序。 */
 export function postProcess(candidate: string, state: Pick<FilterState, 'document' | 'offset'>): string {
   let text = stripCodeFence(candidate)
+  text = stripContextHeader(text)
+  text = stripInlineMarkdown(text)
   text = trimPrefixOverlap(text, state.document, state.offset)
   text = collapseRepeatedLines(text)
   text = trimDuplicateTrailingSymbol(text, state.document, state.offset)
