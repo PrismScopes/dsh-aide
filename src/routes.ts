@@ -17,6 +17,66 @@ import { dispatch } from './api.ts'
  * 从 index.ts 拆出：那里只留 name / inject / apply 三件事，路由与文件监听放在这里。
  * 静态资源一律走 immutable 缓存；入参来自 URL 的部分都经 trusted() 与包目录包含判断守卫。
  */
+/** chokidar 监听句柄所需的最小能力；测试里用假实现即可。 */
+export interface WatchHandle {
+  on(event: 'all', handler: (event: string, changed: string) => void): unknown
+  off(event: 'all', handler: (event: string, changed: string) => void): unknown
+  close(): unknown
+}
+
+/**
+ * 按工作区共享的文件监听。
+ *
+ * 原先每条 ws/files 连接都自己 chokidar.watch() 一次。实测这个工作区（仓库根）约 1.8 万个
+ * 非 node_modules 文件，chokidar 建监听要 3.6 秒，而工作台每次打开、每次重连都要付一遍；
+ * 这段时间里宿主是共用的，终端的响应也会被一起拖住（实测宿主 API 往返延迟从 2ms 冲到 146ms）。
+ *
+ * 现在同一工作区共用一个监听，最后一个使用者离开后再等一小段时间才关，避免「关掉又马上打开」
+ * 时白重建一次。
+ */
+export class WorkspaceWatch {
+  private readonly entries = new Map<string, { watcher: WatchHandle; users: number; closing: ReturnType<typeof setTimeout> | undefined }>()
+
+  constructor(private readonly create: (workspace: string) => WatchHandle, private readonly graceMs = 5000) {}
+
+  acquire(workspace: string): WatchHandle {
+    const existing = this.entries.get(workspace)
+    if (existing !== undefined) {
+      clearTimeout(existing.closing)
+      existing.closing = undefined
+      existing.users++
+      return existing.watcher
+    }
+    const watcher = this.create(workspace)
+    this.entries.set(workspace, { watcher, users: 1, closing: undefined })
+    return watcher
+  }
+
+  release(workspace: string): void {
+    const entry = this.entries.get(workspace)
+    if (entry === undefined) return
+    entry.users--
+    if (entry.users > 0) return
+    entry.closing = setTimeout(() => {
+      entry.closing = undefined
+      if (entry.users > 0) return
+      this.entries.delete(workspace)
+      void entry.watcher.close()
+    }, this.graceMs)
+  }
+
+  closeAll(): void {
+    for (const [workspace, entry] of [...this.entries]) {
+      clearTimeout(entry.closing)
+      this.entries.delete(workspace)
+      void entry.watcher.close()
+    }
+  }
+
+  /** 仅供测试观察当前持有几个监听。 */
+  size(): number { return this.entries.size }
+}
+
 export function registerWorkbenchRoutes(ctx: HostContext): void {
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', handler: async (req, res) => {
@@ -137,6 +197,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
   }), 'dsh-vscode-workbench: oniguruma wasm')
 
   const wss = new WebSocketServer({ noServer: true })
+  const watches = new WorkspaceWatch(workspace => chokidar.watch(workspace, { ignoreInitial: true, ignored: /(^|[/\\])(\.git|node_modules|\.next|\.nuxt|\.turbo|\.vite|coverage)([/\\]|$)/, awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 25 } }))
   ctx.effect(() => ctx.webServer.registerUpgrade({
     path: '/dsh-vscode/ws/files', handler(req, socket, head) {
       if (!trusted(req as IncomingMessage, ctx.webRuntime.trustedHosts)) { socket.destroy(); return }
@@ -144,18 +205,19 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         const sessionId = new URL(req.url ?? '/', 'http://dsh.local').searchParams.get('sessionId')
         if (sessionId === null) { ws.close(1008, 'sessionId required'); return }
         const workspace = cwdFor(ctx, sessionId)
-        const watcher = chokidar.watch(workspace, { ignoreInitial: true, ignored: /(^|[/\\])(\.git|node_modules|\.next|\.nuxt|\.turbo|\.vite|coverage)([/\\]|$)/, awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 25 } })
+        const watcher = watches.acquire(workspace)
         let paths = new Set<string>(); let timer: ReturnType<typeof setTimeout> | undefined
-        watcher.on('all', (_event, path) => {
+        const onAll = (_event: string, path: string): void => {
           const changed = isAbsolute(path) ? relative(workspace, path) : path
           paths.add(changed.split(sep).join('/')); clearTimeout(timer); timer = setTimeout(() => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'files.changed', paths: [...paths] }))
             paths = new Set()
           }, 150)
-        })
-        ws.on('close', () => { clearTimeout(timer); void watcher.close() })
+        }
+        watcher.on('all', onAll)
+        ws.on('close', () => { clearTimeout(timer); watcher.off('all', onAll); watches.release(workspace) })
       })
     },
   }), 'dsh-vscode-workbench: file watcher')
-  ctx.effect(() => () => { wss.close() }, 'dsh-vscode-workbench: watcher teardown')
+  ctx.effect(() => () => { watches.closeAll(); wss.close() }, 'dsh-vscode-workbench: watcher teardown')
 }
