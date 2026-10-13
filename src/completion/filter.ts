@@ -189,8 +189,12 @@ export function trimPrefixOverlap(candidate: string, document: string, offset: n
 export function collapseRepeatedLines(candidate: string): string {
   const lines = candidate.split('\n')
   const out: string[] = []
+  let run = 0
   for (const line of lines) {
-    if (out.length >= 2 && out.at(-1) === line && out.at(-2) === line) continue
+    run = out.at(-1) === line ? run + 1 : 1
+    // 达到第三次时把已保留的那一次也去掉：文档要求的是压成一次，不是压成两次。
+    if (run === 3) out.pop()
+    if (run >= 3) continue
     out.push(line)
   }
   return out.join('\n')
@@ -218,18 +222,18 @@ export function truncateAfterCompleteBlock(candidate: string): string {
  * 只剥最外层的一对，内部的围栏（比如写在字符串里的）不动。
  */
 export function stripCodeFence(candidate: string): string {
-  const trimmed = candidate.trim()
-  if (!trimmed.startsWith('```')) return candidate
-  const lines = trimmed.split('\n')
-  const first = lines[0] ?? ''
-  if (!first.startsWith('```')) return candidate
-  // 首行是围栏（可能带语言名）；末行是收尾围栏时一并去掉。
-  const body = lines.slice(1)
-  if ((body.at(-1) ?? '').trim() === '```') body.pop()
-  else if (body.at(-1) !== undefined && (body.at(-1) as string).trimEnd().endsWith('```')) body[body.length - 1] = (body.at(-1) as string).trimEnd().slice(0, -3)
-  // 保留原候选的首尾空白形态：插入位置常常就在行中间。
-  const leading = candidate.slice(0, candidate.indexOf(first))
-  return leading + body.join('\n')
+  const lines = candidate.split('\n')
+  const open = lines.findIndex(line => line.trim().startsWith('```'))
+  if (open === -1) return candidate
+  let body = lines.slice(open + 1)
+  // 收尾围栏：可能独占一行，也可能贴在最后一行的末尾。
+  const close = body.findIndex(line => line.trim().startsWith('```'))
+  if (close !== -1) body = body.slice(0, close)
+  else if ((body.at(-1) ?? '').trimEnd().endsWith('```')) body[body.length - 1] = (body.at(-1) as string).trimEnd().slice(0, -3)
+  // 围栏前后都可能挂着说明文字（「这是补全：」「希望有帮助」），整段丢掉：它们是呈现层杂质。
+  while ((body[0] ?? '').trim() === '') body.shift()
+  while ((body.at(-1) ?? '').trim() === '') body.pop()
+  return body.join('\n')
 }
 
 /** 后处理五件事的组合入口，顺序按文档给出的次序。 */

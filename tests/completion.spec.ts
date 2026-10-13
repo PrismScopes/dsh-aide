@@ -236,13 +236,43 @@ describe('candidate post-processing', () => {
   })
 
   it('collapses runs of the same line and cuts after the first complete block', () => {
-    expect(collapseRepeatedLines('a\na\na\na\nb')).toBe('a\na\nb')
+    // 文档措辞是「三次以上压成一次」，所以四行 a 压成一行；连续两行不动（重复两行是合法代码）。
+    expect(collapseRepeatedLines('a\na\na\na\nb')).toBe('a\nb')
+    expect(collapseRepeatedLines('await tick()\nawait tick()\nnext()')).toBe('await tick()\nawait tick()\nnext()')
     expect(truncateAfterCompleteBlock('if (a) { b() } trailing')).toBe('if (a) { b() }')
     expect(truncateAfterCompleteBlock('no block here')).toBe('no block here')
   })
 
   it('runs the whole post-processing chain', () => {
     expect(postProcess('call(a', baseState({ document: ')', offset: 0 }))).toBe('call(a)')
+  })
+
+  it('handles the shapes a chat model actually returns', () => {
+    const before = 'const a = useState(0)\nconst b = useSt'
+    const at = (document: string) => baseState({ document, offset: document.length })
+
+    // 围栏 + 说明文字：只保留代码。
+    expect(postProcess('```typescript\nate\n```', at(before))).toBe('ate')
+    expect(postProcess('这是补全：\n```\nate\n```\n希望有帮助', at(before))).toBe('ate')
+
+    // 复述光标前的代码：整段重叠都去掉，只剩真正的增量。
+    expect(postProcess('const b = useState', at(before))).toBe('ate')
+
+    // 截断只认花括号块：圆括号不算，否则形如 items.map(item => (…)) 的合法多行补全会被从中间截断。
+    // 代价是模型若在补全之后又附一整个无关函数，那部分会保留下来（已记入交付说明的局限）。
+    expect(postProcess('ate(0)\n\nfunction other() {\n  return 1\n}', at(before))).toBe('ate(0)\n\nfunction other() {\n  return 1\n}')
+    expect(truncateAfterCompleteBlock('ate(0)\n\nfunction other() {\n  return 1\n}\n\nfunction more() {\n  return 2\n}')).toBe('ate(0)\n\nfunction other() {\n  return 1\n}')
+
+    // 同一行重复三次：压成一次。
+    expect(postProcess('ate(0)\nate(0)\nate(0)', at(before))).toBe('ate(0)')
+
+    // 文档里已经有那个右括号：不重复给。
+    expect(trimDuplicateTrailingSymbol('ate(0)', 'const n = useState(0)', 21)).toBe('ate(0)')
+    // 插入点在文档里那个右括号之前：候选末尾再来一个就重复了。
+    expect(trimDuplicateTrailingSymbol('ate)', 'n)', 1)).toBe('ate')
+
+    // 括号没闭合：补上。
+    expect(closeBrackets('useState(')).toBe('useState()')
   })
 })
 
