@@ -35,8 +35,12 @@
 | 变量 | 作用 |
 | --- | --- |
 | `DSH_COMPLETION_PROVIDER=local` | 强制走本地兜底提供方（离线或单独验证客户端链路时用） |
+| `DSH_COMPLETION_ENDPOINT` | OpenAI 兼容的补全端点基址，例如 `http://127.0.0.1:8080/v1` |
+| `DSH_COMPLETION_MODEL` | 上面那个端点使用的模型标识，默认 `completion` |
+| `DSH_COMPLETION_API_KEY` | 上面那个端点的密钥，作为 `Authorization: Bearer` 发送 |
 
-不设时优先用 DSH 的模型服务；DSH 服务不可用则退回本地兜底。
+选路顺序：`DSH_COMPLETION_PROVIDER=local` → 本地兜底；配了 `DSH_COMPLETION_ENDPOINT` → 该端点；
+其余情况用 DSH 的模型服务，不可用时退回本地兜底。
 
 ## 验证状态
 
@@ -48,7 +52,7 @@
 - 内容安全：跨数据块的模式能被抓到（逐块匹配会漏），拦截中止本次补全、脱敏保留内容并标记，
   两种动作都进审计日志
 - 实验分组、采纳率 / 取消率 / 首字节延迟统计、失败留痕
-- 状态量：146 项单测通过（另有 1 项为既有的 Windows symlink 权限用例，与本功能无关）
+- 状态量：174 项单测通过（另有 1 项为既有的 Windows symlink 权限用例，与本功能无关）
 
 **未验证**：
 
@@ -56,6 +60,9 @@
   实例里 DeepSeek Messages 传输直接失败（换 `deepseek-official` 与 `deepseek-account` 两条路由
   结果相同）。桌面端应用进程内的同一条传输是可用的，因此预期在桌面端可用，但这一点尚未实测。
 - **真实模型的补全质量**。本地兜底只做标识符补全，质量结论必须来自真实模型。
+- **OpenAI 兼容通道的响应解析**。请求能到达上游（本地桩实测），但 DSH 宿主进程内的响应体没有解析出
+  文本；同一个提供方在普通 Node 进程里对同一个桩解析正常，所以问题在宿主这一侧，暂未定位。
+  这条通道不在生产路径上（生产用 DSH 模型服务）。
 
 失败一旦发生会留下痕迹：`completion.stats` 的 `failed` 与 `lastFailure` 会写明路由与原因
 （例如 `completion upstream failed (deepseek-official/deepseek-flash): …`）。
