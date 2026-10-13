@@ -1,0 +1,357 @@
+import { describe, expect, it } from 'vitest'
+import { CHARS_PER_TOKEN, charBudgetForPrompt, debounceFor, usesFastDebounce } from '../src/completion/params.ts'
+import { encodeSseEvent, parseSse, type CompletionEvent } from '../src/completion/protocol.ts'
+import {
+  assembleContext,
+  assemblePrompt,
+  CURSOR_MARKER,
+  FIM_MARKERS,
+  INSTRUCTION_PROMPT_PROFILE,
+  offsetAt,
+  renderPrompt,
+  suffixFromBlockBoundary,
+  truncateDocument,
+  truncatePrefix,
+  truncateSuffix,
+  type PromptProfile,
+} from '../src/completion/prompt.ts'
+import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
+import {
+  closeBrackets,
+  collapseRepeatedLines,
+  DEFAULT_FILTER_OPTIONS,
+  dropReason,
+  filterCandidates,
+  postProcess,
+  trimDuplicateTrailingSymbol,
+  truncateAfterCompleteBlock,
+  type FilterState,
+} from '../src/completion/filter.ts'
+import { identifiersStartingWith, localCompletion, trailingIdentifier, unclosedClosers } from '../src/completion/provider.ts'
+import { findSecurityHit, runCompletion } from '../src/completion/service.ts'
+import type { CompletionProvider } from '../src/completion/provider.ts'
+import type { CompletionRequest } from '../src/completion/protocol.ts'
+
+const PSM: PromptProfile = { id: 'psm', markers: FIM_MARKERS.psm, layout: 'prefix-suffix-middle', suffixFromBlockBoundary: false }
+
+describe('completion params', () => {
+  it('uses the fast debounce for dynamic and template languages only', () => {
+    expect(usesFastDebounce('javascript')).toBe(true)
+    expect(usesFastDebounce('TypeScript')).toBe(true)
+    expect(usesFastDebounce('html')).toBe(true)
+    expect(usesFastDebounce('rust')).toBe(false)
+    expect(debounceFor('javascript')).toBe(90)
+    expect(debounceFor('rust')).toBe(125)
+  })
+
+  it('converts the token budget into a character budget', () => {
+    expect(charBudgetForPrompt(DEFAULT_COMPLETION_PARAMS)).toBe(3950 * CHARS_PER_TOKEN)
+  })
+})
+
+describe('completion protocol', () => {
+  it('round-trips an encoded event', () => {
+    const event: CompletionEvent = { type: 'output', candidates: [{ index: 0, text: 'x', finishReason: '', elapsedMs: 3 }] }
+    const parsed = parseSse(encodeSseEvent(event))
+    expect(parsed.events).toEqual([event])
+    expect(parsed.rest).toBe('')
+  })
+
+  it('keeps a partial record for the next chunk', () => {
+    const first = parseSse('data: {"type":"me')
+    expect(first.events).toEqual([])
+    expect(first.rest).toBe('data: {"type":"me')
+    const second = parseSse('ta","model":"m"}\n\n', first.rest)
+    expect(second.events).toEqual([{ type: 'meta', model: 'm' }])
+    expect(second.rest).toBe('')
+  })
+
+  it('parses several records in one chunk and ignores records that are not ours', () => {
+    const chunk = encodeSseEvent({ type: 'meta', model: 'm' }) + ': keep-alive\n\n' + encodeSseEvent({ type: 'done' })
+    expect(parseSse(chunk).events).toEqual([{ type: 'meta', model: 'm' }, { type: 'done' }])
+  })
+})
+
+describe('prompt assembly', () => {
+  it('maps line and column onto a character offset', () => {
+    const document = 'one\ntwo\nthree'
+    expect(offsetAt(document, 1, 0)).toBe(0)
+    expect(offsetAt(document, 2, 0)).toBe(4)
+    expect(offsetAt(document, 2, 3)).toBe(7)
+    // 越界的行列要夹到文档范围内，不能返回越界偏移。
+    expect(offsetAt(document, 99, 99)).toBe(document.length)
+  })
+
+  it('caps the prefix by lines and by characters, keeping the text nearest the cursor', () => {
+    const prefix = Array.from({ length: 10 }, (_value, index) => `line-${index}`).join('\n')
+    expect(truncatePrefix(prefix, { ...DEFAULT_COMPLETION_PARAMS, prefixLines: 3 })).toBe('line-7\nline-8\nline-9')
+    expect(truncatePrefix('abcdefghij', { ...DEFAULT_COMPLETION_PARAMS, prefixLines: 5, prefixChars: 4 })).toBe('ghij')
+    expect(truncateSuffix('abcdefghij', { ...DEFAULT_COMPLETION_PARAMS, suffixLines: 5, suffixChars: 3 })).toBe('abc')
+  })
+
+  it('starts the suffix at the next sibling boundary when asked to', () => {
+    // 同级边界包含那个收尾括号本身：模型需要看到当前块是怎么结束的。
+    const suffix = '    still-inside()\n  }\n  nextFunction()\n}'
+    expect(suffixFromBlockBoundary(suffix, 2)).toBe('  }\n  nextFunction()\n}')
+    // 没有更浅的缩进时原样返回。
+    expect(suffixFromBlockBoundary('    deeper()\n      deeper()', 2)).toBe('    deeper()\n      deeper()')
+  })
+
+  it('drops context parts in the documented order when the budget is tight', () => {
+    const input = { filePath: 'a.ts', language: 'typescript', document: '', rewriteAt: { line: 1, column: 0 }, repositoryContext: 'REPO', snippets: ['SNIPPET'], symbols: ['SYMBOL'], edits: [{ before: 'a', after: 'b', timestamp: 1 }] }
+    const all = assembleContext(input, 10_000)
+    expect(all.dropped).toEqual([])
+    expect(all.context).toContain('仓库级上下文')
+    expect(all.context).toContain('改前：a')
+    // 预算只够编辑历史时，按优先级从低到高依次丢掉前三类。
+    const tight = assembleContext(input, 40)
+    expect(tight.dropped).toEqual(['仓库级上下文', '检索片段', '符号定义'])
+    expect(tight.context).toContain('改前：a')
+    expect(tight.context).not.toContain('仓库级上下文')
+    // 预算极端时连编辑历史也保不住，此时上下文段为空而不是塞进半条。
+    expect(assembleContext(input, 5)).toEqual({ context: '', dropped: ['仓库级上下文', '检索片段', '符号定义', '编辑历史'] })
+  })
+
+  it('renders each layout with the markers that belong to it', () => {
+    expect(renderPrompt('P', 'S', PSM)).toBe('<|fim_prefix|>P<|fim_suffix|>S<|fim_middle|>')
+    expect(renderPrompt('P', 'S', { ...PSM, layout: 'begin-hole-end', markers: FIM_MARKERS.hole })).toBe('<fim_begin>P<fim_hole>S<fim_end>')
+    const instruction = renderPrompt('P', 'S', INSTRUCTION_PROMPT_PROFILE)
+    expect(instruction).toContain('代码补全引擎')
+    expect(instruction).toContain(`P${CURSOR_MARKER}S`)
+  })
+
+  it('assembles a prompt that still points at the cursor after truncation', () => {
+    const document = Array.from({ length: 1200 }, (_value, index) => `line ${index}`).join('\n')
+    const result = assemblePrompt({ filePath: 'a.ts', language: 'typescript', document, rewriteAt: { line: 1100, column: 0 } }, { ...DEFAULT_COMPLETION_PARAMS, documentLines: 200, prefixLines: 50 }, PSM)
+    expect(result.prompt).toContain('line 1099')
+    expect(result.prompt).toContain('<|fim_prefix|>')
+    expect(result.chars).toBe(result.prompt.length)
+  })
+
+  it('keeps the rewrite position valid after the document is truncated', () => {
+    const document = Array.from({ length: 1000 }, (_value, index) => `line ${index}`).join('\n')
+    const truncated = truncateDocument(document, { line: 900, column: 4 }, { ...DEFAULT_COMPLETION_PARAMS, documentLines: 100 })
+    const lines = truncated.document.split('\n')
+    expect(lines.length).toBe(100)
+    // 换算后的行号必须仍然指向同一行文本。
+    expect(lines[truncated.rewriteAt.line - 1]).toBe('line 899')
+  })
+})
+
+const baseState = (overrides: Partial<FilterState> = {}): FilterState => ({ filePath: 'a.ts', document: '', offset: 0, language: 'typescript', ...overrides })
+
+describe('candidate filtering', () => {
+  it('drops an empty change and a candidate identical to the document', () => {
+    expect(dropReason('   ', baseState())).toBe('empty-change')
+    expect(dropReason('abc', baseState({ document: 'abcdef', offset: 0 }))).toBe('identical-to-document')
+  })
+
+  it('drops the candidate that repeats the text before the cursor', () => {
+    expect(dropReason('foo', baseState({ document: 'foo', offset: 3 }))).toBe('duplicate-text')
+    expect(dropReason('foo', baseState({ document: 'foo bar', offset: 3 }))).toBe('duplicate-text')
+    expect(dropReason('bar', baseState({ document: 'foo bar', offset: 3 }))).toBeUndefined()
+    // 光标之后正好是同样的文本时，按更靠前的「与编辑器内容无差异」判定丢弃。
+    expect(dropReason('foo', baseState({ document: 'foofoo', offset: 3 }))).toBe('identical-to-document')
+  })
+
+  it('drops import statements, too-short candidates and candidates with no language characters', () => {
+    expect(dropReason('import { a } from "b"', baseState())).toBe('import-statement')
+    expect(dropReason('x', baseState())).toBe('too-short')
+    expect(dropReason('---', baseState())).toBe('no-language-chars')
+    expect(dropReason('const a = 1', baseState())).toBeUndefined()
+  })
+
+  it('drops a candidate that falls inside the last accepted range', () => {
+    const state = baseState({ document: '      ', offset: 3, lastAccepted: { filePath: 'a.ts', start: 0, end: 6, text: 'sixchr', inline: false } })
+    expect(dropReason('sixchr', state)).toBe('same-line-as-last-accept')
+    // 同一区间但长度不同不算命中。
+    expect(dropReason('other', state)).toBeUndefined()
+  })
+
+  it('drops a candidate overlapping the last inline accept even when the length differs', () => {
+    const state = baseState({ document: '      ', offset: 2, lastAccepted: { filePath: 'a.ts', start: 0, end: 6, text: 'sixchr', inline: true } })
+    expect(dropReason('anything', state)).toBe('overlaps-last-inline-accept')
+  })
+
+  it('drops the cancelled suggestion and the rollback edit', () => {
+    expect(dropReason('suggested', baseState({ cancelledSuggestion: 'suggested' }))).toBe('repeats-cancelled-suggestion')
+    expect(dropReason('before', baseState({ document: 'xxxxxzzz', offset: 5, lastEdit: { before: 'before', after: 'after' } }))).toBe('rollback-edit')
+  })
+
+  it('drops a deletion offered right after the line grew', () => {
+    const state = baseState({ document: 'let value = computeSomething()', offset: 29, previousLineText: 'let value = com' })
+    expect(dropReason('x', state)).toBe('deletion-after-growth')
+  })
+
+  it('reports a reason per candidate while keeping the survivors', () => {
+    const filtered = filterCandidates(['const a = 1', 'x'], baseState())
+    expect(filtered[0]).toEqual({ text: 'const a = 1' })
+    expect(filtered[1]).toEqual({ text: 'x', dropped: 'too-short' })
+  })
+
+  it('honours the switchable filters', () => {
+    const off = { ...DEFAULT_FILTER_OPTIONS, dropTooShort: false, dropImports: false, dropForeignLanguage: false }
+    expect(dropReason('x', baseState(), off)).toBeUndefined()
+    expect(dropReason('import a from "b"', baseState(), off)).toBeUndefined()
+    expect(dropReason('---', baseState(), off)).toBeUndefined()
+  })
+})
+
+describe('candidate post-processing', () => {
+  it('removes a trailing symbol that the document already has', () => {
+    expect(trimDuplicateTrailingSymbol('foo)', 'foo', 3)).toBe('foo)')
+    expect(trimDuplicateTrailingSymbol('foo)', ')bar', 0)).toBe('foo')
+  })
+
+  it('closes brackets and quotes that the candidate leaves open', () => {
+    expect(closeBrackets('call(a')).toBe('call(a)')
+    expect(closeBrackets('{ a: 1')).toBe('{ a: 1}')
+    expect(closeBrackets('done()')).toBe('done()')
+  })
+
+  it('collapses runs of the same line and cuts after the first complete block', () => {
+    expect(collapseRepeatedLines('a\na\na\na\nb')).toBe('a\na\nb')
+    expect(truncateAfterCompleteBlock('if (a) { b() } trailing')).toBe('if (a) { b() }')
+    expect(truncateAfterCompleteBlock('no block here')).toBe('no block here')
+  })
+
+  it('runs the whole post-processing chain', () => {
+    expect(postProcess('call(a', baseState({ document: ')', offset: 0 }))).toBe('call(a)')
+  })
+})
+
+describe('local fallback provider', () => {
+  it('finds the identifier fragment under the cursor', () => {
+    expect(trailingIdentifier('const value = useSt')).toBe('useSt')
+    expect(trailingIdentifier('const value = ')).toBe('')
+  })
+
+  it('suggests identifiers that start with the fragment', () => {
+    const document = 'useState(0)\nuseSyncExternalStore(subscribe, read)\nother()'
+    // 排序依据是离光标的距离：光标在文档开头时 useState 更近。
+    expect(identifiersStartingWith(document, 'useS', 0, 2)).toEqual(['useState', 'useSyncExternalStore'])
+    expect(identifiersStartingWith(document, 'useS', document.length, 2)).toEqual(['useSyncExternalStore', 'useState'])
+  })
+
+  it('completes the current word first and closes brackets second', () => {
+    expect(localCompletion('const a = useSt', 'ate(0)', DEFAULT_COMPLETION_PARAMS)).toEqual(['ate'])
+    expect(localCompletion('call(', ')', DEFAULT_COMPLETION_PARAMS)).toEqual([')'])
+    expect(localCompletion('', '', DEFAULT_COMPLETION_PARAMS)).toEqual([])
+  })
+
+  it('tracks unclosed brackets and quotes', () => {
+    expect(unclosedClosers('call(')).toEqual([')'])
+    expect(unclosedClosers('call(a')).toEqual([')'])
+    expect(unclosedClosers('const s = "abc')).toEqual(['"'])
+    expect(unclosedClosers('call(a)')).toEqual([])
+  })
+})
+
+const request = (overrides: Partial<CompletionRequest> = {}): CompletionRequest => ({
+  sessionId: 'session-1',
+  environment: { ideVersion: '1', extensionVersion: '1', region: 'cn', channel: 'dev', repository: 'repo' },
+  language: 'typescript',
+  trigger: 'inline',
+  edits: [],
+  cursor: { filePath: 'src/a.ts', rewriteAt: { line: 1, column: 6 }, document: 'const ' },
+  diagnostics: [],
+  forceRewrite: false,
+  ...overrides,
+})
+
+const scriptedProvider = (chunks: string[], onCall?: () => void): CompletionProvider => ({
+  id: 'scripted',
+  model: 'scripted-1',
+  async *complete(): AsyncIterable<{ text: string; done: boolean }> {
+    onCall?.()
+    for (const text of chunks) yield { text, done: false }
+    yield { text: '', done: true }
+  },
+})
+
+describe('completion service', () => {
+  it('emits meta, one output per chunk and a terminal done in order', async () => {
+    const events: CompletionEvent[] = []
+    for await (const event of runCompletion(request(), { provider: scriptedProvider(['a', 'b', 'c']) })) events.push(event)
+    expect(events[0]).toEqual({ type: 'meta', model: 'scripted-1' })
+    expect(events.slice(1, 4).map(event => (event.type === 'output' ? event.candidates[0]?.text : undefined))).toEqual(['a', 'b', 'c'])
+    expect(events.at(-1)).toEqual({ type: 'done' })
+  })
+
+  it('stops after the candidate limit', async () => {
+    const events: CompletionEvent[] = []
+    for await (const event of runCompletion(request(), { provider: scriptedProvider(['1', '2', '3', '4', '5']) })) events.push(event)
+    expect(events.filter(event => event.type === 'output')).toHaveLength(DEFAULT_COMPLETION_PARAMS.candidateLimit)
+  })
+
+  it('reports an upstream failure as an error event instead of throwing', async () => {
+    const failing: CompletionProvider = {
+      id: 'failing',
+      model: 'failing-1',
+      async *complete(): AsyncIterable<{ text: string; done: boolean }> { throw new Error('upstream down') },
+    }
+    const events: CompletionEvent[] = []
+    for await (const event of runCompletion(request(), { provider: failing })) events.push(event)
+    expect(events.at(-1)).toEqual({ type: 'error', code: 'completion-failed', message: 'upstream down' })
+  })
+
+  it('stops on a blocking security rule and masks without stopping otherwise', async () => {
+    const blocked = request({ security: { rules: [{ id: 'r1', name: 'SECRET', action: 'block' }] } })
+    const events: CompletionEvent[] = []
+    for await (const event of runCompletion(blocked, { provider: scriptedProvider(['ok ', 'SECRET', 'after']) })) events.push(event)
+    expect(events.some(event => event.type === 'content_security' && event.action === 'block')).toBe(true)
+    expect(events.some(event => event.type === 'output' && event.candidates[0]?.text === 'after')).toBe(false)
+
+    const masked = request({ security: { rules: [{ id: 'r2', name: 'SECRET', action: 'mask' }] } })
+    const maskedEvents: CompletionEvent[] = []
+    for await (const event of runCompletion(masked, { provider: scriptedProvider(['SECRET', 'after']) })) maskedEvents.push(event)
+    expect(maskedEvents.some(event => event.type === 'content_security' && event.action === 'mask')).toBe(true)
+    expect(maskedEvents.some(event => event.type === 'output' && event.candidates[0]?.text === 'after')).toBe(true)
+  })
+
+  it('aborts the upstream when the caller cancels', async () => {
+    const controller = new AbortController()
+    let aborted = false
+    const hanging: CompletionProvider = {
+      id: 'hanging',
+      model: 'hanging-1',
+      async *complete(_prompt, context): AsyncIterable<{ text: string; done: boolean }> {
+        // 提供方可能在取消之后才被启动：此时 abort 事件已经过去，必须读状态而不是等事件。
+        if (context.signal.aborted) { aborted = true; return }
+        context.signal.addEventListener('abort', () => { aborted = true }, { once: true })
+        await new Promise(resolve => setTimeout(resolve, 50))
+        yield { text: 'late', done: false }
+      },
+    }
+    const iterator = runCompletion(request(), { provider: hanging, signal: controller.signal })
+    const first = await iterator.next()
+    expect(first.value).toEqual({ type: 'meta', model: 'hanging-1' })
+    controller.abort()
+    const after: CompletionEvent[] = []
+    for await (const event of iterator) after.push(event)
+    expect(aborted).toBe(true)
+    // 取消之后上游晚到的增量必须被丢掉：既不产出 output，也不补一个 done。
+    expect(after.filter(event => event.type === 'output')).toEqual([])
+    expect(after.some(event => event.type === 'done')).toBe(false)
+  })
+
+  it('reports the request timeout as an error event instead of ending silently', async () => {
+    const silent: CompletionProvider = {
+      id: 'silent',
+      model: 'silent-1',
+      async *complete(_prompt, context): AsyncIterable<{ text: string; done: boolean }> {
+        // 一直不产出，直到被中止。
+        await new Promise<void>(resolve => context.signal.addEventListener('abort', () => resolve(), { once: true }))
+      },
+    }
+    const events: CompletionEvent[] = []
+    for await (const event of runCompletion(request(), { provider: silent, params: { ...DEFAULT_COMPLETION_PARAMS, completionTimeoutMs: 20 } })) events.push(event)
+    expect(events.at(-1)).toEqual({ type: 'error', code: 'completion-timeout', message: 'no completion within 20 ms' })
+  })
+
+  it('matches security rules by rule name', () => {
+    expect(findSecurityHit('has SECRET inside', { rules: [{ id: 'r', name: 'SECRET', action: 'mask' }] })).toEqual({ action: 'mask', ruleId: 'r', ruleName: 'SECRET' })
+    expect(findSecurityHit('clean', { rules: [{ id: 'r', name: 'SECRET', action: 'mask' }] })).toBeUndefined()
+    expect(findSecurityHit('clean', undefined)).toBeUndefined()
+  })
+})
