@@ -47,7 +47,6 @@ export async function* runCompletion(request: CompletionRequest, options: Comple
   // 超时与取消要走不同的收尾：取消是客户端自己的决定，不该再收到事件；超时必须上报。
   let timedOut = false
   const timer = setTimeout(() => { timedOut = true; controller.abort() }, params.completionTimeoutMs)
-  let index = 0
   // 判定对象是累积到目前的候选文本：流式输出会把一条模式切成两半，逐块匹配必然漏。
   let accumulated = ''
   const securityRules = rulesForRequest(request.security)
@@ -90,8 +89,10 @@ export async function* runCompletion(request: CompletionRequest, options: Comple
         options.onSecurityHit?.(hit, request)
         if (hit.action === 'block') return
       }
-      yield { type: 'output', candidates: [{ index: index++, text: chunk.text, finishReason: '', elapsedMs: now() - started }] }
-      if (index >= params.candidateLimit) break
+      // 序号由 provider 决定：同一条候选的多个增量共用序号，否则流式模型会被拆成多条候选。
+      const candidateIndex = chunk.index ?? 0
+      yield { type: 'output', candidates: [{ index: candidateIndex, text: chunk.text, finishReason: '', elapsedMs: now() - started }] }
+      if (candidateIndex + 1 >= params.candidateLimit) break
     }
   } catch (error) {
     if (timedOut) {

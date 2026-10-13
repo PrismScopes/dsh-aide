@@ -2,7 +2,8 @@ import type { HostContext } from './context.ts'
 import { createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, readDocument, renameEntry, saveDocument, searchWorkspace, uploadFile, workspacePreviewFile } from './host.ts'
 import type { SearchRequest } from './types.ts'
 import { DEFAULT_COMPLETION_PARAMS } from './completion/params.ts'
-import { completionIndexFor, resolveProvider } from './completion/register.ts'
+import { completionIndexFor, completionTelemetry, resolveProvider } from './completion/register.ts'
+import { groupForSession, paramsForGroup } from './completion/experiment.ts'
 import { WorkbenchError, stringField } from './wire.ts'
 
 /**
@@ -19,8 +20,22 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
     case 'completion.index.refresh': return completionIndexFor(cwd).then(index => index.refresh())
     case 'completion.config': {
       const resolved = resolveProvider(ctx)
-      return { source: resolved.source, model: resolved.model, profile: resolved.profile.id, params: DEFAULT_COMPLETION_PARAMS, endpoint: '/dsh-vscode/completion' }
+      const experiment = groupForSession(sessionId)
+      return { source: resolved.source, model: resolved.model, profile: resolved.profile.id, experiment, params: paramsForGroup(experiment), endpoint: '/dsh-vscode/completion' }
     }
+    case 'completion.telemetry': {
+      const kind = stringField(body, 'kind')
+      if (kind !== 'shown' && kind !== 'accepted' && kind !== 'cancelled') throw new WorkbenchError('invalid-argument', `unknown telemetry kind ${kind}`)
+      completionTelemetry.record({
+        kind, sessionId, language: stringField(body, 'language'),
+        ...(typeof body.model === 'string' && body.model !== '' ? { model: body.model } : {}),
+        ...(typeof body.experiment === 'string' && body.experiment !== '' ? { experiment: body.experiment } : {}),
+        ...(typeof body.firstByteMs === 'number' && Number.isFinite(body.firstByteMs) ? { firstByteMs: body.firstByteMs } : {}),
+        ...(typeof body.candidateCount === 'number' && Number.isFinite(body.candidateCount) ? { candidateCount: body.candidateCount } : {}),
+      })
+      return { recorded: true }
+    }
+    case 'completion.stats': return { overall: completionTelemetry.stats(), byExperiment: completionTelemetry.byExperiment() }
     case 'fs.list': return listFiles(cwd, stringField(body, 'path'))
     case 'fs.read': return readDocument(cwd, stringField(body, 'path'), body.force === true)
     case 'fs.save': return saveDocument(cwd, stringField(body, 'path'), stringField(body, 'content'), stringField(body, 'revision'))

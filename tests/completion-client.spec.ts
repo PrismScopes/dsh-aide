@@ -116,6 +116,51 @@ describe('accept granularity', () => {
   })
 
 
+  it('reports shown, accepted and cancelled through the telemetry hook', async () => {
+    // 采样点必须真的接上：采纳率的分母是展示次数，取消率来自在途请求被变更作废。
+    const reported: Array<{ kind: string; candidateCount?: number; firstByteMs?: number; model?: string; experiment?: string }> = []
+    const model = {
+      uri: { path: '/a.ts' },
+      getLanguageId: () => 'typescript',
+      getValue: () => 'const value = useSt',
+      getOffsetAt: (position: { column: number }) => position.column - 1,
+    }
+    const editor = {
+      getModel: () => model,
+      getPosition: () => ({ lineNumber: 1, column: 3 }),
+      executeEdits: () => undefined,
+    }
+    const client = {
+      suggest: async () => ({ candidates: ['ate'], finishReason: 'done', masked: false, model: 'local-heuristic', experiment: 'control', timing: { requestedAt: 0, rttMs: 12 } }),
+      recordAccept: () => undefined,
+    }
+    const controller = new InlineCompletionController({
+      client: client as unknown as CompletionClient,
+      controllerId: 'telemetry-test',
+      kinds: { automatic: 0 as unknown as monaco.languages.InlineCompletionTriggerKind, explicit: 1 as unknown as monaco.languages.InlineCompletionTriggerKind },
+      emptyRangeAt: () => ({ startLineNumber: 1, startColumn: 3, endLineNumber: 1, endColumn: 3 } as unknown as monaco.Range),
+      editor: editor as unknown as monaco.editor.IStandaloneCodeEditor,
+      report: event => { reported.push(event) },
+    })
+
+    const completions = await controller.provide(
+      model as unknown as monaco.editor.ITextModel,
+      { lineNumber: 1, column: 3 } as unknown as monaco.Position,
+      { triggerKind: 1 } as unknown as monaco.languages.InlineCompletionContext,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) } as unknown as monaco.CancellationToken,
+    )
+    expect(completions?.items).toHaveLength(1)
+    expect(reported[0]).toEqual({ kind: 'shown', language: 'typescript', candidateCount: 1, model: 'local-heuristic', experiment: 'control', firstByteMs: 12 })
+
+    controller.recordAccepted({ path: 'a.ts', offset: 0, text: 'ate' })
+    expect(reported[1]).toEqual({ kind: 'accepted', language: 'typescript' })
+
+    // 有在途请求时再变更，就是一次取消。
+    ;(controller as unknown as { inFlight: unknown }).inFlight = { abort: () => undefined }
+    controller.noteChange({ changes: [{ text: 'x' } as unknown as monaco.editor.IModelContentChange] })
+    expect(reported[2]).toEqual({ kind: 'cancelled', language: 'typescript' })
+  })
+
   it('attaches an accept command to every item', () => {
     const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }
     const items = buildInlineCompletionItems(['ate', 'ation'], { lineNumber: 1, column: 1 }, () => range, text => ({ id: ACCEPT_COMMAND_ID, title: 'record', arguments: [{ path: 'a.ts', offset: 3, text }] }))

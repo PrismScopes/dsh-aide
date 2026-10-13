@@ -269,9 +269,11 @@ const request = (overrides: Partial<CompletionRequest> = {}): CompletionRequest 
 const scriptedProvider = (chunks: string[], onCall?: () => void): CompletionProvider => ({
   id: 'scripted',
   model: 'scripted-1',
-  async *complete(): AsyncIterable<{ text: string; done: boolean }> {
+  async *complete(): AsyncIterable<{ text: string; done: boolean; index?: number }> {
     onCall?.()
-    for (const text of chunks) yield { text, done: false }
+    // 这个 fixture 模拟「一次产出多条完整候选」的提供方，因此每条各自一个序号。
+    let index = 0
+    for (const text of chunks) yield { text, done: false, index: index++ }
     yield { text: '', done: true }
   },
 })
@@ -283,6 +285,22 @@ describe('completion service', () => {
     expect(events[0]).toEqual({ type: 'meta', model: 'scripted-1', snippets: 0 })
     expect(events.slice(1, 4).map(event => (event.type === 'output' ? event.candidates[0]?.text : undefined))).toEqual(['a', 'b', 'c'])
     expect(events.at(-1)).toEqual({ type: 'done' })
+  })
+
+  it('treats unnumbered chunks as pieces of one candidate, not as several', async () => {
+    // 逐字流式的模型不报序号：那是同一条候选的三个增量，客户端按序号追加成 ate。
+    const streaming: CompletionProvider = {
+      id: 'stream',
+      model: 'stream-1',
+      async *complete(): AsyncIterable<{ text: string; done: boolean }> {
+        for (const text of ['a', 'te', '']) yield { text, done: text === '' }
+      },
+    }
+    const events: CompletionEvent[] = []
+    for await (const event of runCompletion(request(), { provider: streaming })) events.push(event)
+    const outputs = events.filter(event => event.type === 'output')
+    expect(outputs.map(event => event.candidates[0]?.index)).toEqual([0, 0])
+    expect(outputs.map(event => event.candidates[0]?.text).join('')).toBe('ate')
   })
 
   it('stops after the candidate limit', async () => {

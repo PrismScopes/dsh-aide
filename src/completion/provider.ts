@@ -10,7 +10,14 @@
  */
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from './params.ts'
 
-export interface CompletionChunk { text: string; done: boolean }
+/**
+ * 上游产出的一块内容。
+ *
+ * `index` 是候选序号：逐字流式的模型把同一条候选拆成多块，这些块必须共用同一个序号，
+ * 客户端才知道是「追加」而不是「另一条候选」。缺省为 0（单候选的常见情形）。
+ * 一次产出多条完整候选的实现（本地兜底）才需要自增。
+ */
+export interface CompletionChunk { text: string; done: boolean; index?: number }
 
 export interface ProviderContext {
   signal: AbortSignal
@@ -101,9 +108,10 @@ export function localProvider(params: CompletionParams = DEFAULT_COMPLETION_PARA
     id: 'local',
     model: 'local-heuristic',
     async *complete(_prompt: string, context: ProviderContext): AsyncIterable<CompletionChunk> {
+      let index = 0
       for (const text of localCompletion(context.prefix, context.suffix, params)) {
         if (context.signal.aborted) return
-        yield { text, done: false }
+        yield { text, done: false, index: index++ }
       }
       yield { text: '', done: true }
     },

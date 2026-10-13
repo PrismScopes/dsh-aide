@@ -13,6 +13,8 @@ import { DEFAULT_PROMPT_PROFILE, INSTRUCTION_PROMPT_PROFILE, type PromptProfile 
 import { runCompletion } from './service.ts'
 import { WorkspaceIndex } from './workspaceIndex.ts'
 import type { SecurityHit } from './security.ts'
+import { groupForSession, paramsForGroup } from './experiment.ts'
+import { TelemetryAggregator, type CompletionTelemetryEvent } from './telemetry.ts'
 import { appendFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -102,9 +104,14 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
       // 流式响应下 'close' 才是可靠的断开信号：客户端取消、切页、关标签都会走到这里。
       res.once('close', () => controller.abort())
 
-      const resolved = resolveProvider(ctx, params)
+      // 分组由服务端决定并按会话稳定分配（文档 4.3、七）：写回环境元数据后再往下走，
+      // 这样 meta 事件、埋点与日志看到的是同一个分组。
+      const experiment = groupForSession(request.sessionId)
+      const tuned = { ...request, environment: { ...request.environment, experiment } }
+      const groupParams = paramsForGroup(experiment)
+      const resolved = resolveProvider(ctx, groupParams)
       const cwd = safeCwd(ctx, helpers, request.sessionId)
-      const index = await completionIndexFor(cwd, params)
+      const index = await completionIndexFor(cwd, groupParams)
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-cache, no-transform',
@@ -112,14 +119,26 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
         'x-accel-buffering': 'no',
       })
       try {
-        for await (const event of runCompletion(request, {
-          provider: resolved.provider, params, profile: resolved.profile, signal: controller.signal,
+        let candidateCount = 0
+        let firstByteMs: number | undefined
+        for await (const event of runCompletion(tuned, {
+          provider: resolved.provider, params: groupParams, profile: resolved.profile, signal: controller.signal,
           // 索引没就绪就先不注入片段：刷新在后台跑，补全不等它。
           retrieve: current => index.retrieve(current),
           onSecurityHit: (hit, current) => { appendSecurityAudit(cwd, hit, current) },
         })) {
+          if (event.type === 'output') {
+            for (const candidate of event.candidates) {
+              candidateCount = Math.max(candidateCount, candidate.index + 1)
+              firstByteMs ??= candidate.elapsedMs
+            }
+          }
           if (res.writableEnded) break
           res.write(encodeSseEvent(event))
+        }
+        // 给出过候选才算一次「展示」：采纳率的分母是它。
+        if (candidateCount > 0) {
+          completionTelemetry.record({ kind: 'shown', sessionId: request.sessionId, language: request.language, model: resolved.model, experiment, ...(firstByteMs === undefined ? {} : { firstByteMs }), candidateCount })
         }
       } catch (error) {
         const failure: CompletionEvent = { type: 'error', code: 'completion-failed', message: error instanceof Error ? error.message : String(error) }
@@ -130,6 +149,9 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
     },
   }), 'dsh-vscode-workbench: inline completion')
 }
+
+/** 补全埋点聚合器（文档七：采纳率为主指标）。进程内保存，重启即清零。 */
+export const completionTelemetry = new TelemetryAggregator()
 
 /**
  * 内容安全审计（文档 6.4：拦截与脱敏两种动作都要写入审计日志）。

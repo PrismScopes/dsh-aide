@@ -10,6 +10,7 @@
 import type * as monaco from 'monaco-editor'
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from '../completion/params.ts'
 import { triggerPlan } from './completion.ts'
+import { api } from './api.ts'
 import { CompletionClient, type CompletionResponse } from './completion.ts'
 
 /** 最近一次内容变更是否包含换行。换行意味着语句或块结束，按文档跳过防抖。 */
@@ -29,6 +30,11 @@ export interface InlineCompletionControllerOptions {
   editor: monaco.editor.IStandaloneCodeEditor
   /** 采纳回调里用它把载荷路由回本控制器：命令标识是全局的，载荷必须能自证归属。 */
   controllerId: string
+  /**
+   * 埋点出口（文档七）。留成回调而不是直接发请求：这一层只管补全，传输由调用方决定，
+   * 也便于单测里断言「展示、采纳、取消」各报了一次。
+   */
+  report?: (event: { kind: 'shown' | 'accepted' | 'cancelled'; language: string; model?: string; experiment?: string; firstByteMs?: number; candidateCount?: number }) => void
 }
 
 /**
@@ -72,6 +78,7 @@ export class InlineCompletionController {
 
   /** 由 Monaco 在条目被采纳时调起（整块采纳走这条路）。 */
   recordAccepted(payload: Pick<AcceptPayload, 'path' | 'offset' | 'text'>): void {
+    this.options.report?.({ kind: 'accepted', language: this.languageOf() })
     this.options.client.recordAccept({
       filePath: payload.path,
       start: payload.offset,
@@ -114,6 +121,10 @@ export class InlineCompletionController {
   }
 
 
+  private languageOf(): string {
+    return this.options.editor.getModel()?.getLanguageId() ?? 'plaintext'
+  }
+
   private offsetAt(position: { lineNumber: number; column: number }): number {
     return this.options.editor.getModel()?.getOffsetAt({ lineNumber: position.lineNumber, column: position.column }) ?? 0
   }
@@ -130,6 +141,8 @@ export class InlineCompletionController {
    */
   noteChange(event: { changes: readonly monaco.editor.IModelContentChange[] }): void {
     this.tracker.lastChangeHadNewline = event.changes.some(change => change.text.includes('\n'))
+    // 有在途请求而被这次变更作废，就是一次「请求取消」（文档七的取消率指标）。
+    if (this.inFlight !== undefined) this.options.report?.({ kind: 'cancelled', language: this.languageOf() })
     this.inFlight?.abort()
     this.inFlight = undefined
     this.scheduleTrigger()
@@ -142,7 +155,7 @@ export class InlineCompletionController {
    */
   private scheduleTrigger(): void {
     if (this.triggerTimer !== undefined) clearTimeout(this.triggerTimer)
-    const language = this.options.editor.getModel()?.getLanguageId() ?? 'plaintext'
+    const language = this.languageOf()
     const plan = triggerPlan({ isNewLine: this.tracker.lastChangeHadNewline }, language, this.options.params ?? DEFAULT_COMPLETION_PARAMS)
     this.triggerTimer = setTimeout(() => {
       this.triggerTimer = undefined
@@ -184,7 +197,12 @@ export class InlineCompletionController {
     const path = model.uri.path.replace(/^\//, '')
     this.current = { text: response.candidates[0] ?? '', position: { lineNumber: position.lineNumber, column: position.column }, path }
     this.lastResult = { candidates: response.candidates, position: { lineNumber: position.lineNumber, column: position.column } }
-    return this.toInlineCompletions(response.candidates, position, model)
+    const completions = this.toInlineCompletions(response.candidates, position, model)
+    // 真的呈现出来了才算一次「展示」：过滤后空手而归不该算进采纳率的分母。
+    if (completions !== undefined) {
+      this.options.report?.({ kind: 'shown', language, candidateCount: completions.items.length, ...(response.model === undefined ? {} : { model: response.model }), ...(response.experiment === undefined ? {} : { experiment: response.experiment }), ...(response.timing.rttMs === undefined ? {} : { firstByteMs: response.timing.rttMs }) })
+    }
+    return completions
   }
 
   dispose(): void {
@@ -215,6 +233,10 @@ export function attachInlineCompletion(monacoApi: typeof monaco, editor: monaco.
   const controller = new InlineCompletionController({
     client,
     controllerId,
+    // 埋点是旁路：发不出去就算了，绝不因为它影响补全。
+    report: event => {
+      void api('completion.telemetry', { ...event, sessionId: options.sessionId ?? '' }).catch(() => undefined)
+    },
     ...(options.params === undefined ? {} : { params: options.params }),
     kinds: { automatic: monacoApi.languages.InlineCompletionTriggerKind.Automatic, explicit: monacoApi.languages.InlineCompletionTriggerKind.Explicit },
     emptyRangeAt: position => new monacoApi.Range(position.lineNumber, position.column, position.lineNumber, position.column),
