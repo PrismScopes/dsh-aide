@@ -12,6 +12,8 @@ import { WorkbenchError } from './wire.ts'
 export { codiconAsset, fileIconAsset, katexAsset, monacoAsset, onigWasmAsset } from './assets.ts'
 
 const require = createRequire(import.meta.url)
+/** 超过这个大小就不再读全文（即使调用方带了 force）。 */
+const HARD_READ_LIMIT = 64 * 1024 * 1024
 const TEXT_LIMIT = 5 * 1024 * 1024
 const PROCESS_TIMEOUT = 30_000
 
@@ -68,14 +70,17 @@ export async function listFiles(cwd: string, path: string): Promise<FileEntry[]>
   return rows.filter(row => row !== undefined).sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'directory' ? -1 : 1)
 }
 
-export async function readDocument(cwd: string, path: string): Promise<FileDocument> {
+export async function readDocument(cwd: string, path: string, force = false): Promise<FileDocument> {
   const { root, absolute } = await workspacePath(cwd, path)
   const info = await stat(absolute)
   if (!info.isFile()) throw new WorkbenchError('not-file', 'path is not a file')
-  const tooLarge = info.size > TEXT_LIMIT
+  // 超过 TEXT_LIMIT 时默认只回一个标记，由客户端在编辑器里问用户；force 是用户确认后再读一次。
+  // 确认后仍有一个硬上限：再大就不读，避免把上百 MiB 塞进内存与消息体。
+  const tooLarge = info.size > TEXT_LIMIT && !force
+  if (!tooLarge && info.size > HARD_READ_LIMIT) throw new WorkbenchError('too-large', `file is larger than ${HARD_READ_LIMIT / 1048576} MiB`, 413)
   const handle = await open(absolute, 'r')
   try {
-    const head = Buffer.alloc(Math.min(info.size, tooLarge ? 4096 : TEXT_LIMIT))
+    const head = Buffer.alloc(Math.min(info.size, tooLarge ? 4096 : info.size))
     const { bytesRead } = await handle.read(head, 0, head.length, 0)
     const bytes = head.subarray(0, bytesRead)
     const binary = bytes.includes(0)

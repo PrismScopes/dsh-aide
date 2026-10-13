@@ -112,9 +112,9 @@ export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string 
         ...Object.entries(dark ? SEMANTIC_DARK : SEMANTIC_LIGHT).map(([token, foreground]) => ({ token, foreground }))
       ],
       colors: {
-        'editor.background': color('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
+        'editor.background': color('--dvw-base', dark ? '#151517' : '#ffffff'),
         'editor.foreground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
-        'editorGutter.background': color('--dsw-alias-bg-layer-1', dark ? '#232324' : '#ffffff'),
+        'editorGutter.background': color('--dvw-base', dark ? '#151517' : '#ffffff'),
         'editorLineNumber.foreground': color('--dsw-alias-label-tertiary', dark ? '#adb2b8' : '#81858c'),
         'editorLineNumber.activeForeground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
         'editor.lineHighlightBackground': color('--dsw-alias-interactive-bg-hover', dark ? '#ffffff14' : '#2631480f'),

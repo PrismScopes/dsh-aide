@@ -12,7 +12,7 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
   switch (method) {
     case 'workspace': return { cwd, name: cwd.split(/[\\/]/).at(-1) || cwd }
     case 'fs.list': return listFiles(cwd, stringField(body, 'path'))
-    case 'fs.read': return readDocument(cwd, stringField(body, 'path'))
+    case 'fs.read': return readDocument(cwd, stringField(body, 'path'), body.force === true)
     case 'fs.save': return saveDocument(cwd, stringField(body, 'path'), stringField(body, 'content'), stringField(body, 'revision'))
     case 'fs.create': return createEntry(cwd, stringField(body, 'path'), body.kind === 'directory' ? 'directory' : 'file').then(() => ({ ok: true }))
     case 'fs.rename': return renameEntry(cwd, stringField(body, 'path'), stringField(body, 'nextPath')).then(() => ({ ok: true }))
