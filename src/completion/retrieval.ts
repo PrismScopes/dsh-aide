@@ -44,6 +44,10 @@ export interface IndexStatus {
   /** 索引构建时间；0 表示尚未构建。 */
   builtAt: number
   stale: boolean
+  /** 当前生效的容量上限。触顶后新增的文件与分块会被跳过。 */
+  limits: IndexLimits
+  /** 是否已达上限：为真时索引不完整，检索质量会低于索引规模所暗示的水平。 */
+  capped: boolean
 }
 
 /** 检索命中：只带位置与分数，正文由调用方按行范围去读（索引不复制仓库内容）。 */
@@ -125,6 +129,8 @@ export class RetrievalIndex {
       chunks,
       builtAt: this.builtAt,
       stale: this.builtAt === 0 || now - this.builtAt > this.options.rebuildIntervalMs,
+      limits: this.limits,
+      capped: this.stored.size >= this.limits.maxFiles || chunks >= this.limits.maxChunks,
     }
   }
 

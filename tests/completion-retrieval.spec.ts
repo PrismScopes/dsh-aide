@@ -141,6 +141,23 @@ describe('retrieval index', () => {
     expect(status.stale).toBe(false)
   })
 
+  it('reports the capacity limits and whether they were hit', async () => {
+    // 触顶后索引不完整，必须能从状态里看出来：否则使用者只会觉得「检索效果一般」。
+    const store = join(mkdtempSync(join(tmpdir(), 'dvw-cap-')), 'index.json')
+    const roomy = new RetrievalIndex(indexOptions(store))
+    expect(roomy.update(reactFile)).toBe('indexed')
+    expect(roomy.status().limits.maxChunks).toBeGreaterThan(1)
+    expect(roomy.status().capped).toBe(false)
+
+    const tightStore = join(mkdtempSync(join(tmpdir(), 'dvw-cap-')), 'index.json')
+    const tight = new RetrievalIndex({ ...indexOptions(tightStore), indexLimits: { maxFiles: 1, maxChunks: 1 } })
+    expect(tight.update(reactFile)).toBe('indexed')
+    expect(tight.update(pythonFile)).toBe('skipped')
+    const status = tight.status()
+    expect(status.limits).toEqual({ maxFiles: 1, maxChunks: 1 })
+    expect(status.capped).toBe(true)
+  })
+
   it('retrieves the related chunk, excludes the edited file and caps the count', () => {
     const store = join(mkdtempSync(join(tmpdir(), 'dvw-index-')), 'index.json')
     const index = new RetrievalIndex(indexOptions(store))
