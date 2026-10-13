@@ -19,11 +19,28 @@ describe('telemetry aggregation', () => {
 
   it('reports null instead of zero when nothing was shown', () => {
     const aggregator = new TelemetryAggregator()
-    expect(aggregator.stats()).toEqual({ shown: 0, accepted: 0, cancelled: 0, acceptanceRate: null, cancelRate: null, averageFirstByteMs: null })
+    expect(aggregator.stats()).toEqual({ shown: 0, accepted: 0, cancelled: 0, failed: 0, acceptanceRate: null, cancelRate: null, averageFirstByteMs: null })
     aggregator.record({ kind: 'accepted', sessionId: 's', language: 'typescript' })
     // 有采纳但没有展示：比率无意义，仍为 null，而不是 Infinity 或 0。
     expect(aggregator.stats().acceptanceRate).toBeNull()
     expect(aggregator.stats().accepted).toBe(1)
+  })
+
+  it('counts upstream failures and remembers why, so a broken path is visible', () => {
+    // 上游失败如果只表现为「没有补全」，第二天只能靠猜。
+    const aggregator = new TelemetryAggregator()
+    aggregator.record(shown({}))
+    aggregator.record({ kind: 'failed', sessionId: 's', language: 'typescript', error: 'deepseek messages transport failed' })
+    aggregator.record({ kind: 'failed', sessionId: 's', language: 'typescript', error: 'timeout' })
+    const stats = aggregator.stats()
+    expect(stats.failed).toBe(2)
+    // 失败不算展示，因此不影响采纳率的分母。
+    expect(stats.shown).toBe(1)
+    expect(aggregator.failure()).toBe('timeout')
+    aggregator.record({ kind: 'failed', sessionId: 's', language: 'typescript', error: '' })
+    expect(aggregator.failure()).toBe('timeout')
+    aggregator.reset()
+    expect(aggregator.failure()).toBeUndefined()
   })
 
   it('splits buckets by language and experiment group', () => {

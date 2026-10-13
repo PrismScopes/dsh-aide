@@ -11,7 +11,7 @@
  */
 
 export interface CompletionTelemetryEvent {
-  kind: 'shown' | 'accepted' | 'cancelled'
+  kind: 'shown' | 'accepted' | 'cancelled' | 'failed'
   sessionId: string
   language: string
   model?: string
@@ -19,12 +19,16 @@ export interface CompletionTelemetryEvent {
   /** 首字节延迟，仅 `shown` 有意义。 */
   firstByteMs?: number
   candidateCount?: number
+  /** 失败原因，仅 `failed` 有意义。 */
+  error?: string
 }
 
 export interface CompletionStats {
   shown: number
   accepted: number
   cancelled: number
+  /** 上游失败次数：与「没有补全」不同，这一项不为零就说明链路有问题。 */
+  failed: number
   /** 采纳率 = 采纳次数 / 给出次数；没有给出过时为 null（不是 0，避免把「无数据」当成「零采纳」）。 */
   acceptanceRate: number | null
   /** 取消率 = 取消次数 / 给出次数。 */
@@ -37,6 +41,7 @@ interface Bucket {
   shown: number
   accepted: number
   cancelled: number
+  failed: number
   firstByteTotal: number
   firstByteSamples: number
 }
@@ -44,7 +49,7 @@ interface Bucket {
 const MAX_BUCKETS = 200
 const OTHER_BUCKET = 'other'
 
-const emptyBucket = (): Bucket => ({ shown: 0, accepted: 0, cancelled: 0, firstByteTotal: 0, firstByteSamples: 0 })
+const emptyBucket = (): Bucket => ({ shown: 0, accepted: 0, cancelled: 0, failed: 0, firstByteTotal: 0, firstByteSamples: 0 })
 
 function statsOf(bucket: Bucket): CompletionStats {
   const ratio = (value: number): number | null => (bucket.shown === 0 ? null : value / bucket.shown)
@@ -52,6 +57,7 @@ function statsOf(bucket: Bucket): CompletionStats {
     shown: bucket.shown,
     accepted: bucket.accepted,
     cancelled: bucket.cancelled,
+    failed: bucket.failed,
     acceptanceRate: ratio(bucket.accepted),
     cancelRate: ratio(bucket.cancelled),
     averageFirstByteMs: bucket.firstByteSamples === 0 ? null : Math.round(bucket.firstByteTotal / bucket.firstByteSamples),
@@ -61,6 +67,8 @@ function statsOf(bucket: Bucket): CompletionStats {
 /** 分桶聚合器。纯内存、无依赖，便于单测与替换。 */
 export class TelemetryAggregator {
   private readonly buckets = new Map<string, Bucket>()
+  /** 最近一次失败原因。诊断时要的就是它，而不是「失败过几次」。 */
+  private lastFailure: string | undefined
 
   /** 记一次事件。未知的语言或分组归入 other，不丢弃 —— 事件丢掉了就再也补不回来。 */
   record(event: CompletionTelemetryEvent): void {
@@ -78,7 +86,10 @@ export class TelemetryAggregator {
         bucket.firstByteSamples += 1
       }
     } else if (event.kind === 'accepted') bucket.accepted += 1
-    else bucket.cancelled += 1
+    else if (event.kind === 'failed') {
+      bucket.failed += 1
+      if (event.error !== undefined && event.error !== '') this.lastFailure = event.error
+    } else bucket.cancelled += 1
   }
 
   /**
@@ -95,6 +106,7 @@ export class TelemetryAggregator {
       total.shown += bucket.shown
       total.accepted += bucket.accepted
       total.cancelled += bucket.cancelled
+      total.failed += bucket.failed
       total.firstByteTotal += bucket.firstByteTotal
       total.firstByteSamples += bucket.firstByteSamples
     }
@@ -110,8 +122,14 @@ export class TelemetryAggregator {
       .map(experiment => ({ experiment, stats: this.stats({ experiment }) }))
   }
 
+  /** 最近一次失败原因，没有失败时为 undefined。 */
+  failure(): string | undefined {
+    return this.lastFailure
+  }
+
   reset(): void {
     this.buckets.clear()
+    this.lastFailure = undefined
   }
 
   private keyOf(event: CompletionTelemetryEvent): string {

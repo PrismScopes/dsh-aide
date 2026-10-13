@@ -204,6 +204,23 @@ describe('accept granularity', () => {
     ;(controller as unknown as { inFlight: unknown }).inFlight = { abort: () => undefined }
     controller.noteChange({ changes: [{ text: 'x' } as unknown as monaco.editor.IModelContentChange] })
     expect(reported[2]).toEqual({ kind: 'cancelled', language: 'typescript' })
+
+    // 上游失败要留痕，否则界面上只表现为「没有补全」。
+    const failing = new InlineCompletionController({
+      client: { suggest: async () => { throw new Error('upstream down') }, recordAccept: () => undefined } as unknown as CompletionClient,
+      controllerId: 'failure-test',
+      kinds: { automatic: 0 as unknown as monaco.languages.InlineCompletionTriggerKind, explicit: 1 as unknown as monaco.languages.InlineCompletionTriggerKind },
+      emptyRangeAt: () => ({ startLineNumber: 1, startColumn: 3, endLineNumber: 1, endColumn: 3 } as unknown as monaco.Range),
+      editor: editor as unknown as monaco.editor.IStandaloneCodeEditor,
+      report: event => { reported.push(event) },
+    })
+    await expect(failing.provide(
+      model as unknown as monaco.editor.ITextModel,
+      { lineNumber: 1, column: 3 } as unknown as monaco.Position,
+      { triggerKind: 1 } as unknown as monaco.languages.InlineCompletionContext,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) } as unknown as monaco.CancellationToken,
+    )).rejects.toThrow('upstream down')
+    expect(reported.at(-1)).toEqual({ kind: 'failed', language: 'typescript', error: 'upstream down' })
   })
 
   it('attaches an accept command to every item', () => {

@@ -35,7 +35,7 @@ export interface InlineCompletionControllerOptions {
    * 埋点出口（文档七）。留成回调而不是直接发请求：这一层只管补全，传输由调用方决定，
    * 也便于单测里断言「展示、采纳、取消」各报了一次。
    */
-  report?: (event: { kind: 'shown' | 'accepted' | 'cancelled'; language: string; model?: string; experiment?: string; firstByteMs?: number; candidateCount?: number }) => void
+  report?: (event: { kind: 'shown' | 'accepted' | 'cancelled' | 'failed'; language: string; model?: string; experiment?: string; firstByteMs?: number; candidateCount?: number; error?: string }) => void
 }
 
 /**
@@ -74,6 +74,8 @@ export class InlineCompletionController {
   private paramsOverride: CompletionParams | undefined
   /** 请求前预过滤用的租户规则（文档 6.4 的请求前一道）。 */
   private securityRules: readonly SecurityRule[] = []
+  /** 服务端下发（并按会话稳定分配）的实验分组，用于给尚未拿到响应的埋点归组。 */
+  private experiment: string | undefined
   /** 当前展示的建议：整块之外的采纳粒度都基于它切分。 */
   private current: { text: string; position: { lineNumber: number; column: number }; path: string } | undefined
   /** 上一次成功产出的候选与它对应的位置，供自动触发直接呈现（文档 4.1：命中缓存不发请求）。 */
@@ -83,7 +85,7 @@ export class InlineCompletionController {
 
   /** 由 Monaco 在条目被采纳时调起（整块采纳走这条路）。 */
   recordAccepted(payload: Pick<AcceptPayload, 'path' | 'offset' | 'text'>): void {
-    this.options.report?.({ kind: 'accepted', language: this.languageOf() })
+    this.options.report?.({ kind: 'accepted', language: this.languageOf(), ...(this.experiment === undefined ? {} : { experiment: this.experiment }) })
     this.options.client.recordAccept({
       filePath: payload.path,
       start: payload.offset,
@@ -131,6 +133,11 @@ export class InlineCompletionController {
     this.paramsOverride = params
   }
 
+  /** 应用服务端下发的实验分组。 */
+  setExperiment(experiment: string | undefined): void {
+    this.experiment = experiment
+  }
+
   /** 应用服务端下发的安全规则；空数组表示不做请求前过滤。 */
   setSecurityRules(rules: readonly SecurityRule[]): void {
     this.securityRules = rules
@@ -161,7 +168,7 @@ export class InlineCompletionController {
   noteChange(event: { changes: readonly monaco.editor.IModelContentChange[] }): void {
     this.tracker.lastChangeHadNewline = event.changes.some(change => change.text.includes('\n'))
     // 有在途请求而被这次变更作废，就是一次「请求取消」（文档七的取消率指标）。
-    if (this.inFlight !== undefined) this.options.report?.({ kind: 'cancelled', language: this.languageOf() })
+    if (this.inFlight !== undefined) this.options.report?.({ kind: 'cancelled', language: this.languageOf(), ...(this.experiment === undefined ? {} : { experiment: this.experiment }) })
     this.inFlight?.abort()
     this.inFlight = undefined
     this.scheduleTrigger()
@@ -212,6 +219,8 @@ export class InlineCompletionController {
       })
     } catch (error) {
       if (controller.signal.aborted) return undefined
+      // 上游失败要留痕：否则界面上只表现为「没有补全」，第二天只能靠猜（文档 4.3 的用途是问题定位）。
+      this.options.report?.({ kind: 'failed', language, error: error instanceof Error ? error.message : String(error), ...(this.experiment === undefined ? {} : { experiment: this.experiment }) })
       throw error
     } finally {
       if (this.inFlight === controller) this.inFlight = undefined
@@ -280,6 +289,7 @@ export function attachInlineCompletion(monacoApi: typeof monaco, editor: monaco.
   // 服务端下发的参数与规则在这里生效；拉不到就继续用本地默认值，补全不受影响。
   void loadConfig(options.sessionId ?? '').then(config => {
     controller.setParams(config.params)
+    controller.setExperiment(config.experiment)
     controller.setSecurityRules(config.security?.rules ?? [])
     // 环境元数据里带上分组标识（文档 4.3）；服务端仍会按会话重新分配，这份用于对齐语义。
     if (config.experiment !== undefined) client.setEnvironment({ experiment: config.experiment })

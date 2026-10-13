@@ -32,17 +32,18 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
     }
     case 'completion.telemetry': {
       const kind = stringField(body, 'kind')
-      if (kind !== 'shown' && kind !== 'accepted' && kind !== 'cancelled') throw new WorkbenchError('invalid-argument', `unknown telemetry kind ${kind}`)
+      if (kind !== 'shown' && kind !== 'accepted' && kind !== 'cancelled' && kind !== 'failed') throw new WorkbenchError('invalid-argument', `unknown telemetry kind ${kind}`)
       completionTelemetry.record({
         kind, sessionId, language: stringField(body, 'language'),
         ...(typeof body.model === 'string' && body.model !== '' ? { model: body.model } : {}),
         ...(typeof body.experiment === 'string' && body.experiment !== '' ? { experiment: body.experiment } : {}),
         ...(typeof body.firstByteMs === 'number' && Number.isFinite(body.firstByteMs) ? { firstByteMs: body.firstByteMs } : {}),
         ...(typeof body.candidateCount === 'number' && Number.isFinite(body.candidateCount) ? { candidateCount: body.candidateCount } : {}),
+        ...(typeof body.error === 'string' && body.error !== '' ? { error: body.error } : {}),
       })
       return { recorded: true }
     }
-    case 'completion.stats': return { overall: completionTelemetry.stats(), byExperiment: completionTelemetry.byExperiment() }
+    case 'completion.stats': return { overall: completionTelemetry.stats(), byExperiment: completionTelemetry.byExperiment(), lastFailure: completionTelemetry.failure() }
     case 'fs.list': return listFiles(cwd, stringField(body, 'path'))
     case 'fs.read': return readDocument(cwd, stringField(body, 'path'), body.force === true)
     case 'fs.save': return saveDocument(cwd, stringField(body, 'path'), stringField(body, 'content'), stringField(body, 'revision'))
