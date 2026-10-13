@@ -36,6 +36,22 @@ export interface InlineCompletionControllerOptions {
   params?: CompletionParams
   /** 由 Monaco 的触发类型常量注入，避免在纯逻辑里依赖 monaco 的运行时值。 */
   kinds: { automatic: monaco.languages.InlineCompletionTriggerKind; explicit: monaco.languages.InlineCompletionTriggerKind }
+  /** 造一个光标处的空范围；由调用方注入，便于单测。 */
+  emptyRangeAt(position: { lineNumber: number; column: number }): monaco.Range
+}
+
+/**
+ * 把候选文本做成 Monaco 的行内补全条目。
+ *
+ * 必须显式给范围：省略时 Monaco 的默认替换范围是「当前词的起点到行尾」，会把插入当成替换，
+ * 而类型声明要求被替换文本必须是插入文本的前缀 —— 不满足就直接被丢弃（表现为「明明拿到了候选
+ * 却不显示幻影文本」）。空范围在光标处等于纯插入。
+ */
+export function buildInlineCompletionItems<TItem>(candidates: readonly string[], position: { lineNumber: number; column: number }, emptyRangeAt: (position: { lineNumber: number; column: number }) => TItem): Array<{ insertText: string; filterText: string; range: TItem }> {
+  const range = emptyRangeAt(position)
+  return candidates
+    .filter(text => text !== '')
+    .map(text => ({ insertText: text, filterText: text, range }))
 }
 
 export class InlineCompletionController {
@@ -85,9 +101,7 @@ export class InlineCompletionController {
       if (this.inFlight === controller) this.inFlight = undefined
     }
 
-    const items = response.candidates
-      .filter(text => text !== '')
-      .map(text => ({ insertText: text }))
+    const items = buildInlineCompletionItems(response.candidates, position, this.options.emptyRangeAt)
     return items.length === 0 ? undefined : { items }
   }
 
@@ -113,6 +127,7 @@ export function attachInlineCompletion(monacoApi: typeof monaco, editor: monaco.
     client,
     ...(options.params === undefined ? {} : { params: options.params }),
     kinds: { automatic: monacoApi.languages.InlineCompletionTriggerKind.Automatic, explicit: monacoApi.languages.InlineCompletionTriggerKind.Explicit },
+    emptyRangeAt: position => new monacoApi.Range(position.lineNumber, position.column, position.lineNumber, position.column),
   })
   const model = editor.getModel()
   const key = model?.uri.toString() ?? ''

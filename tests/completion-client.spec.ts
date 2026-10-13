@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { applyEvent, CompletionClient, contextFingerprint, triggerPlan } from '../src/client/completion.ts'
+import { buildInlineCompletionItems } from '../src/client/inlineCompletion.ts'
 import { encodeSseEvent, type CompletionEvent } from '../src/completion/protocol.ts'
 import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
 
@@ -55,6 +56,25 @@ describe('context fingerprint', () => {
     expect(contextFingerprint(base)).toBe(contextFingerprint({ ...base }))
     expect(contextFingerprint(base)).not.toBe(contextFingerprint({ ...base, document: 'const value = useSta' }))
     expect(contextFingerprint(base)).not.toBe(contextFingerprint({ ...base, rewriteAt: { line: 1, column: 15 } }))
+  })
+})
+
+describe('inline completion items', () => {
+  const emptyRangeAt = (position: { lineNumber: number; column: number }) => ({
+    startLineNumber: position.lineNumber, startColumn: position.column, endLineNumber: position.lineNumber, endColumn: position.column,
+  })
+
+  it('anchors the insertion at the cursor instead of the current word', () => {
+    // 省略 range 时 Monaco 的默认替换范围是「当前词起点到行尾」，会把插入当成替换，
+    // 而类型声明要求被替换文本是插入文本的前缀 —— 不满足就静默丢弃，表现为「拿到了候选却不显示幻影文本」。
+    expect(buildInlineCompletionItems(['ate'], { lineNumber: 2, column: 16 }, emptyRangeAt)).toEqual([
+      { insertText: 'ate', filterText: 'ate', range: { startLineNumber: 2, startColumn: 16, endLineNumber: 2, endColumn: 16 } },
+    ])
+  })
+
+  it('drops empty candidates and keeps the order', () => {
+    const items = buildInlineCompletionItems(['first', '', 'second'], { lineNumber: 1, column: 1 }, emptyRangeAt)
+    expect(items.map(item => item.insertText)).toEqual(['first', 'second'])
   })
 })
 
