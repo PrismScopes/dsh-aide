@@ -1,7 +1,11 @@
 import type { ComponentType } from 'react'
 
 export type WorkbenchView = 'explorer' | 'search' | 'git'
-export interface BottomPanelProps { sessionId: string; cwd: string; visible: boolean; colorScheme: 'dark' | 'light' }
+/**
+ * `header` 是面板头里那块留给面板自己用的容器。终端面板把标签渲染进去：标签的状态（当前是哪一个、
+ * 拆分了哪几个）属于终端面板，把状态上提到 Workbench 只为了让标签出现在头部，会让职责变乱。
+ */
+export interface BottomPanelProps { sessionId: string; cwd: string; visible: boolean; colorScheme: 'dark' | 'light'; header?: HTMLElement | null }
 export interface BottomPanelContribution { id: string; title: string; component: ComponentType<BottomPanelProps> }
 export interface WorkbenchCommand { id: string; run(): void }
 export interface WorkbenchSnapshot { visible: boolean; view: WorkbenchView; bottomPanel?: string }

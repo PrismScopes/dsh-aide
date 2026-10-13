@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import { Icon } from './Icon.tsx'
@@ -70,7 +71,7 @@ function XtermView({ workspace, id, colorScheme }: { workspace: TerminalWorkspac
 }
 
 /** Render interactive terminal tabs in the workbench bottom panel. */
-export function TerminalPanel({ sessionId, colorScheme }: BottomPanelProps) {
+export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelProps) {
   const workspaceRef = useRef<{ sessionId: string; value: TerminalWorkspaceController }>()
   if (workspaceRef.current?.sessionId !== sessionId) workspaceRef.current = { sessionId, value: new TerminalWorkspaceController(sessionId) }
   const workspace = workspaceRef.current.value
@@ -109,7 +110,20 @@ export function TerminalPanel({ sessionId, colorScheme }: BottomPanelProps) {
   const splitTerminal = (first = active) => { if (first === undefined) return; void workspace.create().then(value => { setSplit(current => [...(current?.includes(first) ? current : [first]), value.id]); setActive(value.id) }) }
   const shown = (split ?? (active === undefined ? [] : [active])).filter(id => snapshot.terminals.some(value => value.id === id))
   const selectTerminal = (id: string) => { setActive(id); setSplit(current => current?.includes(id) ? current : [id]) }
+  // 顶部标签栏。渲染进面板头里留给面板的那块容器（见 service.ts 的 BottomPanelProps.header）：
+  // 标签状态属于终端面板，上提到 Workbench 只为了挪个位置会把职责弄乱。
+  const tabs = <div className="dvw-bottom-tabs" role="tablist" aria-label="终端标签">
+    {snapshot.terminals.map(value => <span key={value.id} className="dvw-bottom-tab" data-active={active === value.id || undefined}>
+      <button type="button" role="tab" aria-selected={active === value.id} className="dvw-bottom-tab-label" title={value.title}
+        onClick={() => selectTerminal(value.id)}
+        onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}>
+        <Icon name="terminal"/><span className="dvw-bottom-tab-name">{value.title}</span>
+      </button>
+      <button type="button" className="dvw-bottom-tab-close" title="终止终端" aria-label={`终止 ${value.title}`} onClick={() => closeTerminal(value.id)}><Icon name="close"/></button>
+    </span>)}
+  </div>
   return <div className="dvw-terminal-root">
+    {header !== undefined && header !== null && createPortal(tabs, header)}
     <div className="dvw-terminal-main">
       {snapshot.error !== undefined && <div className="dvw-terminal-error">{snapshot.error}</div>}
       <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>{shown.map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} />)}</div>
@@ -125,7 +139,7 @@ export function TerminalPanel({ sessionId, colorScheme }: BottomPanelProps) {
       window.addEventListener('pointerup', up)
     }}/>
     <aside className="dvw-terminal-tabs" style={{ width: sideWidth }} aria-label="终端会话">
-      <div className="dvw-terminal-list">{snapshot.terminals.map(value => renaming?.id === value.id ? <div key={value.id} className="dvw-terminal-entry" data-active><div className="dvw-terminal-tab"><Icon name="terminal"/><input className="dvw-terminal-rename" value={renaming.value} autoFocus aria-label="终端名称" onChange={event => setRenaming({ id: value.id, value: event.target.value })} onKeyDown={event => { if (event.key === 'Enter') saveRename(value.id); if (event.key === 'Escape') setRenaming(undefined) }} onBlur={() => saveRename(value.id)}/></div></div> : <div key={value.id} className="dvw-terminal-entry" data-active={active === value.id} data-split-member={shown.includes(value.id) || undefined}><button className="dvw-terminal-tab" onClick={() => selectTerminal(value.id)} onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}><Icon name="terminal"/>{value.title}</button><div className="dvw-terminal-entry-actions"><button title="拆分终端" onClick={() => splitTerminal(value.id)}><Icon name="split-horizontal"/></button><button title="终止终端" onClick={() => closeTerminal(value.id)}><Icon name="trash"/></button></div></div>)}</div>
+      <div className="dvw-terminal-list">{snapshot.terminals.map(value => renaming?.id === value.id ? <div key={value.id} className="dvw-terminal-entry" data-active><div className="dvw-terminal-tab"><Icon name="terminal"/><input className="dvw-terminal-rename" value={renaming.value} autoFocus aria-label="终端名称" onChange={event => setRenaming({ id: value.id, value: event.target.value })} onKeyDown={event => { if (event.key === 'Enter') saveRename(value.id); if (event.key === 'Escape') setRenaming(undefined) }} onBlur={() => saveRename(value.id)}/></div></div> : <div key={value.id} className="dvw-terminal-entry" data-active={active === value.id}><button className="dvw-terminal-tab" onClick={() => selectTerminal(value.id)} onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}><Icon name="terminal"/>{value.title}</button><div className="dvw-terminal-entry-actions"><button title="拆分终端" onClick={() => splitTerminal(value.id)}><Icon name="split-horizontal"/></button><button title="终止终端" onClick={() => closeTerminal(value.id)}><Icon name="trash"/></button></div></div>)}</div>
       {context !== undefined && <div className="dvw-terminal-menu" role="menu" style={{ left: context.x, top: context.y }} onPointerDown={event => event.stopPropagation()}><button role="menuitem" onClick={() => { const terminal = snapshot.terminals.find(value => value.id === context.id); setContext(undefined); if (terminal !== undefined) setRenaming({ id: terminal.id, value: terminal.title }) }}>重命名</button><button className="dvw-terminal-menu-danger" role="menuitem" onClick={() => closeTerminal(context.id)}>终止终端</button></div>}
     </aside>
   </div>
