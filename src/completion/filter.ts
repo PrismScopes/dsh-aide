@@ -91,7 +91,8 @@ export function dropReason(candidate: string, state: FilterState, options: Filte
 
   // 1. 与上次采纳区间同行：重写区间落在上次采纳区间内、文本长度等于区间长度、且同一文件。
   if (lastAccepted !== undefined && lastAccepted.filePath === state.filePath) {
-    const inside = offset >= lastAccepted.start && offset <= lastAccepted.end
+    // 左闭右开：采纳后光标停在区间末端，那一位置属于「新的补全起点」，不该被当作重叠。
+    const inside = offset >= lastAccepted.start && offset < lastAccepted.end
     if (inside && candidate.length === lastAccepted.end - lastAccepted.start) return 'same-line-as-last-accept'
     // 2. 与上次内联采纳区间重叠：只看内联补全的采纳区间。
     if (lastAccepted.inline && inside) return 'overlaps-last-inline-accept'

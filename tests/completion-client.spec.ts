@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { applyEvent, CompletionClient, contextFingerprint, triggerPlan } from '../src/client/completion.ts'
-import { buildInlineCompletionItems } from '../src/client/inlineCompletion.ts'
+import type * as monaco from 'monaco-editor'
+import { ACCEPT_COMMAND_ID, buildInlineCompletionItems, InlineCompletionController, nextLineOf, nextWordOf } from '../src/client/inlineCompletion.ts'
 import { encodeSseEvent, type CompletionEvent } from '../src/completion/protocol.ts'
 import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
 
@@ -75,6 +76,63 @@ describe('inline completion items', () => {
   it('drops empty candidates and keeps the order', () => {
     const items = buildInlineCompletionItems(['first', '', 'second'], { lineNumber: 1, column: 1 }, emptyRangeAt)
     expect(items.map(item => item.insertText)).toEqual(['first', 'second'])
+  })
+})
+
+describe('accept granularity', () => {
+  it('takes a whole identifier as one word and a single character otherwise', () => {
+    expect(nextWordOf('useState(0)')).toBe('useState')
+    expect(nextWordOf('  call()')).toBe('  call')
+    expect(nextWordOf('(0)')).toBe('(')
+    expect(nextWordOf('42 + 1')).toBe('42')
+    expect(nextWordOf('')).toBe('')
+  })
+
+  it('takes one line, keeping the newline so repeated accepts continue', () => {
+    expect(nextLineOf('first()\nsecond()')).toBe('first()\n')
+    expect(nextLineOf('only()')).toBe('only()')
+    expect(nextLineOf('\nrest')).toBe('\n')
+  })
+
+  it('writes one word per accept and records the accepted range', () => {
+    // acceptPartial 需要一个编辑器：这里用最小的假编辑器，把「切几分之几」「写了什么」「记了什么」钉住。
+    const edits: Array<{ range: unknown; text: string }> = []
+    const recorded: Array<{ filePath: string; start: number; end: number; text: string; inline: boolean }> = []
+    const model = { getOffsetAt: (position: { lineNumber: number; column: number }) => position.column - 1 }
+    const editor = {
+      executeEdits: (_source: string, list: Array<{ range: unknown; text: string }>) => { for (const edit of list) edits.push(edit) },
+      // 建议从第 3 列（偏移 2）起：假编辑器的光标位置必须带上这个基数。
+      getPosition: () => ({ lineNumber: 1, column: 3 + edits.reduce((sum, edit) => sum + edit.text.length, 0) }),
+      getModel: () => model,
+    }
+    const client = { recordAccept: (range: typeof recorded[number]) => recorded.push(range) }
+    const controller = new InlineCompletionController({
+      client: client as unknown as CompletionClient,
+      kinds: { automatic: 0 as unknown as monaco.languages.InlineCompletionTriggerKind, explicit: 1 as unknown as monaco.languages.InlineCompletionTriggerKind },
+      emptyRangeAt: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } as unknown as monaco.Range),
+      editor: editor as unknown as monaco.editor.IStandaloneCodeEditor,
+      controllerId: 'test-controller',
+    })
+    // 建议内容与位置由 provide 决定，这里直接注入：'useState(0)' 从第 3 列起。
+    ;(controller as unknown as { current: unknown }).current = { text: 'useState(0)', position: { lineNumber: 1, column: 3 }, path: 'a.ts' }
+    // 切词定义：标识符整体、数字整体、其余取单个非空白字符。
+    expect(controller.acceptPartial('word')).toBe('useState')
+    expect(controller.acceptPartial('word')).toBe('(')
+    expect(controller.acceptPartial('word')).toBe('0')
+    expect(controller.acceptPartial('word')).toBe(')')
+    expect(controller.acceptPartial('word')).toBeUndefined()
+    expect(edits.map(edit => edit.text)).toEqual(['useState', '(', '0', ')'])
+    expect(recorded[0]).toEqual({ filePath: 'a.ts', start: 2, end: 10, text: 'useState', inline: true })
+    // 每次采纳记录的是它自己插入的位置：光标随之前移，所以最后一段的偏移是 2 + 8 + 1 + 1。
+    expect(recorded[1]).toEqual({ filePath: 'a.ts', start: 10, end: 11, text: '(', inline: true })
+    expect(recorded[3]).toEqual({ filePath: 'a.ts', start: 12, end: 13, text: ')', inline: true })
+  })
+
+  it('attaches an accept command to every item', () => {
+    const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }
+    const items = buildInlineCompletionItems(['ate', 'ation'], { lineNumber: 1, column: 1 }, () => range, text => ({ id: ACCEPT_COMMAND_ID, title: 'record', arguments: [{ path: 'a.ts', offset: 3, text }] }))
+    expect(items.map(item => item.command?.id)).toEqual([ACCEPT_COMMAND_ID, ACCEPT_COMMAND_ID])
+    expect(items[0]?.command?.arguments[0]).toEqual({ path: 'a.ts', offset: 3, text: 'ate' })
   })
 })
 

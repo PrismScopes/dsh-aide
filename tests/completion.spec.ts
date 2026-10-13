@@ -173,6 +173,13 @@ describe('candidate filtering', () => {
     expect(dropReason('anything', state)).toBe('overlaps-last-inline-accept')
   })
 
+  it('treats the accepted range as half-open so the position after an accept stays usable', () => {
+    // 采纳后光标正好停在区间末端，那里应当是「新的补全起点」，否则采纳一次之后再也不会提示。
+    const state = baseState({ document: '      ', offset: 6, lastAccepted: { filePath: 'a.ts', start: 0, end: 6, text: 'sixchr', inline: true } })
+    expect(dropReason('anything', state)).toBeUndefined()
+    expect(dropReason('sixchr', state)).toBeUndefined()
+  })
+
   it('drops the cancelled suggestion and the rollback edit', () => {
     expect(dropReason('suggested', baseState({ cancelledSuggestion: 'suggested' }))).toBe('repeats-cancelled-suggestion')
     expect(dropReason('before', baseState({ document: 'xxxxxzzz', offset: 5, lastEdit: { before: 'before', after: 'after' } }))).toBe('rollback-edit')
