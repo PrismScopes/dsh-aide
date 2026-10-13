@@ -24,11 +24,28 @@ import {
   filterCandidates,
   postProcess,
   trimDuplicateTrailingSymbol,
+  trimPrefixOverlap,
   truncateAfterCompleteBlock,
   type FilterState,
 } from '../src/completion/filter.ts'
 import { identifiersStartingWith, localCompletion, trailingIdentifier, unclosedClosers } from '../src/completion/provider.ts'
 import { runCompletion } from '../src/completion/service.ts'
+
+describe('prefix overlap', () => {
+  it('trims what a chat model repeats from before the cursor', () => {
+    // 输入 use、模型返回 useState：不去掉就会在同一行出现两份 use。
+    expect(trimPrefixOverlap('useState', 'const a = use', 13)).toBe('State')
+    expect(trimPrefixOverlap(' value', 'const a =', 9)).toBe(' value')
+    expect(trimPrefixOverlap(' value', 'const a = ', 10)).toBe('value')
+    // 整条都是重叠：结果为空，调用方按空候选丢弃。
+    expect(trimPrefixOverlap('useState', 'useState', 8)).toBe('')
+    // 只有开头重叠时，其余内容保留。
+    expect(trimPrefixOverlap('items.length)\nreturn 0', 'const n = items', 16)).toBe('.length)\nreturn 0')
+    // 超出比对窗口的部分不参与判断。
+    expect(trimPrefixOverlap('State', 'x'.repeat(200) + 'use', 203)).toBe('State')
+  })
+})
+
 import type { CompletionProvider } from '../src/completion/provider.ts'
 import type { CompletionRequest } from '../src/completion/protocol.ts'
 

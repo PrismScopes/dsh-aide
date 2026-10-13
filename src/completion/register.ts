@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from './params.ts'
 import { encodeSseEvent, type CompletionEvent, type CompletionRequest } from './protocol.ts'
 import { dshProvider, type DshDefaultModelService, type DshLlmService } from './dshProvider.ts'
-import { localProvider, type CompletionProvider } from './provider.ts'
+import { httpProvider, localProvider, type CompletionProvider } from './provider.ts'
 import { DEFAULT_PROMPT_PROFILE, INSTRUCTION_PROMPT_PROFILE, type PromptProfile } from './prompt.ts'
 import { runCompletion } from './service.ts'
 import { WorkspaceIndex } from './workspaceIndex.ts'
@@ -24,14 +24,18 @@ export interface CompletionContextLike { get(name: string): unknown }
 export interface ResolvedCompletionProvider {
   provider: CompletionProvider
   profile: PromptProfile
-  source: 'dsh' | 'local'
+  source: 'dsh' | 'local' | 'http'
   model: string
 }
 
 /**
- * 选提供方：有 DSH 模型服务就用它，没有就退到不联网的本地兜底。
+ * 选提供方。三种来源，按部署条件挑一条：
  *
- * 两个服务分别探测而不是一起判：缺 `agentDefaultModel` 时仍可让配置里指定模型（第二期加），
+ * - 显式要求本地兜底（`DSH_COMPLETION_PROVIDER=local`）：离线、或单独验证客户端链路时用；
+ * - 配了 OpenAI 兼容的补全端点（`DSH_COMPLETION_ENDPOINT`）：不依赖 DSH 账号的部署通道；
+ * - 其余情况用 DSH 的模型服务，它不可用时退回本地兜底。
+ *
+ * DSH 的两个服务分别探测而不是一起判：缺 `agentDefaultModel` 时仍可让配置里指定模型，
  * 但缺 `llm` 就一定没有模型可用。
  */
 export function resolveProvider(ctx: CompletionContextLike, params: CompletionParams = DEFAULT_COMPLETION_PARAMS): ResolvedCompletionProvider {
@@ -39,6 +43,16 @@ export function resolveProvider(ctx: CompletionContextLike, params: CompletionPa
   const defaultModel = ctx.get('agentDefaultModel') as DshDefaultModelService | undefined
   // 允许显式指定本地兜底：离线、或要单独验证客户端链路时用；不设则优先用 DSH 的模型服务。
   const forced = (globalThis.process?.env?.['DSH_COMPLETION_PROVIDER'] ?? '').toLowerCase()
+  const endpoint = globalThis.process?.env?.['DSH_COMPLETION_ENDPOINT'] ?? ''
+  if (forced !== 'local' && endpoint !== '') {
+    const model = globalThis.process?.env?.['DSH_COMPLETION_MODEL'] ?? 'completion'
+    const apiKey = globalThis.process?.env?.['DSH_COMPLETION_API_KEY']
+    const provider = httpProvider({
+      baseUrl: endpoint, model,
+      ...(apiKey === undefined || apiKey === '' ? {} : { apiKey }),
+    })
+    return { provider, profile: DEFAULT_PROMPT_PROFILE, source: 'http', model }
+  }
   if (forced !== 'local' && llm !== undefined && defaultModel !== undefined) {
     const provider = dshProvider(llm, defaultModel, { params })
     return { provider, profile: INSTRUCTION_PROMPT_PROFILE, source: 'dsh', model: provider.model }

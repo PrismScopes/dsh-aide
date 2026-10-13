@@ -166,6 +166,25 @@ export function closeBrackets(candidate: string): string {
   return stack.length === 0 ? candidate : candidate + stack.reverse().filter(close => close !== '"' && close !== "'" && close !== '`').join('')
 }
 
+/** 与光标前文本比对的最长长度：真实重叠都很短，比得过长只是白做功。 */
+const PREFIX_OVERLAP_LIMIT = 128
+
+/**
+ * 后处理：去掉候选开头与光标前文本重复的部分。
+ *
+ * 候选是插入式的，而对话模型常把已输入的内容重复一遍（输入 `use`、它返回 `useState`）。
+ * 不去掉就会在同一行出现两份。取最长重叠、重叠多长去多长 —— 模型重复上下文远比「巧合地
+ * 从同样的字符开始」常见，这也是 FIM 补全的通行做法。
+ */
+export function trimPrefixOverlap(candidate: string, document: string, offset: number): string {
+  const before = document.slice(Math.max(0, offset - PREFIX_OVERLAP_LIMIT), offset)
+  const limit = Math.min(before.length, candidate.length, PREFIX_OVERLAP_LIMIT)
+  for (let length = limit; length > 0; length--) {
+    if (before.endsWith(candidate.slice(0, length))) return candidate.slice(length)
+  }
+  return candidate
+}
+
 /** 后处理：处理重复文本。候选内部同一行连续重复三次以上时压成一次。 */
 export function collapseRepeatedLines(candidate: string): string {
   const lines = candidate.split('\n')
@@ -216,6 +235,7 @@ export function stripCodeFence(candidate: string): string {
 /** 后处理五件事的组合入口，顺序按文档给出的次序。 */
 export function postProcess(candidate: string, state: Pick<FilterState, 'document' | 'offset'>): string {
   let text = stripCodeFence(candidate)
+  text = trimPrefixOverlap(text, state.document, state.offset)
   text = collapseRepeatedLines(text)
   text = trimDuplicateTrailingSymbol(text, state.document, state.offset)
   text = closeBrackets(text)

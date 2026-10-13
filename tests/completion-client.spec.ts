@@ -346,6 +346,23 @@ describe('completion client', () => {
     expect(result.security?.ruleId).toBe('generic-credential')
   })
 
+  it('removes the part of the candidate that repeats the text before the cursor', async () => {
+    // 对话模型常把已输入的内容又吐一遍：候选是插入式的，不去掉就会在同一行出现两份。
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'output', candidates: [{ index: 0, text: 'total(', finishReason: '', elapsedMs: 1 }] })))
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'output', candidates: [{ index: 0, text: 'items)', finishReason: '', elapsedMs: 2 }] })))
+        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'done' })))
+        controller.close()
+      },
+    })
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl: async () => new Response(stream, { status: 200 }) })
+    // 光标在 'const n = total' 之后（'(' 之前，0 起第 15 列）。
+    const result = await client.suggest(input({ document: 'const n = total(', rewriteAt: { line: 1, column: 15 } }))
+    expect(result.candidates).toEqual(['(items)'])
+  })
+
   it('reports an error event as a thrown failure', async () => {
     const fetchImpl = vi.fn(async () => streamResponse(events({ type: 'error', code: 'completion-timeout', message: 'slow' })))
     const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
