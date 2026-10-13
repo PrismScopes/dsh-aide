@@ -86,7 +86,16 @@ export function TerminalPanel({ sessionId, colorScheme }: BottomPanelProps) {
     return () => { cancelled = true }
   }, [workspace])
   useEffect(() => { if (snapshot.terminals.length > 0 && (!active || !snapshot.terminals.some(value => value.id === active))) setActive(snapshot.terminals[0]?.id) }, [snapshot.terminals, active])
-  useEffect(() => { const create = () => { void workspace.create().then(value => setActive(value.id)) }; window.addEventListener('dvw-terminal-new', create); return () => window.removeEventListener('dvw-terminal-new', create) }, [workspace])
+  // profile 从事件 detail 里拿：面板头部那个分体按钮选中某个 shell 时会带上它。
+  // 命令入口（terminal.new）派发的是不带 detail 的普通事件，走平台默认 shell。
+  useEffect(() => {
+    const create = (event: Event) => {
+      const profile = (event as CustomEvent<{ profile?: string }>).detail?.profile
+      void workspace.create(profile === undefined ? {} : { profile }).then(value => setActive(value.id))
+    }
+    window.addEventListener('dvw-terminal-new', create)
+    return () => window.removeEventListener('dvw-terminal-new', create)
+  }, [workspace])
   useEffect(() => {
     if (context === undefined) return
     const close = () => setContext(undefined)

@@ -1,4 +1,4 @@
-import type { TerminalInfo } from '../terminal.ts'
+import type { TerminalInfo, TerminalProfile } from '../terminal.ts'
 import { currentHostBase, normalizeHostBase } from './api.ts'
 
 export interface TerminalConnection {
@@ -13,7 +13,7 @@ export interface TerminalWorkspaceSnapshot { terminals: readonly TerminalInfo[];
 /** Browser client for the workbench's local terminal transport. */
 export interface TerminalWorkspace {
   refresh(): Promise<void>
-  create(title?: string): Promise<TerminalInfo>
+  create(options?: { title?: string; profile?: string }): Promise<TerminalInfo>
   close(id: string): Promise<void>
   rename(id: string, title: string): Promise<void>
   connect(id: string): TerminalConnection
@@ -44,6 +44,17 @@ async function request<T>(method: string, body: Record<string, unknown>): Promis
   try { answer = JSON.parse(text) as HostAnswer<T> } catch { throw new Error(`terminal request returned invalid JSON (${response.status})`) }
   if (!response.ok || answer.ok !== true) throw new Error(answer.error?.message ?? 'terminal request failed')
   return { value: answer.value as T, wsBase: typeof answer.wsBase === 'string' ? answer.wsBase : undefined }
+}
+
+/**
+ * 取宿主探测到的可选 shell 列表。
+ *
+ * 独立于控制器导出，因为「新建终端」菜单在面板头部，那里没有控制器的实例；
+ * 而这份列表只取决于机器上装了什么，与当前终端集合无关。
+ */
+export async function terminalProfiles(sessionId: string): Promise<TerminalProfile[]> {
+  const answer = await request<TerminalProfile[]>('profiles', { sessionId })
+  return answer.value
 }
 
 class SocketConnection implements TerminalConnection {
@@ -95,7 +106,7 @@ export class TerminalWorkspaceController implements TerminalWorkspace {
     } catch (error) { this.set({ ...this.snapshot, loading: false, error: error instanceof Error ? error.message : String(error) }) }
   }
 
-  async create(title?: string): Promise<TerminalInfo> { const answer = await request<TerminalInfo>('create', { sessionId: this.sessionId, ...(title === undefined ? {} : { title }) }); this.wsBase = answer.wsBase ?? this.wsBase; await this.refresh(); return answer.value }
+  async create(options: { title?: string; profile?: string } = {}): Promise<TerminalInfo> { const answer = await request<TerminalInfo>('create', { sessionId: this.sessionId, ...(options.title === undefined ? {} : { title: options.title }), ...(options.profile === undefined ? {} : { profile: options.profile }) }); this.wsBase = answer.wsBase ?? this.wsBase; await this.refresh(); return answer.value }
   async close(id: string): Promise<void> { await request('close', { sessionId: this.sessionId, id }); await this.refresh() }
   async rename(id: string, title: string): Promise<void> { await request('rename', { sessionId: this.sessionId, id, title }); await this.refresh() }
   connect(id: string): TerminalConnection { return new SocketConnection(this.sessionId, id, this.wsBase) }

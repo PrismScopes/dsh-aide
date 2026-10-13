@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { isTerminalProtocolReply } from '../src/client/terminal.ts'
-import { defaultTerminalShell, sanitizedTerminalEnv } from '../src/terminal.ts'
+import { defaultTerminalShell, sanitizedTerminalEnv, terminalProfiles, terminalShell } from '../src/terminal.ts'
+import type { ProfileProbe } from '../src/terminal.ts'
+
+/** 给定「文件系统里存在哪些文件」与「PATH 上能找到哪些可执行文件」。 */
+function fakeProbe(existing: readonly string[], onPath: Record<string, string>): ProfileProbe {
+  return { exists: candidate => existing.includes(candidate), which: file => onPath[file] }
+}
 
 describe('terminal host settings', () => {
   it('keeps normal shell variables while removing credentials', () => {
@@ -22,5 +28,50 @@ describe('terminal host settings', () => {
     expect(isTerminalProtocolReply('\x1b]11;rgb:1313/1414/1717\x1b\\')).toBe(true)
     expect(isTerminalProtocolReply('\x1b[?62;1;2;6;7;8;9c')).toBe(true)
     expect(isTerminalProtocolReply('git status\r')).toBe(false)
+  })
+})
+
+describe('terminal profiles', () => {
+  const git = 'H:\\AppData\\Git\\cmd\\git.exe'
+  const env = { PATH: 'C:\\Windows\\System32', COMSPEC: 'C:\\Windows\\System32\\cmd.exe', SystemRoot: 'C:\\Windows' }
+
+  it('lists the shells a VS Code style menu would offer', () => {
+    const probe = fakeProbe(
+      ['H:\\AppData\\Git\\bin\\bash.exe', 'C:\\Windows\\System32\\bash.exe'],
+      { 'pwsh.exe': 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', 'git.exe': git },
+    )
+    expect(terminalProfiles('win32', env, probe)).toEqual([
+      { id: 'pwsh', label: 'PowerShell' },
+      { id: 'git-bash', label: 'Git Bash' },
+      { id: 'cmd', label: 'Command Prompt' },
+      { id: 'wsl', label: 'WSL' },
+    ])
+  })
+
+  it('reports only shells that are actually present', () => {
+    // 没有任何探测结果时不该凭空给出条目：菜单里出现点了没反应的名字比少一项更糟。
+    expect(terminalProfiles('win32', {}, fakeProbe([], {}))).toEqual([])
+  })
+
+  it('resolves a profile id into the shell to spawn', () => {
+    const probe = fakeProbe(
+      ['H:\\AppData\\Git\\bin\\bash.exe'],
+      { 'git.exe': git, 'powershell.exe': 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' },
+    )
+    // 缺省仍是平台默认：COMSPEC 原样启动。
+    expect(terminalShell(undefined, 'win32', env, probe)).toEqual({ shell: 'C:\\Windows\\System32\\cmd.exe', args: [] })
+    expect(terminalShell('git-bash', 'win32', env, probe)).toEqual({ shell: 'H:\\AppData\\Git\\bin\\bash.exe', args: ['--login', '-i'] })
+    expect(terminalShell('windows-powershell', 'win32', env, probe)).toEqual({ shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', args: [] })
+  })
+
+  it('refuses a shell path that is not a known profile id', () => {
+    // 客户端只该给 id。若接受任意路径，这个接口就成了「按调用者的意思启动任意程序」。
+    const probe = fakeProbe([], {})
+    expect(() => terminalShell('C:\\Windows\\System32\\cmd.exe', 'win32', env, probe)).toThrow(/unknown terminal profile/)
+    expect(() => terminalShell('pwsh', 'win32', env, probe)).toThrow(/unknown terminal profile/)
+  })
+
+  it('falls back to one profile named after the platform shell', () => {
+    expect(terminalProfiles('linux', { SHELL: '/usr/bin/fish' })).toEqual([{ id: 'default', label: 'fish' }])
   })
 })
