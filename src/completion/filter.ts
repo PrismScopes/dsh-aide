@@ -302,8 +302,9 @@ export function postProcess(candidate: string, state: Pick<FilterState, 'documen
   text = trimPrefixOverlap(text, state.document, state.offset)
   text = collapseRepeatedLines(text)
   text = collapseDuplicatedBlock(text)
-  text = trimDuplicateTrailingSymbol(text, state.document, state.offset)
+  // 先闭合再查重复：闭合可能新补一个文档里紧接着已有的符号，顺序反过来就会多出一个括号。
   text = closeBrackets(text)
+  text = trimDuplicateTrailingSymbol(text, state.document, state.offset)
   text = truncateAfterCompleteBlock(text)
   return text
 }

@@ -281,7 +281,10 @@ describe('candidate post-processing', () => {
   })
 
   it('runs the whole post-processing chain', () => {
-    expect(postProcess('call(a', baseState({ document: ')', offset: 0 }))).toBe('call(a)')
+    // 文档光标处已经有右括号：不该再补一个，否则插入后变成 call(a))。
+    expect(postProcess('call(a', baseState({ document: ')', offset: 0 }))).toBe('call(a')
+    // 文档没有那个右括号时才补。
+    expect(postProcess('call(a', baseState({ document: '', offset: 0 }))).toBe('call(a)')
   })
 
   it('handles the shapes a chat model actually returns', () => {
@@ -310,6 +313,11 @@ describe('candidate post-processing', () => {
 
     // 括号没闭合：补上。
     expect(closeBrackets('useState(')).toBe('useState()')
+
+    // 补上的那个符号，文档里紧接着已经有了：不能再补一个。
+    // 这条用来钉住管线顺序 —— 去重复尾符号必须排在闭合括号之后，否则补上去的括号会重复。
+    const call = 'const x = f(a'
+    expect(postProcess('f(a, b(', baseState({ document: call + ')', offset: call.length }))).toBe(', b(')
   })
 })
 
