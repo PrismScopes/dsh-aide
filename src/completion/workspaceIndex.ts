@@ -75,16 +75,29 @@ export class WorkspaceIndex {
     return { ...this.index.status(), root: this.options.root }
   }
 
-  /** 需要时（首次或过期）在后台刷新，返回同一个进行中的任务，避免并发重复扫描。 */
+  /** 需要时（首次或过期）在后台刷新，返回同一个进行中的任务。 */
   ensureFresh(): Promise<RefreshReport> | undefined {
     if (this.refreshing !== undefined) return this.refreshing
     if (!this.index.needsRebuild()) return undefined
-    this.refreshing = this.refresh().finally(() => { this.refreshing = undefined })
-    return this.refreshing
+    return this.refresh()
   }
 
-  /** 全量扫描并增量更新索引。 */
-  async refresh(): Promise<RefreshReport> {
+  /**
+   * 全量扫描并增量更新索引。
+   *
+   * 进行中的任务由本方法自己持有并复用：后台刷新与手动重建同时发生时，同一份索引只扫一遍。
+   * 因此它不是 async 函数 —— async 会让每次调用都包出一个新 promise，复用就无从谈起。
+   */
+  refresh(): Promise<RefreshReport> {
+    if (this.refreshing !== undefined) return this.refreshing
+    const running = this.runRefresh().finally(() => {
+      if (this.refreshing === running) this.refreshing = undefined
+    })
+    this.refreshing = running
+    return running
+  }
+
+  private async runRefresh(): Promise<RefreshReport> {
     const started = Date.now()
     const report: RefreshReport = { scanned: 0, indexed: 0, unchanged: 0, skipped: 0, chunks: 0, durationMs: 0 }
     const walk = async (directory: string): Promise<void> => {

@@ -242,6 +242,19 @@ describe('workspace index', () => {
     return root
   }
 
+  it('reuses one in-flight scan instead of starting a second one', async () => {
+    // 后台刷新与手动重建同时发生时，同一份索引只该扫一遍。
+    const dir = mkdtempSync(join(tmpdir(), 'dvw-scan-'))
+    writeFileSync(join(dir, 'a.ts'), reactFile.text, 'utf8')
+    const index = await WorkspaceIndex.open({ root: dir, params: DEFAULT_COMPLETION_PARAMS })
+    const first = index.refresh()
+    const second = index.refresh()
+    expect(second).toBe(first)
+    await first
+    // 上一次结束后再调用会重新扫描，而不是永远复用一个已完成的 promise。
+    expect(index.refresh()).not.toBe(first)
+  })
+
   it('scans the workspace, skips ignored directories and writes the index next to the project', async () => {
     const root = makeWorkspace()
     const index = await WorkspaceIndex.open({ root, params: DEFAULT_COMPLETION_PARAMS })
