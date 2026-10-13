@@ -55,6 +55,34 @@ node scripts/completion-acceptance.mjs http://127.0.0.1:3999
 模型不可用时补全一项会打印失败原因（含路由与机器码），脚本仍以 0 退出 —— 「模型不可用」是环境事实，
 不是验收失败。
 
+## 文档对照表
+
+每一行是文档的一处要求、它落在哪个文件、以及凭什么说它成立。证据四类：单测（`pnpm test`）、
+验收脚本（`scripts/completion-acceptance.mjs`）、浏览器实测（探针脚本，见仓库外的测试目录）、实测数值。
+
+| 文档 | 要求 | 实现位置 | 证据 |
+| --- | --- | --- | --- |
+| 4.1 | 触发与防抖、终止符与撤销补全 | `client/inlineCompletion.ts` | 单测（触发计划、防抖）；浏览器实测 |
+| 4.1 | 请求可被频繁取消 | `completion/service.ts` | 单测；统计里的取消率 |
+| 4.2 | 上下文采集（当前文件、光标、编辑历史） | `completion/params.ts`、`client/inlineCompletion.ts` | 单测（截断、偏移映射） |
+| 4.3 | 结构化请求，服务端不接收拼装好的 prompt | `completion/protocol.ts`、`prompt.ts` | 单测；验收脚本的「配置」与「补全」两项 |
+| 4.4 | SSE 流式返回与增量渲染 | `completion/protocol.ts`、`client/completion.ts` | 单测（编码、分块解析）；浏览器实测 |
+| 4.5 | 八条丢弃判定 + 五种开关 | `completion/filter.ts` | 单测（逐条 + 真实输出形态） |
+| 4.5 | 后处理五件事 | `completion/filter.ts` | 单测（含顺序：闭合括号先于去重复尾符号） |
+| 4.5 | 请求前预过滤、租户规则 | `completion/security.ts`、`client/inlineCompletion.ts` | 单测；浏览器实测；预过滤耗时实测 0.58 ms / 50 万字符 |
+| 4.6 | 幻影文本、三级采纳、采纳记账、候选切换 | `client/inlineCompletion.ts` | 浏览器实测（含切换不重新请求）；采纳率实测 0.5 |
+| 5.1 | 上下文服务进程与接口 | `completion/register.ts` | 验收脚本 |
+| 5.2 | 结构解析、实体去重、单文件上限 | `completion/chunks.ts`、`retrieval.ts` | 单测（分块、跳过大文件、内容去重） |
+| 5.3 | 检索链路、嵌入、向量存储、召回 | `completion/retrieval.ts` | 单测；实例测算：冷启动 4.4 s、增量 1.25 s |
+| 5.3 | 索引维护（全量、周期、增量、上限） | `completion/workspaceIndex.ts` | 单测（刷新复用同一在途任务）；上限可见性实测 |
+| 5.4 | TopK、打分、片段数量与长度、预算分配 | `completion/retrieval.ts`、`prompt.ts` | 单测（预算丢弃顺序、符号额度） |
+| 6.1 | 接口契约 | `completion/register.ts` | 验收脚本 |
+| 6.2 | FIM 标记与全角变体、截断参数、后缀起始模式 | `completion/prompt.ts` | 单测（各排布、截断、块边界） |
+| 6.3 | 模型可选、不固化在客户端 | `completion/register.ts`、`dshProvider.ts` | 验收脚本（选路与模型来自配置） |
+| 7 | 参数由服务端下发、按实验分组 | `completion/params.ts`、`experiment.ts` | 验收脚本（分组与参数一致） |
+| 7 | 指标：采纳率、取消率、首字节延迟、失败留痕 | `completion/telemetry.ts` | 单测；验收脚本；实例实测 |
+| 9 | 边界与开放问题 | 本页「已知局限」 | 逐条写明取舍与代价 |
+
 ## 验证状态
 
 **已在真实宿主上验证**（本地兜底提供方，浏览器端到端）：
