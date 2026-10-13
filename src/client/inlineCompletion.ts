@@ -134,6 +134,24 @@ export class InlineCompletionController {
   }
 
 
+  /**
+   * 识别采纳。
+   *
+   * 采纳会在光标处插入一段文本并产生内容变更事件（实测：`{"text":"te","rangeLength":0}`）。
+   * 插入长度 ≥ 2 且是最近一次候选的前缀时按采纳记账；单字符不记，命中候选前缀的概率太高。
+   */
+  private notePossibleAccept(event: { changes: readonly monaco.editor.IModelContentChange[] }): void {
+    const last = this.lastResult
+    if (last === undefined) return
+    for (const change of event.changes) {
+      if (change.text.length < 2 || change.rangeLength !== 0) continue
+      if (change.text.includes('\n')) continue
+      if (!last.candidates.some(candidate => candidate.startsWith(change.text))) continue
+      this.recordAccepted({ path: this.current?.path ?? '', offset: this.offsetAt({ lineNumber: change.range.startLineNumber, column: change.range.startColumn }), text: change.text })
+      return
+    }
+  }
+
   /** 应用服务端下发的实验分组。 */
   setExperiment(experiment: string | undefined): void {
     this.experiment = experiment
@@ -168,6 +186,7 @@ export class InlineCompletionController {
    */
   noteChange(event: { changes: readonly monaco.editor.IModelContentChange[] }): void {
     this.tracker.lastChangeHadNewline = event.changes.some(change => change.text.includes('\n'))
+    this.notePossibleAccept(event)
     // 有在途请求而被这次变更作废，就是一次「请求取消」（文档七的取消率指标）。
     if (this.inFlight !== undefined) this.options.report?.({ kind: 'cancelled', language: this.languageOf(), ...(this.experiment === undefined ? {} : { experiment: this.experiment }) })
     this.inFlight?.abort()
