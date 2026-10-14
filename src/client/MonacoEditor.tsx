@@ -145,9 +145,12 @@ function installWorkerEnvironment(): void {
   const win = window as typeof window & { MonacoEnvironment?: unknown }
   if (win.MonacoEnvironment !== undefined) return
   const base = new URL('/dsh-vscode/monaco/vs', location.href).href
+  // worker 里的模块名以 `vs/` 开头（如 vs/language/json/jsonWorker），所以 baseUrl 必须是 `vs` 的
+  // **上一级**；写成 `vs/` 会拼出 `vs/vs/...`，请求必然 404 —— 表现为编辑器空白、控制台只有一句 Not Found。
+  const moduleRoot = base.replace(/\/vs\/?$/, '')
   win.MonacoEnvironment = {
     getWorkerUrl: () => URL.createObjectURL(new Blob(
-      [`self.MonacoEnvironment={baseUrl:'${base}/'};importScripts('${base}/base/worker/workerMain.js');`],
+      [`self.MonacoEnvironment={baseUrl:'${moduleRoot}/'};importScripts('${base}/base/worker/workerMain.js');`],
       { type: 'text/javascript' }
     ))
   }
