@@ -18,6 +18,11 @@ export const DEFAULT_COMPLETION_SETTINGS: CompletionSettings = { fallback: false
 
 let current: CompletionSettings = DEFAULT_COMPLETION_SETTINGS
 
+/** 重读设置文件的间隔：够短，改完几乎立刻生效；够长，不至于每次补全都读盘。 */
+const FILE_RECHECK_MS = 2000
+let fileCheckedAt = 0
+let fileValue: unknown
+
 /** 解析「provider/model」；空值、缺斜杠、任一侧为空串都视为没配。 */
 export function parseRoute(raw: string | undefined): { provider: string; model: string } | undefined {
   if (raw === undefined || raw === '') return undefined
@@ -87,20 +92,38 @@ export function settingsFilePath(env: Record<string, string | undefined> = globa
   return `${neat}/completion.settings.json`
 }
 
-/** 插件加载时写入一次；同时读一次数据目录里的设置文件。 */
+let pluginConfig: unknown
+
+/** 插件加载时写入一次；同时在每次取用时按周期重读设置文件。 */
 export function setCompletionSettings(config?: unknown): CompletionSettings {
-  const env = globalThis.process?.env ?? {}
-  const path = settingsFilePath(env)
-  const file = path === undefined ? undefined : readSettingsFile(path)
-  current = resolveSettings(config, env, file)
+  pluginConfig = config
+  return refreshSettings()
+}
+
+/**
+ * 取当前生效的设置。
+ *
+ * 设置文件按 `FILE_RECHECK_MS` 的周期重读：用户在编辑器旁边改完 JSON，几秒内生效，不必重启应用。
+ * 读盘失败或内容不合法都退回「当作没设」，不影响已有设置。
+ */
+export function completionSettings(now: number = Date.now()): CompletionSettings {
+  if (now - fileCheckedAt >= FILE_RECHECK_MS) refreshSettings(now)
   return current
 }
 
-export function completionSettings(): CompletionSettings {
+function refreshSettings(now: number = Date.now()): CompletionSettings {
+  const env = globalThis.process?.env ?? {}
+  const path = settingsFilePath(env)
+  if (path !== undefined) fileValue = readSettingsFile(path)
+  fileCheckedAt = now
+  current = resolveSettings(pluginConfig, env, fileValue)
   return current
 }
 
 /** 供测试与排查：把设置还原成默认值。 */
 export function resetCompletionSettings(): void {
   current = DEFAULT_COMPLETION_SETTINGS
+  pluginConfig = undefined
+  fileValue = undefined
+  fileCheckedAt = 0
 }

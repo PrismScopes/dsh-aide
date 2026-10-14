@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_COMPLETION_SETTINGS,
   completionSettings,
@@ -10,6 +13,25 @@ import {
   setCompletionSettings,
   settingsFilePath,
 } from '../src/completion/settings.ts'
+
+/** 把数据目录指到一个空目录跑，免得读到开发机上的真实设置文件。 */
+function withTemporaryHome(body: (home: string) => void): void {
+  const previous = process.env['DSH_HOME']
+  const home = mkdtempSync(join(tmpdir(), 'dvw-settings-'))
+  process.env['DSH_HOME'] = home
+  try {
+    resetCompletionSettings()
+    body(home)
+  } finally {
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+    resetCompletionSettings()
+  }
+}
+
+afterEach(() => {
+  resetCompletionSettings()
+})
 
 describe('completion settings', () => {
   it('parses a provider/model route and rejects malformed values', () => {
@@ -62,10 +84,20 @@ describe('completion settings', () => {
   it('defaults to no route and no fallback', () => {
     // 显式传空环境，免得跑测试的机器上恰好设了这两个变量而让结论飘。
     expect(resolveSettings(undefined, {})).toEqual(DEFAULT_COMPLETION_SETTINGS)
-    const settings = setCompletionSettings(undefined)
-    expect(settings.fallback).toBe(false)
-    expect(settings.route).toBeUndefined()
-    resetCompletionSettings()
-    expect(completionSettings()).toEqual(DEFAULT_COMPLETION_SETTINGS)
+    withTemporaryHome(() => {
+      const settings = setCompletionSettings(undefined)
+      expect(settings.fallback).toBe(false)
+      expect(settings.route).toBeUndefined()
+    })
+  })
+
+  it('picks up a settings file change without restarting', () => {
+    // 桌面端重启应用代价不小，所以设置文件按周期重读：改完几秒内生效。
+    withTemporaryHome(home => {
+      expect(setCompletionSettings(undefined).route).toBeUndefined()
+      writeFileSync(join(home, 'completion.settings.json'), JSON.stringify({ completion: { route: 'a/b' } }), 'utf8')
+      // 把时间往前推过重读周期：不改盘上文件，只跳过缓存。
+      expect(completionSettings(Date.now() + 5000).route).toEqual({ provider: 'a', model: 'b' })
+    })
   })
 })
