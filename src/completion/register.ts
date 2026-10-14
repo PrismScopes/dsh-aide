@@ -36,7 +36,7 @@ export interface ResolvedCompletionProvider {
  *
  * - 显式要求本地兜底（`DSH_COMPLETION_PROVIDER=local`）：离线、或单独验证客户端链路时用；
  * - 配了 OpenAI 兼容的补全端点（`DSH_COMPLETION_ENDPOINT`）：不依赖 DSH 账号的部署通道；
- * - 其余情况用 DSH 的模型服务，它不可用时退回本地兜底。
+ * - 其余情况用 DSH 的模型服务。模型不可用时**不会**自动回落：要回落得显式开启（见 settings.ts）。
  *
  * DSH 的两个服务分别探测而不是一起判：缺 `agentDefaultModel` 时仍可让配置里指定模型，
  * 但缺 `llm` 就一定没有模型可用。

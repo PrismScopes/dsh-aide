@@ -63,6 +63,8 @@ try {
   check('实验分组', config.experiment === 'control' || config.experiment === 'treatment', config.experiment)
   check('参数随分组下发', typeof config.params?.debounceFastMs === 'number', `debounceFastMs=${config.params?.debounceFastMs} snippetCount=${config.params?.snippetCount}`)
   check('安全规则', Array.isArray(config.security?.rules) && config.security.rules.length > 0, `${config.security?.rules?.length} 条`)
+  // 生效的设置：排查时第一件事是确认「按什么配置在跑」，而不是猜环境变量与设置文件谁赢了。
+  check('生效的设置', config.settings !== undefined, `路由=${config.settings?.route ?? '（跟随默认模型）'} 回落=${config.settings?.fallback === true}`)
 } catch (error) {
   check('配置接口', false, String(error))
 }

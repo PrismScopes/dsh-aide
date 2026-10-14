@@ -3,6 +3,7 @@ import { createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, read
 import type { SearchRequest } from './types.ts'
 import { DEFAULT_COMPLETION_PARAMS } from './completion/params.ts'
 import { completionIndexFor, completionTelemetry, resolveProvider } from './completion/register.ts'
+import { completionSettings } from './completion/settings.ts'
 import { groupForSession, paramsForGroup } from './completion/experiment.ts'
 import { DEFAULT_SECURITY_RULES } from './completion/security.ts'
 import { WorkbenchError, stringField } from './wire.ts'
@@ -24,10 +25,17 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
       const experiment = groupForSession(sessionId)
       // 安全规则一并下发：客户端要用它在请求前预过滤（文档 6.4 的请求前一道），
       // 两处设卡必须用同一套规则，否则会出现「拦了但没脱敏」这类不一致。
+      // 生效的设置也一并暴露：排查时第一件事就是确认「现在按什么配置在跑」，
+      // 而不是去猜环境变量与设置文件谁赢了。
+      const settings = completionSettings()
       return {
         source: resolved.source, model: resolved.model, profile: resolved.profile.id, experiment,
         params: paramsForGroup(experiment), security: { rules: DEFAULT_SECURITY_RULES },
         endpoint: '/dsh-vscode/completion',
+        settings: {
+          route: settings.route === undefined ? null : `${settings.route.provider}/${settings.route.model}` ,
+          fallback: settings.fallback,
+        },
       }
     }
     case 'completion.telemetry': {
