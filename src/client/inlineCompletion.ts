@@ -234,7 +234,8 @@ export class InlineCompletionController {
         filePath: model.uri.path.replace(/^\//, ''),
         language,
         document: model.getValue(),
-        rewriteAt: { line: position.lineNumber, column: position.column - 1 },
+        // 原样传 Monaco 的位置：协议约定行列都从 1 起，换算只发生在宿主一侧（见 protocol.ts）。
+      rewriteAt: { line: position.lineNumber, column: position.column },
         signal: controller.signal,
       })
     } catch (error) {

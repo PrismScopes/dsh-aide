@@ -14,6 +14,12 @@ export interface CursorEdit {
   filePath: string
   lastEdit?: { before: string; after: string }
   /** 重写位置：行号 1 起、列 0 起（与 LSP 一致）。 */
+  /**
+   * 光标位置：行号与列号都从 1 起，与编辑器（Monaco）的位置一致。
+   *
+   * 换算成文档字符偏移只发生在宿主侧。曾经客户端传 0 起的列、宿主按 0 起相加，两边凑巧一致；
+   * 一旦某侧按 1 起理解就会静默错位，表现为光标不在文档末尾时补全消失。
+   */
   rewriteAt: { line: number; column: number }
   document: string
 }
