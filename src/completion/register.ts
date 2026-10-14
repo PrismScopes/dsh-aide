@@ -7,6 +7,7 @@
 import { normalize } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fallbackProvider } from './fallback.ts'
+import { completionSettings } from './settings.ts'
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from './params.ts'
 import { encodeSseEvent, type CompletionEvent, type CompletionRequest } from './protocol.ts'
 import { dshProvider, type DshDefaultModelService, type DshLlmService } from './dshProvider.ts'
@@ -57,8 +58,8 @@ export function resolveProvider(ctx: CompletionContextLike, params: CompletionPa
   }
   if (forced !== 'local' && llm !== undefined && defaultModel !== undefined) {
     // 补全可以单独指定路由：用户可能希望对话与补全用不同的模型（例如补全走免费模型）。
-    // 不设时沿用应用的默认模型，行为与以前一致。
-    const route = parseRoute(globalThis.process?.env?.['DSH_COMPLETION_ROUTE'])
+    // 不设时沿用应用的默认模型，行为与以前一致。设置来源见 completion/settings.ts。
+    const route = completionSettings().route
     const provider = dshProvider(llm, defaultModel, {
       params,
       ...(route === undefined ? {} : { selection: route }),
@@ -72,11 +73,11 @@ export function resolveProvider(ctx: CompletionContextLike, params: CompletionPa
 /**
  * 按开关决定是否给模型提供方套上本地兜底。
  *
- * 默认关闭：模型故障应当显式暴露，而不是悄悄降级。开启后（`DSH_COMPLETION_FALLBACK=local`）
- * 编辑器至少还有候选可用，同时每次回落都写宿主日志 —— 回落不等于把故障藏起来。
+ * 默认关闭：模型故障应当显式暴露，而不是悄悄降级。开启后编辑器至少还有候选可用，
+ * 同时每次回落都写宿主日志 —— 回落不等于把故障藏起来。
  */
 function withFallback(provider: CompletionProvider, params: CompletionParams): CompletionProvider {
-  if ((globalThis.process?.env?.['DSH_COMPLETION_FALLBACK'] ?? '').toLowerCase() !== 'local') return provider
+  if (!completionSettings().fallback) return provider
   return fallbackProvider(provider, localProvider(params), {
     onFallback: failure => {
       console.warn(`[dsh-completion] 模型调用失败，已回落本地兜底：${failure.provider}/${failure.model} · ${failure.error}`)
@@ -84,18 +85,6 @@ function withFallback(provider: CompletionProvider, params: CompletionParams): C
   })
 }
 
-/**
- * 解析「provider/model」形式的补全路由。
- *
- * 空值、缺斜杠、任一侧为空串都视为没配：宁可回落到应用的默认模型，也不要因为一个写错的
- * 环境变量把补全整条打挂。
- */
-function parseRoute(raw: string | undefined): { provider: string; model: string } | undefined {
-  if (raw === undefined || raw === '') return undefined
-  const at = raw.indexOf('/')
-  if (at <= 0 || at === raw.length - 1) return undefined
-  return { provider: raw.slice(0, at), model: raw.slice(at + 1) }
-}
 
 /** 客户端从请求体里取出的必要字段；缺一不可，缺就按 400 处理。 */
 function readRequest(body: unknown): CompletionRequest {
