@@ -2,18 +2,23 @@ import { describe, expect, it } from 'vitest'
 import { dshProvider, type DshLlmService, type DshStreamChunk } from '../src/completion/dshProvider.ts'
 import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
 
-/** 只回放给定 chunk 的假模型服务，同时记录 prepareCall 收到的配置。 */
+/**
+ * 只回放给定 chunk 的假模型服务，同时记录它收到的调用参数。
+ *
+ * 补全走的是服务级 stream（对任何适配器都可用）；prepareCall 一并提供，只为满足类型。
+ */
 function fakeLlm(chunks: DshStreamChunk[], resolved?: Record<string, unknown>) {
   const calls: { config: Record<string, unknown>; options: Record<string, unknown> } = { config: {}, options: {} }
   const llm: DshLlmService = {
+    stream(options) {
+      calls.config = { ...options }
+      calls.options = { ...options, ...resolved }
+      return (async function* () { for (const chunk of chunks) yield chunk })()
+    },
     async prepareCall(config) {
-      calls.config = { ...config }
       return {
         config: { ...config, ...resolved },
-        stream(options) {
-          calls.options = { ...options }
-          return (async function* () { for (const chunk of chunks) yield chunk })()
-        },
+        stream: llm.stream,
       }
     },
   }

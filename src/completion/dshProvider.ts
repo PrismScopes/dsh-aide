@@ -52,6 +52,13 @@ export interface DshPreparedCall {
 }
 
 export interface DshLlmService {
+  /**
+   * 服务级流式入口：只要求适配器实现 stream，agent 对话走的也是它。
+   *
+   * 不走服务级 prepareCall —— 那条路会再调适配器的 prepareCall，而适配器接口只强制 stream。
+   * 实测某个第三方提供方的适配器没有 prepareCall，用 prepared 入口会直接报方法不存在。
+   */
+  stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk>
   prepareCall(config: DshCallConfig, signal?: AbortSignal): Promise<DshPreparedCall>
 }
 
@@ -75,8 +82,8 @@ export interface DshProviderOptions {
 /**
  * 把 DSH 的模型服务包成补全提供方。
  *
- * 每调用一次 `complete` 都重新 `prepareCall`：模型选择可能在两分钟内被用户改掉，缓存 call 会拿旧
- * 模型继续出结果。`prepareCall` 本身不做推理，开销可以接受。
+ * 每调用一次 `complete` 都重新取一次模型选择：用户可能在两分钟内改掉它，缓存住就会拿旧模型继续出结果。
+ * 取选择与开流都不做推理，开销可以接受。
  */
 export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelService, options: DshProviderOptions = {}): CompletionProvider {
   const params = options.params ?? DEFAULT_COMPLETION_PARAMS
@@ -87,10 +94,12 @@ export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelSer
     get model(): string { return selection().model },
     async *complete(prompt: string, context: ProviderContext): AsyncIterable<CompletionChunk> {
       const chosen = selection()
-      const proposed: DshCallConfig = { provider: chosen.provider, model: chosen.model, temperature: 0, maxTokens, stop: COMPLETION_STOP }
-      const call = await llm.prepareCall(proposed, context.signal)
-      const stream = call.stream({
-        ...(call.config ?? proposed),
+      const stream = llm.stream({
+        provider: chosen.provider,
+        model: chosen.model,
+        temperature: 0,
+        maxTokens,
+        stop: COMPLETION_STOP,
         // 单条用户消息：补全不需要多轮，把上下文与指令都放进这一条里。
         messages: [{ role: 'user', content: prompt }],
         signal: context.signal,
