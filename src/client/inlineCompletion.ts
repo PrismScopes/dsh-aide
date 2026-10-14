@@ -188,7 +188,10 @@ export class InlineCompletionController {
     const model = this.options.editor.getModel()
     const change = event.changes[0]
     if (model === null || change === undefined) return
-    if (model.getValueLength() > MAX_EDIT_TRACK_CHARS) {
+    // 防御式调用：假模型或未来某个宿主可能没有这个方法，取不到长度就按「不记」处理，
+    // 不能让一个可选优化在按键路径上抛错。
+    const length = typeof model.getValueLength === 'function' ? model.getValueLength() : Number.POSITIVE_INFINITY
+    if (length > MAX_EDIT_TRACK_CHARS) {
       this.previousValue = undefined
       return
     }

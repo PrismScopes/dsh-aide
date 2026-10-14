@@ -223,6 +223,7 @@ describe('accept granularity', () => {
       uri: { path: '/a.ts' },
       getLanguageId: () => 'typescript',
       getValue: () => value,
+      getValueLength: () => value.length,
       getOffsetAt: (position: { column: number }) => position.column - 1,
     }
     const controller = new InlineCompletionController({
