@@ -185,6 +185,10 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
   const editor = useRef<import('monaco-editor').editor.IStandaloneCodeEditor>()
   const callbacks = useRef({ onChange: props.onChange, onSave: props.onSave })
   callbacks.current = { onChange: props.onChange, onSave: props.onSave }
+  // 挂载 effect 只依赖 uri，闭包里的 props.value 是挂载那一刻的值；内容往往之后才到，
+  // 因此这里另存一份最新值，在模型建立后用它写入。
+  const valueRef = useRef(props.value)
+  valueRef.current = props.value
   const [error, setError] = useState<string>()
   useEffect(() => {
     let disposed = false; let model: import('monaco-editor').editor.ITextModel | undefined
@@ -198,6 +202,7 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
         console.warn('[dvw] TextMate 分词器装载失败，该文件回退 Monaco 内置分词：', failure)
       })
       if (disposed || root.current === null) return
+      if (model.getValue() !== valueRef.current) model.setValue(valueRef.current)
       const instance = monaco.editor.create(root.current, { model, automaticLayout: true, theme: dshMonacoTheme(monaco, props.theme), fontSize: 14, ...WORKBENCH_EDITOR_CHROME, wordWrap: 'off' })
       editor.current = instance
       const change = instance.onDidChangeModelContent(() => callbacks.current.onChange(instance.getValue()))
