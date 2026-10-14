@@ -53,6 +53,11 @@ export interface CompletionRequest {
   /** 客户端对用户意图的初步判断，可为空。 */
   intent?: string
   /** 特定实验或模式下要求服务端忽略缓存。 */
+  /**
+   * 强制重写：客户端据此跳过自己的缓存（文档 4.3 的强制重写标志）。
+   *
+   * 当前没有任何实验把它置为真，服务端也没有可跳过的缓存 —— 保留字段是为了不改协议就能启用。
+   */
   forceRewrite: boolean
   security?: CompletionSecurityRules
 }

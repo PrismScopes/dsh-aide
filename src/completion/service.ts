@@ -32,6 +32,24 @@ export interface CompletionServiceOptions {
 }
 
 
+/**
+ * 给一次异步操作套上等待上限。
+ *
+ * 超时不会取消底层工作（磁盘上的扫描没有取消点），只是不再等它：补全按「没有片段」继续。
+ */
+async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T | never[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), timeoutMs)
+  })
+  try {
+    return await Promise.race([work, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+
 export async function* runCompletion(request: CompletionRequest, options: CompletionServiceOptions): AsyncGenerator<CompletionEvent> {
   const params = options.params ?? DEFAULT_COMPLETION_PARAMS
   const now = options.now ?? (() => Date.now())
@@ -52,9 +70,12 @@ export async function* runCompletion(request: CompletionRequest, options: Comple
   const securityRules = rulesForRequest(request.security)
   try {
     const truncated = truncateDocument(request.cursor.document, request.cursor.rewriteAt, params)
-    // 检索失败不能拖垮补全：拿不到片段就按没有片段继续（文档把检索列为可选上下文来源）。
+    // 检索失败或超时都不能拖垮补全：拿不到片段就按没有片段继续（文档把检索列为可选上下文来源）。
     // 钩子可能是同步抛错的：必须先把它包进 promise 再 catch，否则异常会直接冒出编排层。
-    const snippets = options.retrieve === undefined ? [] : await Promise.resolve().then(() => options.retrieve?.(request, params)).catch(() => [])
+    const snippets = options.retrieve === undefined ? [] : await withTimeout(
+      Promise.resolve().then(() => options.retrieve?.(request, params)).catch(() => []),
+      params.locateTimeoutMs,
+    )
     const assembled = assemblePrompt({
       filePath: request.cursor.filePath,
       language: request.language,

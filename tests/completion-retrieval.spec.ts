@@ -385,4 +385,22 @@ describe('prompt budget with snippets', () => {
     for await (const event of runCompletion(request(), { provider, retrieve: () => { throw new Error('index down') } })) events.push(event)
     expect(events.some(event => event.type === 'output')).toBe(true)
   })
+
+  it('keeps completing when retrieval never returns', async () => {
+    // 检索是在调用模型之前被 await 的：没有上限就意味着一卡住补全永远不出来。
+    // 定位超时接上之后，超时按「没有片段」继续，与「检索失败不拖垮补全」同一条思路。
+    const provider: CompletionProvider = {
+      id: 'capture',
+      model: 'capture-1',
+      async *complete(): AsyncIterable<{ text: string; done: boolean }> { yield { text: 'ok', done: false } },
+    }
+    const events: CompletionEvent[] = []
+    const params = { ...DEFAULT_COMPLETION_PARAMS, locateTimeoutMs: 30 }
+    // 永不 resolve：模拟卡住的索引扫描。
+    const stuck = new Promise<string[]>(() => undefined)
+    const started = Date.now()
+    for await (const event of runCompletion(request(), { provider, params, retrieve: () => stuck })) events.push(event)
+    expect(events.some(event => event.type === 'output')).toBe(true)
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
 })
