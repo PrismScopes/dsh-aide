@@ -83,12 +83,23 @@ try {
 line('补全（文档 4.3 / 4.4：结构化请求进、SSE 流式出）')
 let completionWorked = false
 try {
-  // 两个用例都要跑：光标在文档末尾，以及光标在文件中段。后者才是真实编辑的常态 —— 曾经一个列号约定
-  // 错位让中段光标完全拿不到候选，而当时所有验证都用的是「光标在末尾」，看不见这个问题。
+  // 三个用例都要跑：光标在末尾、光标在文件中段、以及在**大文档**的中段。前两个覆盖光标位置，
+  // 第三个覆盖文档裁剪与预算（真实文件是几百上千行，几行的用例走不到那条路径）。
   const middle = 'const a = useState(0)\nconst b = useSt\nconst c = 2\nconst d = 3'
+  // 大文档：参照标识符必须落在文档裁剪的保留窗口内，否则「没有候选」分不清是裁剪出了问题、
+  // 还是本地兜底本来就没有可补的标识符 —— 这条用例就失去判别力了。
+  const bigLines = 1200
+  const cursorLine = 600
+  const big = Array.from({ length: bigLines }, (_value, index) => {
+    const line = index + 1
+    if (line === cursorLine) return 'const b = useSt'
+    if (line === cursorLine - 50) return 'const a = useState(0)'
+    return `const item${line} = compute(${line}, config)`
+  }).join('\n')
   for (const [label, document, lineNumber, column] of [
     ['光标在文档末尾', 'const a = useState(0)\nconst b = useSt', 2, 16],
     ['光标在文件中段', middle, 2, 16],
+    [`光标在 ${bigLines} 行文档的中段`, big, cursorLine, 16],
   ]) {
     const result = await complete(request(document, lineNumber, column))
     const meta = result.events.find(event => event.type === 'meta')
