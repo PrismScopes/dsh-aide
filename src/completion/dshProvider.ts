@@ -85,6 +85,31 @@ export interface DshProviderOptions {
  * 每调用一次 `complete` 都重新取一次模型选择：用户可能在两分钟内改掉它，缓存住就会拿旧模型继续出结果。
  * 取选择与开流都不做推理，开销可以接受。
  */
+/**
+ * 打开一次补全流。
+ *
+ * DSH 的契约是「prepareCall 得到解析后的配置，再把该配置喂回 stream」；喂原始配置会被拒绝，
+ * 而适配器把它包成 TRANSPORT，看不出真正原因。
+ *
+ * 但适配器接口只强制 stream —— 第三方适配器可能没有 prepareCall，那条路会直接报方法不存在，
+ * 此时退回直接 stream（与旧行为一致）。
+ */
+async function openStream(llm: DshLlmService, request: DshGenerateOptions, chosen: DshModelSelection): Promise<AsyncIterable<DshStreamChunk>> {
+  try {
+    const prepared = await llm.prepareCall({
+      provider: chosen.provider,
+      model: chosen.model,
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+      stop: request.stop,
+    }, request.signal)
+    return prepared.stream({ ...request, ...prepared.config })
+  } catch (error) {
+    console.warn('[dsh-completion] prepared 入口不可用，改用直接 stream：', error instanceof Error ? error.message : String(error))
+    return llm.stream(request)
+  }
+}
+
 export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelService, options: DshProviderOptions = {}): CompletionProvider {
   const params = options.params ?? DEFAULT_COMPLETION_PARAMS
   const maxTokens = options.maxTokens ?? 256
@@ -94,7 +119,7 @@ export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelSer
     get model(): string { return selection().model },
     async *complete(prompt: string, context: ProviderContext): AsyncIterable<CompletionChunk> {
       const chosen = selection()
-      const stream = llm.stream({
+      const request: DshGenerateOptions = {
         provider: chosen.provider,
         model: chosen.model,
         temperature: 0,
@@ -103,7 +128,8 @@ export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelSer
         // 单条用户消息：补全不需要多轮，把上下文与指令都放进这一条里。
         messages: [{ role: 'user', content: prompt }],
         signal: context.signal,
-      })
+      }
+      const stream = await openStream(llm, request, chosen)
       for await (const chunk of stream) {
         if (context.signal.aborted) return
         if (chunk.type === 'text-delta' && typeof chunk.text === 'string' && chunk.text !== '') {
