@@ -121,7 +121,7 @@ describe('retrieval index', () => {
   it('builds a query from the cursor area and repeats the current line', () => {
     const document = 'const a = 1\nconst value = useSt'
     // 列是 0 起：要整行就得传整行长度。
-    const query = buildQuery(document, 2, 19, 10)
+    const query = buildQuery(document, 2, 20, 10)
     expect(query).toContain('const value = useSt')
     // 当前行重复一次：它在向量里占更大比重。
     expect(query.split('const value = useSt').length - 1).toBe(2)
@@ -183,13 +183,21 @@ describe('retrieval index', () => {
     expect(status.capped).toBe(true)
   })
 
+  it('builds the query from the text before the cursor', () => {
+    const document = 'const a = useState(0)\nconst b = useSt\nconst c = 2'
+    // 列 16 是紧贴 useSt 之后：查询里不能出现下一个字符。
+    const query = buildQuery(document, 2, 16)
+    expect(query).toContain('const b = useSt')
+    expect(query.split('\n')[0]).toBe('const b = useSt')
+  })
+
   it('retrieves the related chunk, excludes the edited file and caps the count', () => {
     const store = join(mkdtempSync(join(tmpdir(), 'dvw-index-')), 'index.json')
     const index = new RetrievalIndex(indexOptions(store))
     index.update(reactFile)
     index.update(pythonFile)
     index.update({ path: 'src/hooks/useCounter.ts', language: 'typescript', mtimeMs: 1, size: 100, text: 'export function useCounter(initial) {\n  const [count, setCount] = useState(initial)\n  return count\n}' })
-    const query = buildQuery('const value = useState', 1, 22, 5)
+    const query = buildQuery('const value = useState', 1, 23, 5)
     const hits = index.search(query, 'src/hooks/useCounter.ts')
     expect(hits.length).toBeGreaterThan(0)
     expect(hits.every(hit => hit.path !== 'src/hooks/useCounter.ts')).toBe(true)
@@ -205,7 +213,7 @@ describe('retrieval index', () => {
     const store = join(mkdtempSync(join(tmpdir(), 'dvw-index-')), 'index.json')
     const index = new RetrievalIndex({ ...indexOptions(store), snippetChars: 60 })
     index.update({ ...reactFile, text: `export function useToggle(initial) {\n  const [on, setOn] = useState(initial)\n${'  // padding line\n'.repeat(30)}}` })
-    const hits = index.search(buildQuery('const [on, setOn] = useState', 1, 28, 5))
+    const hits = index.search(buildQuery('const [on, setOn] = useState', 1, 29, 5))
     const hit = hits[0]
     expect(hit).toBeDefined()
     const body = '  // padding line\n'.repeat(30)
@@ -224,7 +232,7 @@ describe('retrieval index', () => {
     expect(second.status().files).toBe(1)
     expect(second.status().builtAt).toBeGreaterThan(0)
     expect(second.needsUpdate(reactFile.path, reactFile.mtimeMs, reactFile.size)).toBe(false)
-    expect(second.search(buildQuery('const [on, setOn] = useState', 1, 28, 5)).length).toBeGreaterThan(0)
+    expect(second.search(buildQuery('const [on, setOn] = useState', 1, 29, 5)).length).toBeGreaterThan(0)
     second.remove(reactFile.path)
     expect(second.status().files).toBe(0)
   })

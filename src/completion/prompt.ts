@@ -173,7 +173,8 @@ export function truncateDocument(document: string, rewriteAt: { line: number; co
     if (kept.length > params.documentChars) {
       const cut = kept.length - params.documentChars
       kept = kept.slice(cut)
-      if (rewriteAt.line - droppedLines <= 1) column = Math.max(0, column - cut)
+      // 列号从 1 起，夹取的下限是 1；给 0 会让偏移换算落到上一行末尾。
+      if (rewriteAt.line - droppedLines <= 1) column = Math.max(1, column - cut)
     }
   }
   return { document: kept, rewriteAt: { line: Math.max(1, rewriteAt.line - droppedLines), column } }

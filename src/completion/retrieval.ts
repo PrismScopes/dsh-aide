@@ -120,7 +120,8 @@ export function buildQuery(document: string, line: number, column: number, windo
   const cursor = Math.max(0, Math.min(line - 1, lines.length - 1))
   const start = Math.max(0, cursor - windowLines)
   const end = Math.min(lines.length, cursor + 2)
-  const before = (lines[cursor] ?? '').slice(0, Math.max(0, column))
+  // 列号从 1 起：列 1 对应行首，取光标前文本要减一，否则会把光标后的第一个字符也算进来。
+  const before = (lines[cursor] ?? '').slice(0, Math.max(0, column - 1))
   const recent = lines.slice(start, cursor).join('\n')
   // 最近编辑的行权重最高：单独重复一次，让它在向量里占更大比重。
   return `${before}\n${before}\n${recent}`
