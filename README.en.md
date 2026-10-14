@@ -44,6 +44,7 @@
   cycle through candidates and accept by block, by line, or by word. Context comes from the current file
   and a local retrieval index that never leaves the workspace directory.
   See [docs/inline-completion.md](docs/inline-completion.md) for implementation and verification status.
+  Note: host-side code loads at process start, so **restart the app** after changes (a page reload is enough for the client side).
 - **Sync and restore**: workspace file changes stream to the UI, while reload restores views, tabs, expanded directories, panels, and layout.
 
 The workbench mounts through the official `sidebar.footer.action` and `shell.overlay` extension points. It does not replace or disable `ui-layout`.
