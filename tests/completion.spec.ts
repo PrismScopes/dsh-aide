@@ -90,13 +90,18 @@ describe('completion protocol', () => {
 })
 
 describe('prompt assembly', () => {
-  it('maps line and column onto a character offset', () => {
+  it('maps a 1-based line and column onto a character offset', () => {
     const document = 'one\ntwo\nthree'
-    expect(offsetAt(document, 1, 0)).toBe(0)
-    expect(offsetAt(document, 2, 0)).toBe(4)
-    expect(offsetAt(document, 2, 3)).toBe(7)
+    // 列号从 1 起，与 Monaco 的位置约定一致：列 1 就是行首。
+    expect(offsetAt(document, 1, 1)).toBe(0)
+    expect(offsetAt(document, 2, 1)).toBe(4)
+    expect(offsetAt(document, 2, 4)).toBe(7)
+    // 中段光标：偏移必须刚好落在光标处，偏一位会让前后缀整体错位（实测时补全因此消失）。
+    expect(document.slice(offsetAt(document, 2, 4))).toBe('\nthree')
     // 越界的行列要夹到文档范围内，不能返回越界偏移。
     expect(offsetAt(document, 99, 99)).toBe(document.length)
+    // 列越界时夹到文档末尾：Monaco 不会发出越界的列，这里只是不复现崩溃。
+    expect(offsetAt(document, 1, 99)).toBe(document.length)
   })
 
   it('caps the prefix by lines and by characters, keeping the text nearest the cursor', () => {

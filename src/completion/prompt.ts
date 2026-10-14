@@ -90,13 +90,19 @@ export interface PromptResult {
   snippetCount: number
 }
 
-/** 把「行号 1 起、列 0 起」换算成文档中的字符偏移。 */
+/**
+ * 把「行号 1 起、列 1 起」换算成文档中的字符偏移。
+ *
+ * 行号与列号都从 1 开始 —— 这是 Monaco 的位置约定，也是请求里 `rewriteAt` 的约定。
+ * 列号若是 0 起，整个前缀会偏一个字符：光标在文档末尾时被长度夹住看不出来，光标在文件中段时
+ * 补全就会因为标识符对不上而消失（实测如此）。
+ */
 export function offsetAt(document: string, line: number, column: number): number {
   const lines = document.split('\n')
   const targetLine = Math.max(1, Math.min(line, lines.length))
   let offset = 0
   for (let index = 0; index < targetLine - 1; index++) offset += (lines[index] ?? '').length + 1
-  return Math.min(offset + Math.max(0, column), document.length)
+  return Math.min(offset + Math.max(0, column - 1), document.length)
 }
 
 /** 按行数与字符数双重封顶，保留靠近光标的那一侧。 */
