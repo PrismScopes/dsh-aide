@@ -1,4 +1,4 @@
-export class ApiError extends Error {
+export export class ApiError extends Error {
   constructor(public code: string, message: string) { super(message) }
 }
 
@@ -50,16 +50,28 @@ export function hostWebSocketUrl(path: string, query: Record<string, string> = {
 const SESSION_RETRY_MS = 400
 const SESSION_RETRY_LIMIT = 12
 
-export async function api<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+/** 宿主明确表示「会话还没就绪」——这是启动期的瞬时状态，可重试。 */
+export function sessionPending(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'session-unknown'
+}
+
+/**
+ * 按同一策略重试：只重试「会话未就绪」，次数与间隔有上限，取消后立即停止。
+ * 终端的请求函数也走这里 —— 它此前只保留错误消息、丢掉错误码，于是这条竞态会直接显示给用户。
+ */
+export async function withSessionRetry<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await callOnce<T>(method, body, signal)
+      return await run()
     } catch (error) {
-      const retryable = error instanceof ApiError && error.code === 'session-unknown' && attempt < SESSION_RETRY_LIMIT && signal?.aborted !== true
-      if (!retryable) throw error
+      if (!sessionPending(error) || attempt >= SESSION_RETRY_LIMIT || signal?.aborted === true) throw error
       await new Promise(resolve => setTimeout(resolve, SESSION_RETRY_MS))
     }
   }
+}
+
+export async function api<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  return withSessionRetry(() => callOnce<T>(method, body, signal), signal)
 }
 
 async function callOnce<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {

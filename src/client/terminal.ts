@@ -1,5 +1,5 @@
 import type { TerminalInfo, TerminalProfile } from '../terminal.ts'
-import { currentHostBase, normalizeHostBase } from './api.ts'
+import { ApiError, currentHostBase, normalizeHostBase, withSessionRetry } from './api.ts'
 
 export interface TerminalConnection {
   write(data: string): void
@@ -35,15 +35,21 @@ export function webSocketUrl(sessionId: string, id: string, wsBase?: string): st
   return `${protocol}://${location.host}/dsh-vscode-terminal/ws?${search}`
 }
 
-interface HostAnswer<T> { ok?: boolean; value?: T; wsBase?: string; error?: { message?: string } }
+interface HostAnswer<T> { ok?: boolean; value?: T; wsBase?: string; error?: { code?: string; message?: string } }
 
+/**
+ * 终端请求。会话刚创建时宿主可能还没登记（启动期竞态），与文件树同一策略重试；
+ * 因此这里必须保留错误码，否则那条竞态会被当成普通错误直接显示给用户。
+ */
 async function request<T>(method: string, body: Record<string, unknown>): Promise<{ value: T; wsBase?: string }> {
-  const response = await fetch(`/dsh-vscode-terminal/api/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-  const text = await response.text()
-  let answer: HostAnswer<T>
-  try { answer = JSON.parse(text) as HostAnswer<T> } catch { throw new Error(`terminal request returned invalid JSON (${response.status})`) }
-  if (!response.ok || answer.ok !== true) throw new Error(answer.error?.message ?? 'terminal request failed')
-  return { value: answer.value as T, wsBase: typeof answer.wsBase === 'string' ? answer.wsBase : undefined }
+  return withSessionRetry(async () => {
+    const response = await fetch(`/dsh-vscode-terminal/api/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const text = await response.text()
+    let answer: HostAnswer<T>
+    try { answer = JSON.parse(text) as HostAnswer<T> } catch { throw new Error(`terminal request returned invalid JSON (${response.status})`) }
+    if (!response.ok || answer.ok !== true) throw new ApiError(answer.error?.code ?? 'request-failed', answer.error?.message ?? 'terminal request failed')
+    return { value: answer.value as T, wsBase: typeof answer.wsBase === 'string' ? answer.wsBase : undefined }
+  })
 }
 
 /**
