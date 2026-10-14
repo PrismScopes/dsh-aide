@@ -83,18 +83,28 @@ try {
 line('补全（文档 4.3 / 4.4：结构化请求进、SSE 流式出）')
 let completionWorked = false
 try {
-  const result = await complete(request('const a = useState(0)\nconst b = useSt', 2, 19))
-  const meta = result.events.find(event => event.type === 'meta')
-  const output = result.events.find(event => event.type === 'output')
-  const error = result.events.find(event => event.type === 'error')
-  check('请求被接受', result.status === 200, `HTTP ${result.status}`)
-  check('返回 meta', meta !== undefined, meta === undefined ? '' : `model=${meta.model} 注入片段=${meta.snippets}`)
-  if (output !== undefined) {
-    completionWorked = true
-    check('产出候选', output.candidates.length > 0, JSON.stringify(output.candidates.map(candidate => candidate.text)))
-    check('首字节延迟', typeof output.candidates[0]?.elapsedMs === 'number', `${output.candidates[0]?.elapsedMs} ms（端到端 ${result.elapsedMs} ms）`)
-  } else if (error !== undefined) {
-    console.log(`  注意  上游未产出：${error.message}`)
+  // 两个用例都要跑：光标在文档末尾，以及光标在文件中段。后者才是真实编辑的常态 —— 曾经一个列号约定
+  // 错位让中段光标完全拿不到候选，而当时所有验证都用的是「光标在末尾」，看不见这个问题。
+  const middle = 'const a = useState(0)\nconst b = useSt\nconst c = 2\nconst d = 3'
+  for (const [label, document, lineNumber, column] of [
+    ['光标在文档末尾', 'const a = useState(0)\nconst b = useSt', 2, 16],
+    ['光标在文件中段', middle, 2, 16],
+  ]) {
+    const result = await complete(request(document, lineNumber, column))
+    const meta = result.events.find(event => event.type === 'meta')
+    const output = result.events.find(event => event.type === 'output')
+    const error = result.events.find(event => event.type === 'error')
+    check(`请求被接受（${label}）`, result.status === 200, `HTTP ${result.status}`)
+    check('返回 meta', meta !== undefined, meta === undefined ? '' : `model=${meta.model} 注入片段=${meta.snippets}`)
+    if (output !== undefined) {
+      completionWorked = true
+      check(`产出候选（${label}）`, output.candidates.length > 0, JSON.stringify(output.candidates.map(candidate => candidate.text)))
+      check('首字节延迟', typeof output.candidates[0]?.elapsedMs === 'number', `${output.candidates[0]?.elapsedMs} ms（端到端 ${result.elapsedMs} ms）`)
+    } else if (error !== undefined) {
+      console.log(`  注意  ${label} 上游未产出：${error.message}`)
+    } else {
+      check(`产出候选（${label}）`, false, '既没有 output 也没有 error')
+    }
   }
 } catch (error) {
   check('补全请求', false, String(error))

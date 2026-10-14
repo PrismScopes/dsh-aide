@@ -91,7 +91,7 @@ node scripts/completion-acceptance.mjs http://127.0.0.1:3999
 
 | 检查 | 结果 |
 | --- | --- |
-| `scripts/completion-acceptance.mjs` | 0 项未通过（配置、索引、补全、统计四项全绿） |
+| `scripts/completion-acceptance.mjs` | 0 项未通过（配置、索引、补全、统计四项全绿；补全一项含「光标在文档末尾」与「光标在文件中段」两个用例） |
 | 安全拦截（接口层） | 命中拦截规则时下发 `content_security`（`action: block`）且无 `output` |
 | 幻影呈现与采纳闭环（浏览器） | 幻影出现、真实按键采纳后模型与候选一致、采纳被记账 |
 | 候选切换（浏览器，三向） | 在两条候选间往返，且不重新发起请求 |
