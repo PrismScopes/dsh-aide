@@ -54,11 +54,30 @@ export function resolveProvider(ctx: CompletionContextLike, params: CompletionPa
     return { provider, profile: DEFAULT_PROMPT_PROFILE, source: 'http', model }
   }
   if (forced !== 'local' && llm !== undefined && defaultModel !== undefined) {
-    const provider = dshProvider(llm, defaultModel, { params })
+    // 补全可以单独指定路由：用户可能希望对话与补全用不同的模型（例如补全走免费模型）。
+    // 不设时沿用应用的默认模型，行为与以前一致。
+    const route = parseRoute(globalThis.process?.env?.['DSH_COMPLETION_ROUTE'])
+    const provider = dshProvider(llm, defaultModel, {
+      params,
+      ...(route === undefined ? {} : { selection: route }),
+    })
     return { provider, profile: INSTRUCTION_PROMPT_PROFILE, source: 'dsh', model: provider.model }
   }
   const provider = localProvider(params)
   return { provider, profile: DEFAULT_PROMPT_PROFILE, source: 'local', model: provider.model }
+}
+
+/**
+ * 解析「provider/model」形式的补全路由。
+ *
+ * 空值、缺斜杠、任一侧为空串都视为没配：宁可回落到应用的默认模型，也不要因为一个写错的
+ * 环境变量把补全整条打挂。
+ */
+function parseRoute(raw: string | undefined): { provider: string; model: string } | undefined {
+  if (raw === undefined || raw === '') return undefined
+  const at = raw.indexOf('/')
+  if (at <= 0 || at === raw.length - 1) return undefined
+  return { provider: raw.slice(0, at), model: raw.slice(at + 1) }
 }
 
 /** 客户端从请求体里取出的必要字段；缺一不可，缺就按 400 处理。 */
