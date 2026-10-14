@@ -6,7 +6,9 @@ import {
   parseRoute,
   resetCompletionSettings,
   resolveSettings,
+  readSettingsFile,
   setCompletionSettings,
+  settingsFilePath,
 } from '../src/completion/settings.ts'
 
 describe('completion settings', () => {
@@ -34,6 +36,27 @@ describe('completion settings', () => {
       route: { provider: 'env-provider', model: 'env-model' },
       fallback: true,
     })
+  })
+
+  it('reads a settings file and lets the environment win over it', () => {
+    // 文件是「数据目录里可编辑、又不动配置档」的那条入口。
+    const read = () => JSON.stringify({ completion: { route: 'file-provider/file-model', fallback: true } })
+    expect(readSettingsFile('whatever.json', read)).toEqual({ completion: { route: 'file-provider/file-model', fallback: true } })
+    expect(resolveSettings(undefined, {}, readSettingsFile('whatever.json', read))).toEqual({ route: { provider: 'file-provider', model: 'file-model' }, fallback: true })
+    const env = { DSH_COMPLETION_ROUTE: 'env-provider/env-model' }
+    expect(resolveSettings(undefined, env, readSettingsFile('whatever.json', read)).route).toEqual({ provider: 'env-provider', model: 'env-model' })
+  })
+
+  it('treats a broken settings file as no settings', () => {
+    // 一个写坏的文件绝不能让补全整体失效。
+    expect(readSettingsFile('x.json', () => 'not json at all')).toBeUndefined()
+    expect(resolveSettings(undefined, {}, readSettingsFile('x.json', () => 'not json at all'))).toEqual(DEFAULT_COMPLETION_SETTINGS)
+  })
+
+  it('locates the settings file from the data directory', () => {
+    expect(settingsFilePath({ DSH_HOME: 'H:\\dsh-data' })).toBe('H:/dsh-data/completion.settings.json')
+    expect(settingsFilePath({ DSH_HOME: 'H:\\dsh-data\\' })).toBe('H:/dsh-data/completion.settings.json')
+    expect(settingsFilePath({})).toBeUndefined()
   })
 
   it('defaults to no route and no fallback', () => {

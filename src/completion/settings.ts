@@ -50,14 +50,49 @@ export function fromConfig(config: unknown): Partial<CompletionSettings> {
   return settings
 }
 
-/** 生效的设置：默认值 + 插件配置 + 环境变量。 */
-export function resolveSettings(config?: unknown, env: Record<string, string | undefined> = globalThis.process?.env ?? {}): CompletionSettings {
-  return { ...DEFAULT_COMPLETION_SETTINGS, ...fromConfig(config), ...fromEnvironment(env) }
+/** 生效的设置：默认值 + 插件配置 + 设置文件 + 环境变量。 */
+export function resolveSettings(config?: unknown, env: Record<string, string | undefined> = globalThis.process?.env ?? {}, file?: unknown): CompletionSettings {
+  return { ...DEFAULT_COMPLETION_SETTINGS, ...fromConfig(config), ...fromConfig(file), ...fromEnvironment(env) }
 }
 
-/** 插件加载时写入一次。缺省参数表示没有插件配置。 */
+/**
+ * 从数据目录读设置文件。
+ *
+ * 为什么需要它：当前 DSH 版本里，bundle patch 的 `config` 送不到插件的 `apply`（同类插件的配置同样
+ * 送不到，实测过）。而桌面端应用不方便设环境变量，所以留一个用户可编辑、又不动配置档的入口：
+ * `%DSH_HOME%/completion.settings.json`，形如 `{ "completion": { "route": "provider/model", "fallback": true } }`。
+ * 文件不存在、不是 JSON、字段不合法，一律当作没设 —— 绝不因为一个写错的文件让补全整体失效。
+ */
+export function readSettingsFile(path: string, readFile: (path: string) => string = defaultReadFile): unknown {
+  try {
+    return JSON.parse(readFile(path))
+  } catch {
+    return undefined
+  }
+}
+
+function defaultReadFile(path: string): string {
+  // 动态取用，避免把 node:fs 带进浏览器侧的打包。
+  const load = (globalThis.process as unknown as { getBuiltinModule?: (name: string) => { readFileSync?: (path: string, encoding: string) => string } } | undefined)?.getBuiltinModule
+  const fs = load?.('node:fs')
+  if (fs?.readFileSync === undefined) throw new Error('readFileSync unavailable')
+  return fs.readFileSync(path, 'utf8')
+}
+
+/** 设置文件的位置：数据目录下固定名字。数据目录未知时返回 undefined。 */
+export function settingsFilePath(env: Record<string, string | undefined> = globalThis.process?.env ?? {}): string | undefined {
+  const home = env['DSH_HOME']
+  if (home === undefined || home === '') return undefined
+  const neat = home.replace(/[\\/]+$/, '').replaceAll('\\', '/')
+  return `${neat}/completion.settings.json`
+}
+
+/** 插件加载时写入一次；同时读一次数据目录里的设置文件。 */
 export function setCompletionSettings(config?: unknown): CompletionSettings {
-  current = resolveSettings(config)
+  const env = globalThis.process?.env ?? {}
+  const path = settingsFilePath(env)
+  const file = path === undefined ? undefined : readSettingsFile(path)
+  current = resolveSettings(config, env, file)
   return current
 }
 
