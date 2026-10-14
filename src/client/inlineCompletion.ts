@@ -66,10 +66,29 @@ export function nextLineOf(text: string): string {
   return index === -1 ? text : text.slice(0, index + 1)
 }
 
+/**
+ * 把 1 起的行号列号换算成字符偏移。
+ *
+ * 客户端不引用宿主的模块（那会把整个 prompt 组装拉进浏览器包），所以这里是同一约定的小实现：
+ * 行列都从 1 起，与 Monaco 位置、与协议一致。
+ */
+function offsetOfPosition(text: string, line: number, column: number): number {
+  const lines = text.split('\n')
+  const target = Math.max(1, Math.min(line, lines.length))
+  let offset = 0
+  for (let index = 0; index < target - 1; index++) offset += (lines[index] ?? '').length + 1
+  return Math.min(offset + Math.max(0, column - 1), text.length)
+}
+
+
 export class InlineCompletionController {
   readonly tracker: ChangeTracker = { lastChangeHadNewline: false }
   private inFlight: AbortController | undefined
   private triggerTimer: ReturnType<typeof setTimeout> | undefined
+  /** 最近一次编辑的前后文本；宿主用它做「回滚编辑」等判定，并写进 prompt 的编辑历史。 */
+  private lastEdit: { before: string; after: string } | undefined
+  /** 上一版文档：变更事件发生在编辑之后，被删掉的文本只能从这里取。 */
+  private previousValue: string | undefined
   /** 服务端下发的参数覆盖本地默认值（文档七：参数由服务端下发，便于按分组灰度）。 */
   private paramsOverride: CompletionParams | undefined
   /** 请求前预过滤用的租户规则（文档 6.4 的请求前一道）。 */
@@ -152,6 +171,25 @@ export class InlineCompletionController {
     }
   }
 
+  /**
+   * 记录最近一次编辑的前后文本。
+   *
+   * 变更事件发生在编辑之后，被删掉的文本只能从上一版文档里按变更范围取。一次事件里有多处变更时
+   * 不做重建（长度对不上就跳过）：宁可不记，也不记错。
+   */
+  private captureEdit(event: { changes: readonly monaco.editor.IModelContentChange[] }): void {
+    const model = this.options.editor.getModel()
+    const change = event.changes[0]
+    if (model !== null && this.previousValue !== undefined && change !== undefined) {
+      const current = model.getValue()
+      if (current.length === this.previousValue.length - change.rangeLength + change.text.length) {
+        const start = offsetOfPosition(this.previousValue, change.range.startLineNumber, change.range.startColumn)
+        this.lastEdit = { before: this.previousValue.slice(start, start + change.rangeLength), after: change.text }
+      }
+    }
+    this.previousValue = model?.getValue()
+  }
+
   /** 应用服务端下发的实验分组。 */
   setExperiment(experiment: string | undefined): void {
     this.experiment = experiment
@@ -185,6 +223,7 @@ export class InlineCompletionController {
    * 写成事件形状既能直接用，也还能手搓一个对象来单测。
    */
   noteChange(event: { changes: readonly monaco.editor.IModelContentChange[] }): void {
+    this.captureEdit(event)
     this.tracker.lastChangeHadNewline = event.changes.some(change => change.text.includes('\n'))
     this.notePossibleAccept(event)
     // 有在途请求而被这次变更作废，就是一次「请求取消」（文档七的取消率指标）。
@@ -235,7 +274,8 @@ export class InlineCompletionController {
         language,
         document: model.getValue(),
         // 原样传 Monaco 的位置：协议约定行列都从 1 起，换算只发生在宿主一侧（见 protocol.ts）。
-      rewriteAt: { line: position.lineNumber, column: position.column },
+        rewriteAt: { line: position.lineNumber, column: position.column },
+        ...(this.lastEdit === undefined ? {} : { lastEdit: this.lastEdit }),
         signal: controller.signal,
       })
     } catch (error) {

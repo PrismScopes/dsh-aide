@@ -60,8 +60,10 @@ export interface SuggestInput {
   filePath: string
   language: string
   document: string
-  /** 行号 1 起、列 0 起。 */
+  /** 光标位置：行列都从 1 起，与 Monaco 位置一致（见 protocol.ts 的约定说明）。 */
   rewriteAt: { line: number; column: number }
+  /** 最近一次编辑的前后文本；宿主用它判定「回滚编辑」等情形，并写进编辑历史。 */
+  lastEdit?: { before: string; after: string }
   edits?: EditHistoryEntry[]
   diagnostics?: CompletionRequest['diagnostics']
   signal?: AbortSignal
@@ -163,7 +165,13 @@ export class CompletionClient {
       language: input.language,
       trigger: 'inline',
       edits: input.edits ?? [],
-      cursor: { filePath: input.filePath, rewriteAt: input.rewriteAt, document: input.document },
+      cursor: {
+        filePath: input.filePath,
+        rewriteAt: input.rewriteAt,
+        document: input.document,
+        // 宿主按它判定「回滚编辑」「刚编辑却建议删除」，并在 prompt 里带上编辑历史。
+        ...(input.lastEdit === undefined ? {} : { lastEdit: input.lastEdit }),
+      },
       diagnostics: input.diagnostics ?? [],
       forceRewrite: false,
     }

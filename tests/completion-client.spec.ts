@@ -215,6 +215,56 @@ describe('accept granularity', () => {
     expect(reported.filter(event => event.kind === 'accepted')).toHaveLength(1)
   })
 
+  it('sends the last edit with the request', async () => {
+    // 宿主有三条丢弃判定与 prompt 的编辑历史段都依赖它；曾经协议里有字段、客户端从不填。
+    const sent: Array<{ lastEdit?: { before: string; after: string } }> = []
+    let value = 'const a = 1\nconst b = 2'
+    const model = {
+      uri: { path: '/a.ts' },
+      getLanguageId: () => 'typescript',
+      getValue: () => value,
+      getOffsetAt: (position: { column: number }) => position.column - 1,
+    }
+    const controller = new InlineCompletionController({
+      client: {
+        suggest: async (input: { lastEdit?: { before: string; after: string } }) => {
+          sent.push(input)
+          return { candidates: ['ate'], finishReason: 'done', masked: false, model: 'local-heuristic', experiment: 'control', timing: { requestedAt: 0, rttMs: 1 } }
+        },
+        recordAccept: () => undefined,
+      } as unknown as CompletionClient,
+      controllerId: 'last-edit-test',
+      kinds: { automatic: 0 as unknown as monaco.languages.InlineCompletionTriggerKind, explicit: 1 as unknown as monaco.languages.InlineCompletionTriggerKind },
+      emptyRangeAt: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } as unknown as monaco.Range),
+      editor: { getModel: () => model, getPosition: () => ({ lineNumber: 1, column: 1 }), executeEdits: () => undefined } as unknown as monaco.editor.IStandaloneCodeEditor,
+    })
+
+    // 真实顺序：文档先变，变更事件后到。第一次变更还没有上一版可对照，因此记不下前后文本
+    // （这是设计：宁可不记也不记错）。
+    value = 'const a = 1\nconst b = 23'
+    controller.noteChange({ changes: [{ text: '3', rangeLength: 0, range: { startLineNumber: 2, startColumn: 11, endLineNumber: 2, endColumn: 11 } } as unknown as monaco.editor.IModelContentChange] })
+    await controller.provide(
+      model as unknown as monaco.editor.ITextModel,
+      { lineNumber: 2, column: 12 } as unknown as monaco.Position,
+      { triggerKind: 1 } as unknown as monaco.languages.InlineCompletionContext,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) } as unknown as monaco.CancellationToken,
+    )
+    expect(sent[0]?.lastEdit).toBeUndefined()
+    // 第二次之后有一版可对照，删掉的「3」被记下来。
+
+    // 第二次变更：删掉刚输入的「3」——被删的文本从上一版文档里取。
+    value = 'const a = 1\nconst b = 2'
+    controller.noteChange({ changes: [{ text: '', rangeLength: 1, range: { startLineNumber: 2, startColumn: 12, endLineNumber: 2, endColumn: 13 } } as unknown as monaco.editor.IModelContentChange] })
+    // 位置与上一次不同：相同位置会命中客户端缓存、不发请求（这是设计行为）。
+    await controller.provide(
+      model as unknown as monaco.editor.ITextModel,
+      { lineNumber: 2, column: 11 } as unknown as monaco.Position,
+      { triggerKind: 1 } as unknown as monaco.languages.InlineCompletionContext,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) } as unknown as monaco.CancellationToken,
+    )
+    expect(sent.at(-1)?.lastEdit).toEqual({ before: '3', after: '' })
+  })
+
   it('reports shown, accepted and cancelled through the telemetry hook', async () => {
     // 采样点必须真的接上：采纳率的分母是展示次数，取消率来自在途请求被变更作废。
     const reported: Array<{ kind: string; candidateCount?: number; firstByteMs?: number; model?: string; experiment?: string }> = []
