@@ -51,6 +51,11 @@ export interface CompletionRequest {
   cursor: CursorEdit
   diagnostics: DiagnosticEntry[]
   /** 客户端对用户意图的初步判断，可为空。 */
+  /**
+   * 意图标识：客户端对用户意图的初步判断（文档 4.3，可为空）。
+   *
+   * 当前客户端不下发它，服务端也不据此分流 —— 保留字段是为了将来加意图判断时不必改协议。
+   */
   intent?: string
   /** 特定实验或模式下要求服务端忽略缓存。 */
   /**
