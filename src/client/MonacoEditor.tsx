@@ -156,6 +156,30 @@ function installWorkerEnvironment(): void {
   }
 }
 
+/**
+ * 屏蔽「模块解析」这一类诊断。
+ *
+ * 工作台的 TS 服务运行在虚拟文件系统里，看不到磁盘上的 node_modules，因此裸包名（如
+ * @deepseek-ai/...）一定解析不到 —— moduleResolution 设成什么都不管用。这类报错是环境的
+ * 必然结果，不是代码问题，读代码时纯属噪声。只屏蔽解析类代码，其余诊断照常显示。
+ */
+const UNRESOLVABLE_MODULE_CODES = [2307, 2792, 7016, 2688]
+
+function configureTypeScriptDiagnostics(monaco: Monaco): void {
+  const typescript = monaco.languages.typescript
+  if (typescript === undefined) return
+  for (const defaults of [typescript.typescriptDefaults, typescript.javascriptDefaults]) {
+    try {
+      defaults.setDiagnosticsOptions({
+        ...defaults.getDiagnosticsOptions(),
+        diagnosticCodesToIgnore: UNRESOLVABLE_MODULE_CODES,
+      })
+    } catch (error) {
+      console.warn('[dvw] 诊断过滤设置失败，编辑器照常可用：', error)
+    }
+  }
+}
+
 export function loadMonaco(): Promise<Monaco> {
   loading ??= new Promise((resolve, reject) => {
     const start = () => {
@@ -163,7 +187,11 @@ export function loadMonaco(): Promise<Monaco> {
       if (loader === undefined) return reject(new Error('Monaco AMD loader unavailable'))
       installWorkerEnvironment()
       loader.config({ paths: { vs: '/dsh-vscode/monaco/vs' } })
-      loader(['vs/editor/editor.main'], () => window.monaco === undefined ? reject(new Error('Monaco failed to initialize')) : resolve(window.monaco))
+      loader(['vs/editor/editor.main'], () => {
+        if (window.monaco === undefined) { reject(new Error('Monaco failed to initialize')); return }
+        configureTypeScriptDiagnostics(window.monaco)
+        resolve(window.monaco)
+      })
     }
     if (window.require !== undefined) { start(); return }
     const script = document.createElement('script'); script.src = '/dsh-vscode/monaco/vs/loader.js'; script.onload = start; script.onerror = () => reject(new Error('failed to load Monaco')); document.head.append(script)
