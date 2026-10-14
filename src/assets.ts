@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 import { dirname, extname, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { WorkbenchError } from './wire.ts'
 import { inside } from './host.ts'
 
@@ -17,11 +18,33 @@ export function codiconAsset(): { path: string; type: string } {
   return { path: resolve(packageRoot, 'dist', 'codicon.ttf'), type: 'font/ttf' }
 }
 
+/** Monaco 的构建目录：min 是运行时用的那份，dev/esm 只在 min 缺文件时兜底。 */
+const MONACO_BUILDS = ['min', 'dev', 'esm'] as const
+
 export function monacoAsset(raw: string): { path: string; type: string } {
   const packageRoot = dirname(require.resolve('monaco-editor/package.json'))
-  const path = resolve(packageRoot, 'min', raw)
-  const root = resolve(packageRoot, 'min')
-  if (!inside(root, path)) throw new WorkbenchError('asset-invalid', 'invalid Monaco asset path', 403)
+  const root = resolve(packageRoot, MONACO_BUILDS[0])
+  const requested = resolve(root, raw)
+  if (!inside(root, requested)) throw new WorkbenchError('asset-invalid', 'invalid Monaco asset path', 403)
+  // 按序查找：min 缺文件时去 dev/esm 找（三个构建的文件集并不相同），并把结果留痕。
+  let path = requested
+  let found = existsSync(requested)
+  if (!found) {
+    for (const build of MONACO_BUILDS.slice(1)) {
+      const candidate = resolve(packageRoot, build, raw)
+      if (!inside(resolve(packageRoot, build), candidate)) continue
+      if (existsSync(candidate)) {
+        console.warn(`[dsh-completion] Monaco 资源 min 构建缺失，改用 ${build}：${raw}`)
+        path = candidate
+        found = true
+        break
+      }
+    }
+  }
+  if (!found) {
+    console.warn(`[dsh-completion] Monaco 资源在 ${MONACO_BUILDS.join("/")} 中都不存在：${raw}`)
+    throw new WorkbenchError('asset-missing', `Monaco asset not found: ${raw}`, 404)
+  }
   const type = extname(path) === '.css' ? 'text/css' : extname(path) === '.js' ? 'text/javascript' : extname(path) === '.ttf' ? 'font/ttf' : 'application/octet-stream'
   return { path, type }
 }
