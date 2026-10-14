@@ -19,7 +19,10 @@ const PROCESS_TIMEOUT = 30_000
 
 export function cwdFor(ctx: HostContext, sessionId: string): string {
   const cwd = ctx.sessions.get(sessionId)?.header.cwd
-  if (cwd === undefined || cwd === '') return process.cwd()
+  // 会话还没就绪时**不能**回落到进程目录：桌面端进程的工作目录是应用自己的数据目录，
+  // 那样列出来的文件树与随后的读写会指向不同的地方（表现为列出 tools、点它却报路径不存在）。
+  // 这里明确报「未就绪」，让客户端等会话出现后重试。
+  if (cwd === undefined || cwd === '') throw new WorkbenchError('session-unknown', 'session is not ready yet; retry once it exists', 409)
   if (!isAbsolute(cwd)) throw new WorkbenchError('cwd-invalid', 'session working directory is not absolute')
   return normalize(cwd)
 }

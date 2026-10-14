@@ -135,7 +135,10 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
     service.setSettingsOpener(openDshSettings)
     return () => { service.setSettingsOpener(() => {}) }
   }, [service])
-  return <Workbench key={sessionId ?? 'no-session'} service={service} useSessions={useSessions as never}/>
+  // 没有会话就不渲染：文件树与文件读写都以会话工作区为根，会话未就绪时取到的内容不可信。
+  // 组件以 sessionId 为 key，会话出现后会重新挂载，自然完成首次取数。
+  if (sessionId === undefined || sessionId === '') return null
+  return <Workbench key={sessionId} service={service} useSessions={useSessions as never}/>
 }
 
 /**
