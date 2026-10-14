@@ -174,6 +174,25 @@ node scripts/completion-acceptance.mjs http://127.0.0.1:3999
 失败一旦发生会留下痕迹：`completion.stats` 的 `failed` 与 `lastFailure` 会写明路由与原因
 （例如 `completion upstream failed (deepseek-official/deepseek-flash): …`）。
 
+## 模型调用失败怎么排查
+
+先看错误里的机器码，**不要只看消息文本**。DSH 的 DeepSeek 适配器把内部任何错误（含取凭据失败）
+统一包成 `DeepSeek Messages transport failed · TRANSPORT`，所以「TRANSPORT」既可能是网络不通，
+也可能是凭据没取到 —— 它本身不具诊断力。
+
+按这三步缩小范围：
+
+1. **端点是否可达**：直接请求提供方实际使用的地址。DeepSeek 路由用的是
+   `https://api.deepseek.com/anthropic/v1/messages`（不是 `/v1`）。返回 401 说明网络与 TLS 都没问题，
+   问题在凭据；返回连接错误才是网络层。
+2. **凭据能否取到**：密钥来自 DSH 的凭据存储（`%DSH_HOME%/.credentials.yaml`）或环境变量。
+   前者有、后者没有时，要看该提供方声明的 `apiKeyEnv` 与实际存放的名字是否一致。
+3. **是否需要转发**：本机若对某些域名直连会被拒 TLS（例如 anyrouter.top），而 DSH 跑在 Node 上、
+   **不遵循 Windows 系统代理**，就必须经本机转发器（配置档里 `llm-pi-ai` 的对应提供方指向它）。
+   这类失败同样是 TRANSPORT。
+
+模型调不通时，若已开启回落，编辑器里仍会有候选，宿主日志同时写明是哪条路由、什么原因。
+
 ## 已知局限（文档第九节）
 
 1. 补全质量主要取决于模型与 prompt，不取决于客户端代码。客户端做的是把上下文准备好并按契约收发。
