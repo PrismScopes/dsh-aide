@@ -43,7 +43,26 @@ export function hostWebSocketUrl(path: string, query: Record<string, string> = {
   return `${protocol}://${location.host}${path}${suffix}`
 }
 
+/**
+ * 启动期的会话竞态：宿主还没登记会话时工作台就可能发请求，此时宿主返回 session-unknown。
+ * 这是瞬时状态，等一会儿即可 —— 自动重试，不把错误暴露给用户。
+ */
+const SESSION_RETRY_MS = 400
+const SESSION_RETRY_LIMIT = 12
+
 export async function api<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callOnce<T>(method, body, signal)
+    } catch (error) {
+      const retryable = error instanceof ApiError && error.code === 'session-unknown' && attempt < SESSION_RETRY_LIMIT && signal?.aborted !== true
+      if (!retryable) throw error
+      await new Promise(resolve => setTimeout(resolve, SESSION_RETRY_MS))
+    }
+  }
+}
+
+async function callOnce<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/dsh-vscode/api/${method}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
   })
