@@ -6,6 +6,7 @@
  */
 import { normalize } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { fallbackProvider } from './fallback.ts'
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from './params.ts'
 import { encodeSseEvent, type CompletionEvent, type CompletionRequest } from './protocol.ts'
 import { dshProvider, type DshDefaultModelService, type DshLlmService } from './dshProvider.ts'
@@ -62,10 +63,25 @@ export function resolveProvider(ctx: CompletionContextLike, params: CompletionPa
       params,
       ...(route === undefined ? {} : { selection: route }),
     })
-    return { provider, profile: INSTRUCTION_PROMPT_PROFILE, source: 'dsh', model: provider.model }
+    return { provider: withFallback(provider, params), profile: INSTRUCTION_PROMPT_PROFILE, source: 'dsh', model: provider.model }
   }
   const provider = localProvider(params)
   return { provider, profile: DEFAULT_PROMPT_PROFILE, source: 'local', model: provider.model }
+}
+
+/**
+ * 按开关决定是否给模型提供方套上本地兜底。
+ *
+ * 默认关闭：模型故障应当显式暴露，而不是悄悄降级。开启后（`DSH_COMPLETION_FALLBACK=local`）
+ * 编辑器至少还有候选可用，同时每次回落都写宿主日志 —— 回落不等于把故障藏起来。
+ */
+function withFallback(provider: CompletionProvider, params: CompletionParams): CompletionProvider {
+  if ((globalThis.process?.env?.['DSH_COMPLETION_FALLBACK'] ?? '').toLowerCase() !== 'local') return provider
+  return fallbackProvider(provider, localProvider(params), {
+    onFallback: failure => {
+      console.warn(`[dsh-completion] 模型调用失败，已回落本地兜底：${failure.provider}/${failure.model} · ${failure.error}`)
+    },
+  })
 }
 
 /**
