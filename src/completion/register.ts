@@ -4,6 +4,7 @@
  * 单独成模块而不是塞进 routes.ts：这条链路有自己的提供方选择与流式收尾，放在一起会让两边都变难读。
  * 复用 routes.ts 已有的 trusted / readBody / send 辅助函数，由调用方传进来，不重复实现。
  */
+import { normalize } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from './params.ts'
 import { encodeSseEvent, type CompletionEvent, type CompletionRequest } from './protocol.ts'
@@ -144,7 +145,8 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
       const groupParams = paramsForGroup(experiment)
       const resolved = resolveProvider(ctx, groupParams)
       const cwd = safeCwd(ctx, helpers, request.sessionId)
-      const index = await completionIndexFor(cwd, groupParams)
+      // 解析不到工作区就不注入片段（文档把检索列为可选上下文来源）：好过索引错目录。
+      const index = cwd === undefined ? undefined : await completionIndexFor(cwd, groupParams)
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-cache, no-transform',
@@ -157,8 +159,9 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
         for await (const event of runCompletion(tuned, {
           provider: resolved.provider, params: groupParams, profile: resolved.profile, signal: controller.signal,
           // 索引没就绪就先不注入片段：刷新在后台跑，补全不等它。
-          retrieve: current => index.retrieve(current),
-          onSecurityHit: (hit, current) => { appendSecurityAudit(cwd, hit, current) },
+          ...(index === undefined ? {} : { retrieve: (current: CompletionRequest) => index.retrieve(current) }),
+          // 解析不到工作区时不写审计文件：不要往未知目录里落东西。
+          ...(cwd === undefined ? {} : { onSecurityHit: (hit: SecurityHit, current: CompletionRequest) => { appendSecurityAudit(cwd, hit, current) } }),
         })) {
           if (event.type === 'output') {
             for (const candidate of event.candidates) {
@@ -212,11 +215,28 @@ export function completionIndexFor(cwd: string, params: CompletionParams = DEFAU
   return created
 }
 
-/** 会话解析失败时退回进程工作目录：补全不该因为解析不到工作区就整体失败。 */
-function safeCwd(ctx: CompletionContextLike, helpers: CompletionRouteHelpers, sessionId: string): string {
-  try {
-    return helpers.cwdFor(sessionId)
-  } catch {
-    return (ctx.get('workspaceRoot') as string | undefined) ?? process.cwd()
+/**
+ * 解析这次补全该在哪个工作区里检索。
+ *
+ * 优先用请求里的会话；会话号对不上（例如接口探针传的是占位值）时退到任一已知会话的工作区；
+ * 都拿不到就返回 undefined，由调用方跳过检索。**不能退到进程目录**：桌面端进程的工作目录是
+ * 应用自己的目录，索引它既白扫一遍，又会让检索永远命中无关内容。
+ */
+function safeCwd(ctx: CompletionContextLike, helpers: CompletionRouteHelpers, sessionId: string): string | undefined {
+  const sessions = ctx.get('sessions') as
+    | { get(id: string): { header?: { cwd?: string } } | undefined; list(): readonly { header?: { cwd?: string } }[] }
+    | undefined
+  const own = sessions?.get(sessionId)?.header?.cwd
+  if (own !== undefined && own !== '') {
+    try {
+      return helpers.cwdFor(sessionId)
+    } catch {
+      return normalize(own)
+    }
   }
+  for (const session of sessions?.list() ?? []) {
+    const cwd = session?.header?.cwd
+    if (cwd !== undefined && cwd !== '') return normalize(cwd)
+  }
+  return undefined
 }
