@@ -66,6 +66,9 @@ export function nextLineOf(text: string): string {
   return index === -1 ? text : text.slice(0, index + 1)
 }
 
+/** 编辑历史只在文档不超过这个长度时记录：整篇取值是 O(长度)，而它跑在每次按键上。 */
+const MAX_EDIT_TRACK_CHARS = 400_000
+
 /**
  * 把 1 起的行号列号换算成字符偏移。
  *
@@ -176,18 +179,25 @@ export class InlineCompletionController {
    *
    * 变更事件发生在编辑之后，被删掉的文本只能从上一版文档里按变更范围取。一次事件里有多处变更时
    * 不做重建（长度对不上就跳过）：宁可不记，也不记错。
+   *
+   * **超大文档不记**：取值是整篇复制，而这段代码跑在每一次按键上。工作区里可能有大文件（日志、
+   * 数据文件），对它们每次按键复制两遍会直接把编辑器拖死 —— 表现为「打开文件没反应」。
+   * 编辑历史只是加分项，不值得拿编辑流畅性去换。
    */
   private captureEdit(event: { changes: readonly monaco.editor.IModelContentChange[] }): void {
     const model = this.options.editor.getModel()
     const change = event.changes[0]
-    if (model !== null && this.previousValue !== undefined && change !== undefined) {
-      const current = model.getValue()
-      if (current.length === this.previousValue.length - change.rangeLength + change.text.length) {
-        const start = offsetOfPosition(this.previousValue, change.range.startLineNumber, change.range.startColumn)
-        this.lastEdit = { before: this.previousValue.slice(start, start + change.rangeLength), after: change.text }
-      }
+    if (model === null || change === undefined) return
+    if (model.getValueLength() > MAX_EDIT_TRACK_CHARS) {
+      this.previousValue = undefined
+      return
     }
-    this.previousValue = model?.getValue()
+    const current = model.getValue()
+    if (this.previousValue !== undefined && current.length === this.previousValue.length - change.rangeLength + change.text.length) {
+      const start = offsetOfPosition(this.previousValue, change.range.startLineNumber, change.range.startColumn)
+      this.lastEdit = { before: this.previousValue.slice(start, start + change.rangeLength), after: change.text }
+    }
+    this.previousValue = current
   }
 
   /** 应用服务端下发的实验分组。 */
