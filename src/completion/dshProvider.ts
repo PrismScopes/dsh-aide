@@ -18,6 +18,8 @@ export interface DshModelSelection { provider: string; model: string; reasoningE
 export interface DshGenerateOptions {
   provider: string
   model: string
+  /** 会话号：DSH 的请求扩展要求它，缺了会在发请求前失败（表现为 TRANSPORT）。 */
+  sessionId?: string
   messages: Array<{ role: 'user'; content: string }>
   temperature?: number
   maxTokens?: number
@@ -29,6 +31,7 @@ export interface DshGenerateOptions {
 export interface DshCallConfig {
   provider: string
   model: string
+  sessionId?: string
   temperature?: number
   maxTokens?: number
   stop?: string[]
@@ -97,8 +100,9 @@ export interface DshProviderOptions {
 async function openStream(llm: DshLlmService, request: DshGenerateOptions, chosen: DshModelSelection): Promise<AsyncIterable<DshStreamChunk>> {
   try {
     const prepared = await llm.prepareCall({
-      provider: chosen.provider,
-      model: chosen.model,
+      provider: request.provider,
+      model: request.model,
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
       temperature: request.temperature,
       maxTokens: request.maxTokens,
       stop: request.stop,
@@ -122,6 +126,7 @@ export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelSer
       const request: DshGenerateOptions = {
         provider: chosen.provider,
         model: chosen.model,
+        ...(context.sessionId === '' ? {} : { sessionId: context.sessionId }),
         temperature: 0,
         maxTokens,
         stop: COMPLETION_STOP,

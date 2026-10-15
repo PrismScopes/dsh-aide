@@ -21,6 +21,13 @@ export interface CompletionChunk { text: string; done: boolean; index?: number }
 
 export interface ProviderContext {
   signal: AbortSignal
+  /**
+   * 会话号。
+   *
+   * DSH 默认启用的请求扩展（`dsh_session_log`）要求请求携带它，缺了会在发出请求之前就失败，
+   * 而失败被适配器包成 TRANSPORT，看不出原因。
+   */
+  sessionId: string
   language: string
   params: CompletionParams
   /** FIM 的前缀与后缀，本地兜底与调试都用它们，不必再解析 prompt。 */

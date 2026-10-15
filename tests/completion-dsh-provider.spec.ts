@@ -27,7 +27,7 @@ function fakeLlm(chunks: DshStreamChunk[], resolved?: Record<string, unknown>) {
 
 const selection = { provider: 'test', model: 'test-model' }
 const defaultModel = { currentSelection: () => selection }
-const context = { signal: new AbortController().signal, language: 'typescript', params: DEFAULT_COMPLETION_PARAMS, prefix: 'const a = useSt', suffix: '' }
+const context = { signal: new AbortController().signal, sessionId: 'test-session', language: 'typescript', params: DEFAULT_COMPLETION_PARAMS, prefix: 'const a = useSt', suffix: '' }
 
 const collect = async (provider: ReturnType<typeof dshProvider>): Promise<string[]> => {
   const texts: string[] = []

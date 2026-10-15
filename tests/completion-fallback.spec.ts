@@ -5,6 +5,7 @@ import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
 
 const context = {
   signal: new AbortController().signal,
+  sessionId: 'test-session',
   language: 'typescript',
   params: DEFAULT_COMPLETION_PARAMS,
   prefix: 'const a = useState(0)\nconst b = useSt',

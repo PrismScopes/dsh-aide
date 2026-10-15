@@ -95,6 +95,7 @@ export async function* runCompletion(request: CompletionRequest, options: Comple
     }
     for await (const chunk of options.provider.complete(assembled.prompt, {
       signal: controller.signal,
+      sessionId: request.sessionId,
       language: request.language,
       params,
       prefix: assembled.prefix,
