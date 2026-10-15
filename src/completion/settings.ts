@@ -85,6 +85,16 @@ function defaultReadFile(path: string): string {
 }
 
 /** 设置文件的位置：数据目录下固定名字。数据目录未知时返回 undefined。 */
+/**
+ * 补全诊断日志的路径：与设置文件同级（%DSH_HOME% 下），便于在应用侧排查「没有补全」类问题。
+ *
+ * 记录请求是否到达、用的是模型还是本地兜底、以及失败原因 —— 这三件事决定了问题出在客户端、
+ * 选路还是模型调用。日志只用于排查，不参与任何决策。
+ */
+export function diagnosticLogPath(env: Record<string, string | undefined> = globalThis.process?.env ?? {}): string | undefined {
+  return settingsFilePath(env)?.replace(/completion\.settings\.json$/, 'completion.log')
+}
+
 export function settingsFilePath(env: Record<string, string | undefined> = globalThis.process?.env ?? {}): string | undefined {
   const home = env['DSH_HOME']
   if (home === undefined || home === '') return undefined

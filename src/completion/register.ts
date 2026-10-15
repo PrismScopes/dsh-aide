@@ -14,6 +14,7 @@ import { dshProvider, type DshDefaultModelService, type DshLlmService } from './
 import { httpProvider, localProvider, type CompletionProvider } from './provider.ts'
 import { DEFAULT_PROMPT_PROFILE, INSTRUCTION_PROMPT_PROFILE, type PromptProfile } from './prompt.ts'
 import { runCompletion } from './service.ts'
+import { noteCompletion } from './diagnostics.ts'
 import { WorkspaceIndex } from './workspaceIndex.ts'
 import type { SecurityHit } from './security.ts'
 import { groupForSession, paramsForGroup } from './experiment.ts'
@@ -145,6 +146,7 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
 
       // 分组由服务端决定并按会话稳定分配（文档 4.3、七）：写回环境元数据后再往下走，
       // 这样 meta 事件、埋点与日志看到的是同一个分组。
+      noteCompletion(`请求到达 session=${request.sessionId.slice(0, 20)} language=${request.language} file=${request.cursor.filePath}`)
       const experiment = groupForSession(request.sessionId)
       const tuned = { ...request, environment: { ...request.environment, experiment } }
       const groupParams = paramsForGroup(experiment)
@@ -179,9 +181,11 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
         }
         // 给出过候选才算一次「展示」：采纳率的分母是它。
         if (candidateCount > 0) {
+          noteCompletion(`产出候选 ${candidateCount} 条，首字节 ${firstByteMs ?? -1} ms，模型=${resolved.model}`)
           completionTelemetry.record({ kind: 'shown', sessionId: request.sessionId, language: request.language, model: resolved.model, experiment, ...(firstByteMs === undefined ? {} : { firstByteMs }), candidateCount })
         }
       } catch (error) {
+        noteCompletion(`失败 ${error instanceof Error ? error.message : String(error)}`)
         const failure: CompletionEvent = { type: 'error', code: 'completion-failed', message: error instanceof Error ? error.message : String(error) }
         if (!res.writableEnded) res.write(encodeSseEvent(failure))
       } finally {
