@@ -81,7 +81,10 @@ function withFallback(provider: CompletionProvider, params: CompletionParams): C
   if (!completionSettings().fallback) return provider
   return fallbackProvider(provider, localProvider(params), {
     onFallback: failure => {
-      console.warn(`[dsh-completion] 模型调用失败，已回落本地兜底：${failure.provider}/${failure.model} · ${failure.error}`)
+      const line = `模型调用失败，已回落本地兜底：${failure.provider}/${failure.model} · ${failure.error}`
+      console.warn(`[dsh-completion] ${line}`)
+      // 同时写进诊断文件：应用侧的启动窗口日志拿不到，而这句失败原因是唯一的线索。
+      noteCompletion(line)
     },
   })
 }
