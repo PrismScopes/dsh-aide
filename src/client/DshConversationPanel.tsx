@@ -1,11 +1,17 @@
 import { useLayoutEffect } from 'react'
 
-/** Locate the resident DSH conversation without depending on generated CSS module names. */
+/**
+ * Locate the resident DSH conversation without depending on generated CSS module names.
+ *
+ * DSH 0.2.1 把主视图包进 `[data-phase]` 容器，正文滚动节点在其内部；后台保活的会话也可能
+ * 有同样的滚动节点，所以必须限定在 phase 容器里找，否则会把别人的对话搬进工作台。
+ * 0.2.0 的旧结构（滚动节点的父元素带 data-phase / data-content-phase）保留为回退。
+ */
 export function findDshConversationRoot(documentRoot: Document = document): HTMLElement | null {
+  const phase = documentRoot.querySelector<HTMLElement>('[data-phase] [data-conversation-scroll]')?.closest<HTMLElement>('[data-phase]')
+  if (phase != null) return phase
   const scroller = documentRoot.querySelector<HTMLElement>('[data-conversation-scroll]')
   const root = scroller?.parentElement
-  // DSH 0.2.0 把阶段标记为 data-content-phase；旧版是 data-phase。两者都认，
-  // 否则宿主对话栏搬不进工作台右列，会与工作台的第四列大面积重叠。
   return root instanceof HTMLElement && (root.dataset.phase !== undefined || root.dataset.contentPhase !== undefined) ? root : null
 }
 

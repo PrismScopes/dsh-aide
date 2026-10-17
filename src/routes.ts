@@ -7,7 +7,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import type { HostContext } from './context.ts'
 import { codiconAsset, cwdFor, fileIconAsset, katexAsset, monacoAsset, onigWasmAsset, pdfWorkerAsset, uploadFile, workspacePreviewFile } from './host.ts'
 import { readGrammar } from './assets.ts'
-import { readBinaryBody, readBody, send, sendError, trusted, WorkbenchError } from './wire.ts'
+import { authorize, readBinaryBody, readBody, send, sendError, WorkbenchError } from './wire.ts'
 import { localBase } from './terminal.ts'
 import { dispatch } from './api.ts'
 import { registerCompletionRoute } from './completion/register.ts'
@@ -16,7 +16,7 @@ import { registerCompletionRoute } from './completion/register.ts'
  * 宿主侧的全部 HTTP / WebSocket 路由。
  *
  * 从 index.ts 拆出：那里只留 name / inject / apply 三件事，路由与文件监听放在这里。
- * 静态资源一律走 immutable 缓存；入参来自 URL 的部分都经 trusted() 与包目录包含判断守卫。
+ * 静态资源一律走 immutable 缓存；入参来自 URL 的部分都经 authorize() 与包目录包含判断守卫。
  */
 /**
  * 按工作区共享的文件监听。
@@ -74,7 +74,7 @@ export class WorkspaceWatch {
 export function registerWorkbenchRoutes(ctx: HostContext): void {
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) { res.writeHead(403); res.end(); return }
+      if (!authorize(req, res, ctx.connection)) return
       try {
         const asset = codiconAsset()
         res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
@@ -85,7 +85,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/pdfjs/worker.mjs', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) { res.writeHead(403); res.end(); return }
+      if (!authorize(req, res, ctx.connection)) return
       try {
         const asset = pdfWorkerAsset()
         res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
@@ -98,7 +98,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
   // 客户端只在真正需要某种语言时取一次，之后由 immutable 缓存接管。
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/grammar', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) { res.writeHead(403); res.end(); return }
+      if (!authorize(req, res, ctx.connection)) return
       try {
         const name = new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/grammar/'.length)
         // 先把数据取好再写 header：一旦 writeHead 发出，后面的异常就无法再用 sendError
@@ -112,7 +112,8 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/api', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) return send(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
+      if (!authorize(req, res, ctx.connection)) return
+
       if (req.method !== 'POST') return send(res, 405, { ok: false, error: { code: 'method', message: 'POST required' } })
       try {
         const controller = new AbortController()
@@ -127,11 +128,12 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
   }), 'dsh-vscode-workbench: API')
 
   // 补全走独立的 SSE 端点：它要边算边发，与 /api 的一问一答不同。
-  registerCompletionRoute(ctx, { trusted, readBody, send, sendError, trustedHosts: ctx.webRuntime.trustedHosts, cwdFor: sessionId => cwdFor(ctx, sessionId) })
+  registerCompletionRoute(ctx, { authorize: (req, res) => authorize(req, res, ctx.connection), readBody, send, sendError, cwdFor: sessionId => cwdFor(ctx, sessionId) })
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/upload', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) return send(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
+      if (!authorize(req, res, ctx.connection)) return
+
       if (req.method !== 'POST') return send(res, 405, { ok: false, error: { code: 'method', message: 'POST required' } })
       try {
         const url = new URL(req.url ?? '/', 'http://dsh.local')
@@ -143,12 +145,12 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
   }), 'dsh-vscode-workbench: file upload')
 
   ctx.effect(() => ctx.webServer.register({
-    kind:'prefix',path:'/dsh-vscode/file',handler:async(req,res)=>{if(!trusted(req,ctx.webRuntime.trustedHosts)){res.writeHead(403);res.end();return}try{const url=new URL(req.url??'/','http://dsh.local');const sessionId=url.searchParams.get('sessionId');const path=url.searchParams.get('path');if(sessionId===null||path===null)throw new WorkbenchError('bad-request','sessionId and path are required');const asset=await workspacePreviewFile(cwdFor(ctx,sessionId),path);res.writeHead(200,{'content-type':asset.type,'x-content-type-options':'nosniff','cache-control':'no-store'});res.end(await readFile(asset.path))}catch(error){sendError(res,error)}}
+    kind:'prefix',path:'/dsh-vscode/file',handler:async(req,res)=>{if(!authorize(req,res,ctx.connection))return;try{const url=new URL(req.url??'/','http://dsh.local');const sessionId=url.searchParams.get('sessionId');const path=url.searchParams.get('path');if(sessionId===null||path===null)throw new WorkbenchError('bad-request','sessionId and path are required');const asset=await workspacePreviewFile(cwdFor(ctx,sessionId),path);res.writeHead(200,{'content-type':asset.type,'x-content-type-options':'nosniff','cache-control':'no-store'});res.end(await readFile(asset.path))}catch(error){sendError(res,error)}}
   }), 'dsh-vscode-workbench: file preview')
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/monaco', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) { res.writeHead(403); res.end(); return }
+      if (!authorize(req, res, ctx.connection)) return
       try {
         const raw = decodeURIComponent(new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/monaco/'.length))
         const asset = monacoAsset(raw)
@@ -160,7 +162,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/katex', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) { res.writeHead(403); res.end(); return }
+      if (!authorize(req, res, ctx.connection)) return
       try {
         const raw = decodeURIComponent(new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/katex/'.length))
         const asset = katexAsset(raw)
@@ -172,7 +174,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/file-icons', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) { res.writeHead(403); res.end(); return }
+      if (!authorize(req, res, ctx.connection)) return
       try {
         const raw = decodeURIComponent(new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/file-icons/'.length))
         const asset = fileIconAsset(raw)
@@ -184,7 +186,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/onig', handler: async (req, res) => {
-      if (!trusted(req, ctx.webRuntime.trustedHosts)) { res.writeHead(403); res.end(); return }
+      if (!authorize(req, res, ctx.connection)) return
       try {
         const asset = onigWasmAsset()
         res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
@@ -197,11 +199,14 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
   const watches = new WorkspaceWatch(createWorkspaceWatcher)
   ctx.effect(() => ctx.webServer.registerUpgrade({
     path: '/dsh-vscode/ws/files', handler(req, socket, head) {
-      if (!trusted(req as IncomingMessage, ctx.webRuntime.trustedHosts)) { socket.destroy(); return }
+      if (ctx.connection.requestRejection(req) !== undefined) { socket.destroy(); return }
       wss.handleUpgrade(req as IncomingMessage, socket as Duplex, head, (ws) => {
         const sessionId = new URL(req.url ?? '/', 'http://dsh.local').searchParams.get('sessionId')
         if (sessionId === null) { ws.close(1008, 'sessionId required'); return }
-        const workspace = cwdFor(ctx, sessionId)
+        // 会话可能尚未就绪（工作目录服务尚未给出路径）：关闭连接而不是抛进 upgrade 回调。
+        let workspace: string
+        try { workspace = cwdFor(ctx, sessionId) }
+        catch { ws.close(1008, 'session workspace unavailable'); return }
         const watcher = watches.acquire(workspace)
         let paths = new Set<string>(); let timer: ReturnType<typeof setTimeout> | undefined
         const onAll = (_event: string, path: string): void => {

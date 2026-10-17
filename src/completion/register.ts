@@ -2,7 +2,7 @@
  * 补全端点的注册与提供方解析。
  *
  * 单独成模块而不是塞进 routes.ts：这条链路有自己的提供方选择与流式收尾，放在一起会让两边都变难读。
- * 复用 routes.ts 已有的 trusted / readBody / send 辅助函数，由调用方传进来，不重复实现。
+ * 复用 routes.ts 已有的 authorize / readBody / send 辅助函数，由调用方传进来，不重复实现。
  */
 import { normalize } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -113,11 +113,11 @@ function readRequest(body: unknown): CompletionRequest {
 }
 
 export interface CompletionRouteHelpers {
-  trusted(req: IncomingMessage, hosts: readonly string[]): boolean
+  /** 复用宿主 connection 服务的认证结果；返回 false 时已经写好 401/403 响应。 */
+  authorize(req: IncomingMessage, res: ServerResponse): boolean
   readBody(req: IncomingMessage): Promise<unknown>
   send(res: ServerResponse, status: number, payload: unknown): void
   sendError(res: ServerResponse, error: unknown): void
-  trustedHosts: readonly string[]
   /** 把会话解析成工作区根目录：索引按项目分库，检索要按同一个根目录进行。 */
   cwdFor(sessionId: string): string
 }
@@ -133,7 +133,7 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
     kind: 'exact',
     path: '/dsh-vscode/completion',
     handler: async (req, res) => {
-      if (!helpers.trusted(req, helpers.trustedHosts)) return helpers.send(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
+      if (!helpers.authorize(req, res)) return
       if (req.method !== 'POST') return helpers.send(res, 405, { ok: false, error: { code: 'method', message: 'POST required' } })
       let request: CompletionRequest
       try {

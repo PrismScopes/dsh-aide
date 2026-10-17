@@ -225,7 +225,7 @@ function Search(props: { sessionId: string; onOpen(path: string, line: number, c
 
 export function Launcher({ service }: { service: VscodeWorkbench }) { return <button className="dvw-launch" title="打开 VS Code 工作台" onClick={()=>service.show()}>VS Code 工作台</button> }
 
-export function Workbench({ service, useSessions }: { service: VscodeWorkbench; useSessions: (selector: (state: any) => any) => any }) {
+export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbench; sessionId?: string; cwd?: string }) {
   const [snapshot, setSnapshot] = useState(() => service.getSnapshot()); const [panels, setPanels] = useState(() => service.getPanels())
   const [layout, setLayout] = useState(() => service.getLayout())
   useEffect(() => service.subscribe(() => { setSnapshot(service.getSnapshot()); setPanels(service.getPanels()); setLayout(service.getLayout()) }), [service])
@@ -237,8 +237,7 @@ export function Workbench({ service, useSessions }: { service: VscodeWorkbench; 
   const setStatusVisible = (value: boolean) => service.setLayout({ statusVisible: value })
   const setSideWidth = (value: number) => service.setLayout({ sideWidth: value })
   const setChatWidth = (value: number) => service.setLayout({ chatWidth: value })
-  // 同 index.tsx：0.2.0 的 sessions store 无 state.current，改用 retainedBy.mainView 判定当前会话。
-  const sessionId = useSessions((state:any)=>state.current??(Object.values(state.byId??{}) as any[]).find((session:any)=>(session.retainedBy?.mainView??0)>0)?.id) as string|undefined; const cwd = useSessions(state=>sessionId===undefined?undefined:state.byId[sessionId]?.cwd) as string|undefined
+  // 会话与工作目录由 Overlay 统一从主视图会话解析后传入（0.2.1 不再提供 state.current）。
   const [workspace,setWorkspace]=useState<{cwd:string;name:string}>(); const [tabs,setTabs]=useState<Tab[]>([]); const [active,setActive]=useState<string>(); const [error,setError]=useState<string>(); const [panelHeight,setPanelHeight]=useState(260);const [outlineVisible,setOutlineVisible]=useState(()=>localStorage.getItem('dvw:outline')!=='closed');const [headerHost,setHeaderHost]=useState<HTMLDivElement|null>(null)
   const tabsRef=useRef(tabs);tabsRef.current=tabs
   const workspaceRequests=useRef(new WorkspaceRequestScope());const loadingTabs=useRef(new Set<string>())

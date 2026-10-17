@@ -14,7 +14,6 @@ const DOCX_MIN = resolve(dirname(require.resolve('docx-preview')), 'docx-preview
 const EXTERNALS = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', 'cordis',
   '@deepseek-ai/cordis', '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-runtime/client',
 ]
 
 /** Create a DSH host bundle and dynamic browser-client bundle. */

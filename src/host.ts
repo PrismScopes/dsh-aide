@@ -18,7 +18,10 @@ const TEXT_LIMIT = 5 * 1024 * 1024
 const PROCESS_TIMEOUT = 30_000
 
 export function cwdFor(ctx: HostContext, sessionId: string): string {
-  const cwd = ctx.sessions.get(sessionId)?.header.cwd
+  const session = ctx.sessions.get(sessionId)
+  if (session === undefined) throw new WorkbenchError('session-unknown', 'session is not ready yet; retry once it exists', 409)
+  // 0.2.1 起工作目录是独立服务（会话可因工作区切换而改变），不再读 header.cwd 的静态快照。
+  const cwd = ctx.workingDirectory.get(session)
   // 会话还没就绪时**不能**回落到进程目录：桌面端进程的工作目录是应用自己的数据目录，
   // 那样列出来的文件树与随后的读写会指向不同的地方（表现为列出 tools、点它却报路径不存在）。
   // 这里明确报「未就绪」，让客户端等会话出现后重试。

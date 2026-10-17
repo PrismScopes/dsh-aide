@@ -14,7 +14,7 @@ function entryConfig(ctx: HostContext): unknown {
 export * from './types.ts'
 
 export const name = 'dsh-vscode-workbench'
-export const inject = ['webServer', 'sessions', 'webRuntime']
+export const inject = ['webServer', 'sessions', 'connection', 'workingDirectory']
 
 /**
  * 插件入口。

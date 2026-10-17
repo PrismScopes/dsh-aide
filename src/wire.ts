@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { WorkbenchConnection } from './context.ts'
 
 export class WorkbenchError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message) }
@@ -49,14 +50,17 @@ export function sendError(res: ServerResponse, error: unknown): void {
   send(res, known.status, { ok: false, error: { code: known.code, message: known.message } })
 }
 
-export function trusted(req: IncomingMessage, allowed: readonly string[]): boolean {
-  const host = req.headers.host
-  if (host === undefined || req.headers['sec-fetch-site'] === 'cross-site') return false
-  let hostUrl: URL
-  try { hostUrl = new URL(`http://${host}`) } catch { return false }
-  const loopback = hostUrl.hostname === 'localhost' || hostUrl.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(hostUrl.hostname)
-  if (!loopback && !allowed.some(candidate => candidate === host || candidate === hostUrl.hostname)) return false
-  const origin = req.headers.origin
-  if (origin === undefined) return true
-  try { return new URL(origin).host === hostUrl.host } catch { return false }
+/**
+ * 复用 Harness 自己的连接认证与部署感知的 Host/Origin 防线。
+ *
+ * 0.2.1 起 webRuntime.trustedHosts 随 runtime 服务一起移除，认证统一由 connection 服务提供；
+ * 这里不再自建 host 白名单，否则会与宿主（尤其是远程/反代部署）的判断分叉。
+ * 返回 false 时已经写好响应，调用方直接 return 即可。
+ */
+export function authorize(req: IncomingMessage, res: ServerResponse, connection: WorkbenchConnection): boolean {
+  const rejection = connection.requestRejection(req)
+  if (rejection === undefined) return true
+  const code = rejection === 401 ? 'unauthorized' : 'forbidden'
+  send(res, rejection, { ok: false, error: { code, message: code } })
+  return false
 }

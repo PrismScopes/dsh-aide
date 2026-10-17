@@ -1,7 +1,11 @@
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-working-directory'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { Icon } from './Icon.tsx'
 import type { VscodeWorkbench } from './service.ts'
@@ -11,6 +15,7 @@ import { SettingsPanel } from './SettingsPanel.tsx'
 import { Workbench } from './Workbench.tsx'
 import { installStyles } from './styles.ts'
 import { handleTerminalShortcut } from './shortcuts.ts'
+import { mainViewSession } from './session.ts'
 
 export type { BottomPanelContribution, BottomPanelProps, VscodeWorkbench, WorkbenchCommand, WorkbenchSnapshot, WorkbenchView } from './service.ts'
 
@@ -21,30 +26,6 @@ export type { BottomPanelContribution, BottomPanelProps, VscodeWorkbench, Workbe
 const PANEL_ID = 'dsh-vscode-workbench'
 
 declare module '@deepseek-ai/cordis' { interface Context { vscodeWorkbench: VscodeWorkbench } }
-declare module '@deepseek-ai/dsh-client-ui-slots' {
-  interface SlotInjectMap { 'dsh-vscode-workbench.overlay': { service: VscodeWorkbench } }
-  /**
-   * 本插件绑定的 @deepseek-ai 客户端类型停在 0.1.1-rc.2，早于下面两个 slot 的引入：
-   * ui-layout 在该版本只声明了 sidebar/conversation/details/shell.overlay，ui-sidebar 只声明了
-   * brand/workspaces/settings/footer.action。两者在运行时（0.2.0 起）都存在，这里按运行时形状补齐，
-   * 否则注册“全局面板”入口会因 slot 名不在 SlotMap 中而无法通过类型检查。
-   */
-  interface SlotMap {
-    /** 侧栏“全局面板”行：与下方 main 面板配对注册，缺任一侧点击即抛错。 */
-    'sidebar.panellist': { kind: 'list'; scope: 'root'; owner: { size: number; active: boolean } }
-    /** 主区域面板：entryKey 即 activePanelId。 */
-    'main': { kind: 'keyed'; scope: 'root'; keyProps: Record<string, object> }
-    /**
-     * DSH 设置导航里的一项（kind: list，scope: root）。owner 由 shell 提供 close()，
-     * 这里不消费它。工作台的布局偏好放在这一页，取代插件自建的设置面板。
-     *
-     * 原先注册的是 settings.plugins.tab，但那个 slot 由「插件市场」页在挂载期间才声明，
-     * 页面没打开就不存在，注册会一直等下去；settings.section 始终存在，且 order 能让这一页
-     * 正好落在「插件市场」下面。
-     */
-    'settings.section': { kind: 'list'; scope: 'root'; owner: { close: () => void } }
-  }
-}
 
 /**
  * 打开 DSH 自己的设置面板，工作台保持打开。
@@ -123,10 +104,11 @@ interface LayoutLike { selectPanel(id: string | null): void }
  */
 
 const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { service: VscodeWorkbench }) => {
-  // DSH 0.2.0 起 sessions store 不再提供 state.current。官方在 shell 层的取法是
-  // 在 state.byId 里找 retainedBy.mainView > 0 的会话（对齐 dsh-client-ui-layout 的 DocumentTitle
-  // 与 dsh-client-ui-cordis 的 current 取法）。state.current 读取保留，用于兼容 0.1.x。
-  const sessionId = useSessions((state: any) => state.current ?? (Object.values(state.byId ?? {}) as any[]).find((session: any) => (session.retainedBy?.mainView ?? 0) > 0)?.id) as string | undefined
+  // DSH 0.2.1 起 sessions store 不再提供 state.current：主视图由 retainedBy.mainView 标记，
+  // 取法与 shell 的 DocumentTitle 一致。后台保活的会话不算主视图。
+  const session = useSessions(mainViewSession)
+  // 工作目录以 workingDirectory 投影为准（会话可切换工作区），旧字段 cwd 作为回退。
+  const cwd = session?.projectionValues?.workingDirectory ?? session?.cwd
   const [visible, setVisible] = useState(() => service.getSnapshot().visible)
   useEffect(() => service.subscribe(() => setVisible(service.getSnapshot().visible)), [service])
   // 侧栏入口的收起由 CSS 负责（body:has(.dvw-overlay) [class*=_triggerRow]），不在这里动 DOM ——
@@ -136,9 +118,9 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
     return () => { service.setSettingsOpener(() => {}) }
   }, [service])
   // 没有会话就不渲染：文件树与文件读写都以会话工作区为根，会话未就绪时取到的内容不可信。
-  // 组件以 sessionId 为 key，会话出现后会重新挂载，自然完成首次取数。
-  if (sessionId === undefined || sessionId === '') return null
-  return <Workbench key={sessionId} service={service} useSessions={useSessions as never}/>
+  // 组件以会话与工作目录为 key，会话出现或切换工作区后会重新挂载，自然完成首次取数。
+  if (session === undefined || session.id === '') return null
+  return <Workbench key={`${session.id}:${cwd ?? ''}`} service={service} sessionId={session.id} cwd={cwd}/>
 }
 
 /**
