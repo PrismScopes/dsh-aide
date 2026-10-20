@@ -17,9 +17,9 @@
 import { useEffect, useRef } from 'react'
 
 /** 单个文件与多文件用两套按钮文案：批量时「保存」含义不清，必须说「全部保存」。 */
-export type ClosePromptMode = 'single' | 'multiple'
+type ClosePromptMode = 'single' | 'multiple'
 
-export interface ClosePromptProps {
+interface ClosePromptProps {
   /** 待关闭的脏文件路径（只应包含 dirty 的标签，由调用方筛过并保持标签顺序）。 */
   paths: readonly string[]
   onSave(): void

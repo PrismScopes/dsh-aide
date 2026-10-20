@@ -6,8 +6,8 @@
  * 还没有这个端点的旧宿主（或宿主暂时不可达）上照常打开，只是没有下拉候选。
  */
 
-export interface DshModelRoute { route: string; label: string; provider: string; model: string }
-export interface DshModelRoutes { default: string | null; routes: DshModelRoute[] }
+interface DshModelRoute { route: string; label: string; provider: string; model: string }
+interface DshModelRoutes { default: string | null; routes: DshModelRoute[] }
 
 const ENDPOINT = '/dsh-vscode/model-routes'
 

@@ -12,7 +12,7 @@ import { separator, type MenuEntry, type MenuItem } from './ContextMenu.tsx'
 const item = (value: Omit<MenuItem, 'kind'>): MenuItem => ({ kind: 'item', ...value })
 
 /** 改动行菜单里，面板能提供的那几个动作。 */
-export interface ChangeMenuActions {
+interface ChangeMenuActions {
   /** 打开差异：未跟踪文件需要 untracked 模式，否则按 staged/worktree 取 diff。 */
   open(): void
   stage(): void
@@ -23,7 +23,7 @@ export interface ChangeMenuActions {
   copyPath(absolute: boolean): void
 }
 
-export interface ChangeMenuContext {
+interface ChangeMenuContext {
   /** 工作区相对路径（git 输出里就是仓库相对路径）。 */
   path: string
   /** 这一行属于「暂存的更改」还是「更改」。 */
@@ -59,14 +59,14 @@ export function changeMenuItems(context: ChangeMenuContext): MenuEntry[] {
 }
 
 /** 提交图里某次提交的菜单动作。 */
-export interface CommitMenuActions {
+interface CommitMenuActions {
   copyHash(): void
   /** 等同于点一下提交行：展开/收起这次提交的文件列表。 */
   toggleFiles(): void
   copyMessage(): void
 }
 
-export interface CommitMenuContext {
+interface CommitMenuContext {
   commit: { hash: string; subject: string }
   /** 这次提交的文件列表当前是否展开，决定第二项是「查看」还是「隐藏」。 */
   expanded: boolean
@@ -85,13 +85,13 @@ export function commitMenuItems(context: CommitMenuContext): MenuEntry[] {
 }
 
 /** 某次提交里的文件菜单动作。 */
-export interface CommitFileMenuActions {
+interface CommitFileMenuActions {
   openDiff(): void
   /** 复制该文件在提交里的路径（仓库相对路径，git 命令可直接用）。 */
   copyPath(): void
 }
 
-export interface CommitFileMenuContext {
+interface CommitFileMenuContext {
   /** 提交里的文件路径（仓库相对路径）。 */
   path: string
   actions: CommitFileMenuActions

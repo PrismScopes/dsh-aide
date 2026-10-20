@@ -17,12 +17,12 @@ import {
   type FilterOptions,
 } from '../completion/filter.ts'
 
-export interface TriggerChange {
+interface TriggerChange {
   /** 本次变更是否包含换行。换行意味着一个语句或代码块结束，是补全价值最高的时刻，跳过防抖。 */
   isNewLine: boolean
 }
 
-export interface TriggerPlan {
+interface TriggerPlan {
   immediate: boolean
   delayMs: number
 }
@@ -37,7 +37,7 @@ export function triggerPlan(change: TriggerChange, language: string, params: Com
   return { immediate: false, delayMs: debounceFor(language, params) }
 }
 
-export interface CompletionTiming {
+interface CompletionTiming {
   requestedAt: number
   firstByteAt?: number
   lastByteAt?: number
@@ -58,7 +58,7 @@ export interface CompletionResponse {
   timing: CompletionTiming
 }
 
-export interface SuggestInput {
+interface SuggestInput {
   filePath: string
   language: string
   document: string
@@ -73,7 +73,7 @@ export interface SuggestInput {
   onUpdate?: (candidates: string[]) => void
 }
 
-export interface CompletionClientOptions {
+interface CompletionClientOptions {
   /** 宿主侧的补全端点。 */
   endpoint: string
   sessionId: string

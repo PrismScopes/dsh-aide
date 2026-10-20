@@ -1,14 +1,14 @@
 import type { TerminalInfo, TerminalProfile } from '../terminal.ts'
 import { ApiError, currentHostBase, normalizeHostBase, withSessionRetry } from './api.ts'
 
-export interface TerminalConnection {
+interface TerminalConnection {
   write(data: string): void
   resize(cols: number, rows: number): void
   close(): void
   subscribe(listener: (output: { sequence: number; data: string; replay?: boolean }) => void): () => void
 }
 
-export interface TerminalWorkspaceSnapshot { terminals: readonly TerminalInfo[]; loading: boolean; error?: string }
+interface TerminalWorkspaceSnapshot { terminals: readonly TerminalInfo[]; loading: boolean; error?: string }
 
 /** 一次「新建终端」的请求：可带工作区相对目录（在终端中打开）与 shell 档位。 */
 export interface TerminalRequest { directory?: string; profile?: string; title?: string }
@@ -40,7 +40,7 @@ export function requestTerminal(request: TerminalRequest = {}): void {
 export function takeTerminalRequests(): TerminalRequest[] { return pendingTerminalRequests.splice(0) }
 
 /** Browser client for the workbench's local terminal transport. */
-export interface TerminalWorkspace {
+interface TerminalWorkspace {
   refresh(): Promise<void>
   /** `directory` 是工作区相对路径：新的 shell 直接在该目录里启动（「在终端中打开」）。 */
   create(options?: { title?: string; profile?: string; directory?: string }): Promise<TerminalInfo>
@@ -65,7 +65,7 @@ export interface TerminalWorkspace {
  * 保留 `wsBase` 入参：终端 API 自己也会带回一次地址，优先用它，免得依赖"之前有没有别的
  * API 调用过"。两条来源最终都进同一个归一化逻辑。
  */
-export function webSocketUrl(sessionId: string, id: string, wsBase?: string): string {
+function webSocketUrl(sessionId: string, id: string, wsBase?: string): string {
   const base = normalizeHostBase(wsBase) ?? normalizeHostBase(currentHostBase())
   const search = `sessionId=${encodeURIComponent(sessionId)}&id=${encodeURIComponent(id)}`
   if (base !== undefined) return `${base}/dsh-vscode-terminal/ws?${search}`

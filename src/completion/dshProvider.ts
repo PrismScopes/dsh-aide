@@ -12,10 +12,10 @@ import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from './params.ts'
 import type { CompletionChunk, CompletionProvider, ProviderContext } from './provider.ts'
 
 /** `ctx.agentDefaultModel.currentSelection()` 的返回值里我们用到的字段。 */
-export interface DshModelSelection { provider: string; model: string; reasoningEffort?: string }
+interface DshModelSelection { provider: string; model: string; reasoningEffort?: string }
 
 /** `GenerateOptions` 里我们用到的字段。 */
-export interface DshGenerateOptions {
+interface DshGenerateOptions {
   provider: string
   model: string
   /** 会话号：DSH 的请求扩展要求它，缺了会在发请求前失败（表现为 TRANSPORT）。 */
@@ -28,7 +28,7 @@ export interface DshGenerateOptions {
 }
 
 /** `LlmCallConfig` 里我们用到的字段。 */
-export interface DshCallConfig {
+interface DshCallConfig {
   provider: string
   model: string
   sessionId?: string
@@ -43,12 +43,12 @@ export interface DshCallConfig {
  * 失败时带上提供方返回的 HTTP 状态与机器码：这条路径的 message 是适配器包装过的通用文案，
  * 真正的原因（鉴权、路由、网络）只能从状态码区分。
  */
-export interface DshFinishReason { kind?: string; failure?: { message?: string; code?: string; status?: number } }
+interface DshFinishReason { kind?: string; failure?: { message?: string; code?: string; status?: number } }
 
 /** 适配器产出的增量；只关心文本增量与结束。 */
 export interface DshStreamChunk { type: string; text?: string; reason?: DshFinishReason }
 
-export interface DshPreparedCall {
+interface DshPreparedCall {
   /** 解析后的生效配置（含适配器默认值）：必须原样喂回 stream，否则 DSH 会拒绝这次调用。 */
   config?: DshCallConfig
   stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk>
@@ -73,9 +73,9 @@ export interface DshDefaultModelService { currentSelection(): DshModelSelection 
  * 这里**不能**放代码围栏：对话模型往往一开头就输出 ```，把它当停止串会让生成刚起步就被截停、
  * 结果一个字都拿不到。围栏改由后处理剥掉（见 filter.ts 的 stripCodeFence）。
  */
-export const COMPLETION_STOP = ['\n\n\n', '<CURSOR>']
+const COMPLETION_STOP = ['\n\n\n', '<CURSOR>']
 
-export interface DshProviderOptions {
+interface DshProviderOptions {
   params?: CompletionParams
   /** 覆盖默认模型选择；不传就用 DSH 的当前默认模型。 */
   selection?: DshModelSelection

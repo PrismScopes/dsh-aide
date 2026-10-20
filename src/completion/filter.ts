@@ -47,7 +47,7 @@ export const DEFAULT_FILTER_OPTIONS: FilterOptions = {
   dropForeignLanguage: true,
 }
 
-export type DropReason =
+type DropReason =
   | 'same-line-as-last-accept'
   | 'overlaps-last-inline-accept'
   | 'identical-to-document'
@@ -60,7 +60,7 @@ export type DropReason =
   | 'too-short'
   | 'no-language-chars'
 
-export interface FilteredCandidate { text: string; dropped?: DropReason }
+interface FilteredCandidate { text: string; dropped?: DropReason }
 
 /** 候选插入位置之后的原文（用于比对「与编辑器内容无差异」）。 */
 function textAfterCursor(document: string, offset: number, length: number): string {
@@ -204,7 +204,7 @@ export function truncateAfterCompleteBlock(candidate: string): string {
  * 对话模型被要求「只输出要插入的内容」时，仍常常包一层围栏；这属于呈现层杂质，不该插进代码。
  * 只剥最外层的一对，内部的围栏（比如写在字符串里的）不动。
  */
-export function stripCodeFence(candidate: string): string {
+function stripCodeFence(candidate: string): string {
   const lines = candidate.split('\n')
   const open = lines.findIndex(line => line.trim().startsWith('```'))
   if (open === -1) return candidate
@@ -225,7 +225,7 @@ export function stripCodeFence(candidate: string): string {
  * 对话模型常把片段包在反引号或加粗记号里。只处理「整条被一对标记包住」的形态，且内部不含反引号或
  * 美元花括号 —— 后者是模板字面量，剥掉反引号会把候选弄坏。
  */
-export function stripInlineMarkdown(candidate: string): string {
+function stripInlineMarkdown(candidate: string): string {
   const trimmed = candidate.trim()
   if (trimmed.length >= 4 && trimmed.startsWith('**') && trimmed.endsWith('**')) return trimmed.slice(2, -2)
   const quote = String.fromCharCode(96)
@@ -242,7 +242,7 @@ export function stripInlineMarkdown(candidate: string): string {
  * 提示词里带着以井号开头的文件行；模型有时会连同它一起吐回来，而那是给模型的，插进代码毫无意义。
  * 只去掉开头连续的这种行。
  */
-export function stripContextHeader(candidate: string): string {
+function stripContextHeader(candidate: string): string {
   const lines = candidate.split('\n')
   let index = 0
   // 中文后面接的是全角冒号，那里不存在词边界，所以  只能加在英文分支上。
@@ -257,7 +257,7 @@ export function stripContextHeader(candidate: string): string {
  * 模型常按自己的习惯输出换行，与文档不一致时会在插入的文本里留下多余的字符；而且后续的逐行规则
  * 以换行为界，不先对齐就会把「同一行」判成不同行。
  */
-export function alignLineEndings(candidate: string, document: string): string {
+function alignLineEndings(candidate: string, document: string): string {
   return document.includes('\r\n')
     ? candidate.replace(/\r\n|\r|\n/g, '\r\n')
     : candidate.replace(/\r\n|\r/g, '\n')
@@ -269,7 +269,7 @@ export function alignLineEndings(candidate: string, document: string): string {
  * 逐行规则认不出这种重复：每一行只出现两次，达不到「连续三次」的门槛。只有按整段比对才看得出来。
  * 只在前后两半逐字相等时动手，避免误伤结构相似但内容不同的候选。
  */
-export function collapseDuplicatedBlock(candidate: string): string {
+function collapseDuplicatedBlock(candidate: string): string {
   const lines = candidate.split('\n')
   if (lines.length < 2 || lines.length % 2 !== 0) return candidate
   const half = lines.length / 2

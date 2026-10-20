@@ -9,7 +9,7 @@
 export interface EditHistoryEntry { before: string; after: string; timestamp: number }
 
 /** 光标处的编辑对象：文件、最近一次编辑、重写位置与（裁剪后的）文档内容。 */
-export interface CursorEdit {
+interface CursorEdit {
   filePath: string
   lastEdit?: { before: string; after: string }
   /** 重写位置：行号 1 起、列 0 起（与 LSP 一致）。 */
@@ -24,10 +24,10 @@ export interface CursorEdit {
 }
 
 /** 语言服务给出的诊断信息，可为空。 */
-export interface DiagnosticEntry { severity: 'error' | 'warning' | 'info' | 'hint'; message: string; line: number }
+interface DiagnosticEntry { severity: 'error' | 'warning' | 'info' | 'hint'; message: string; line: number }
 
 /** 环境元数据：服务端据此做灰度与问题定位。 */
-export interface CompletionEnvironment {
+interface CompletionEnvironment {
   ideVersion: string
   extensionVersion: string
   region: string
@@ -37,7 +37,7 @@ export interface CompletionEnvironment {
 }
 
 /** 多租户场景下由客户端下发的过滤规则，条件性附加。 */
-export interface CompletionSecurityRules { rules: Array<{ id: string; name: string; action: 'block' | 'mask' }> }
+interface CompletionSecurityRules { rules: Array<{ id: string; name: string; action: 'block' | 'mask' }> }
 
 export interface CompletionRequest {
   /** 服务端用它关联同一编辑会话的连续请求。 */
@@ -67,7 +67,7 @@ export interface CompletionRequest {
 }
 
 /** 流式返回的一个候选。序号用于在客户端对应槽位。 */
-export interface CompletionCandidate { index: number; text: string; finishReason: string; elapsedMs: number }
+interface CompletionCandidate { index: number; text: string; finishReason: string; elapsedMs: number }
 
 export type CompletionEvent =
   | { type: 'meta'; model: string; experiment?: string; snippets?: number }
@@ -81,7 +81,7 @@ export function encodeSseEvent(event: CompletionEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`
 }
 
-export interface ParsedSse { events: CompletionEvent[]; rest: string }
+interface ParsedSse { events: CompletionEvent[]; rest: string }
 
 /**
  * 增量解析 SSE。

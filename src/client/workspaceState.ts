@@ -1,5 +1,5 @@
 /** Values cleared before another workspace starts loading. */
-export interface EmptyWorkspaceDocuments<T> {
+interface EmptyWorkspaceDocuments<T> {
   tabs: T[]
   active: undefined
   error: undefined

@@ -14,12 +14,12 @@ import { dirname } from 'node:path'
 import { DEFAULT_CHUNK_LIMITS, extractChunks, shouldSkipFile, type Chunk, type ChunkLimits } from './chunks.ts'
 import { cosineSimilarity, hashingEmbedder, tokenizeCode, type Embedder } from './embedding.ts'
 
-export interface IndexLimits {
+interface IndexLimits {
   maxFiles: number
   maxChunks: number
 }
 
-export const DEFAULT_INDEX_LIMITS: IndexLimits = { maxFiles: 4000, maxChunks: 12000 }
+const DEFAULT_INDEX_LIMITS: IndexLimits = { maxFiles: 4000, maxChunks: 12000 }
 
 export interface RetrievalOptions {
   /** 一个项目一个索引文件。 */
@@ -52,7 +52,7 @@ export interface IndexStatus {
 }
 
 /** 检索命中：只带位置与分数，正文由调用方按行范围去读（索引不复制仓库内容）。 */
-export interface RetrievedSnippet {
+interface RetrievedSnippet {
   path: string
   kind: Chunk['kind']
   name?: string
@@ -92,11 +92,11 @@ type StoredChunk = Omit<Chunk, 'text' | 'embeddingText' | 'language'> & {
 }
 
 /** 向量按 Float32 的 base64 落盘：JSON 数组里每个分量约 19 个字符，实测索引体积的绝大部分是它。 */
-export function encodeVector(vector: Float32Array): string {
+function encodeVector(vector: Float32Array): string {
   return Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength).toString('base64')
 }
 
-export function decodeVector(encoded: string): Float32Array {
+function decodeVector(encoded: string): Float32Array {
   const buffer = Buffer.from(encoded, 'base64')
   return new Float32Array(buffer.buffer, buffer.byteOffset, Math.floor(buffer.byteLength / 4))
 }

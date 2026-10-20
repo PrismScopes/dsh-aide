@@ -46,9 +46,9 @@ export type MenuEntry = MenuItem | MenuSeparator
 
 export const separator = (): MenuSeparator => ({ kind: 'separator' })
 
-export interface MenuSize { width: number; height: number }
-export interface MenuViewport { width: number; height: number }
-export interface MenuPlacement { left: number; top: number; flippedX: boolean; flippedY: boolean }
+interface MenuSize { width: number; height: number }
+interface MenuViewport { width: number; height: number }
+interface MenuPlacement { left: number; top: number; flippedX: boolean; flippedY: boolean }
 
 /**
  * 计算菜单的落点。
@@ -97,7 +97,7 @@ export const SUBMENU_HOVER_MS = 120
  */
 export const MENU_GRACE_MS = 250
 
-export type MenuDismissKind = 'pointerdown' | 'wheel' | 'blur' | 'resize' | 'escape'
+type MenuDismissKind = 'pointerdown' | 'wheel' | 'blur' | 'resize' | 'escape'
 
 /**
  * 关闭判定（纯函数，便于单测）。
@@ -127,7 +127,7 @@ function moveIndex(entries: readonly MenuEntry[], current: number, direction: 1 
     : available[(at + direction + available.length) % available.length]
 }
 
-export interface ContextMenuProps {
+interface ContextMenuProps {
   /** 指针位置（clientX/clientY）。 */
   position: { x: number; y: number }
   entries: readonly MenuEntry[]

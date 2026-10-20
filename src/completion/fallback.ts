@@ -12,7 +12,7 @@
  */
 import type { CompletionProvider, CompletionChunk, ProviderContext } from './provider.ts'
 
-export interface FallbackOptions {
+interface FallbackOptions {
   /** 回落发生时调用：带上被放弃的主提供方与失败原因。 */
   onFallback?: (failure: { provider: string; model: string; error: string }) => void
 }

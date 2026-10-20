@@ -32,7 +32,7 @@ export function tokenizeCode(text: string): string[] {
 }
 
 /** 字符 n 连：中文标识符、拼接字符串这类词元切不干净的内容靠它兜住。 */
-export function charNGrams(text: string, size = 3): string[] {
+function charNGrams(text: string, size = 3): string[] {
   const normalized = text.replace(/\s+/g, ' ')
   const grams: string[] = []
   for (let index = 0; index + size <= normalized.length; index++) grams.push(normalized.slice(index, index + size))
@@ -40,7 +40,7 @@ export function charNGrams(text: string, size = 3): string[] {
 }
 
 /** 稳定的 32 位哈希：同一输入在任何进程里都得到同一结果，便于索引落盘后复用。 */
-export function hashFeature(feature: string): number {
+function hashFeature(feature: string): number {
   let hash = 2166136261
   for (let index = 0; index < feature.length; index++) {
     hash ^= feature.charCodeAt(index)
@@ -49,7 +49,7 @@ export function hashFeature(feature: string): number {
   return hash >>> 0
 }
 
-export const DEFAULT_EMBEDDING_DIMENSIONS = 256
+const DEFAULT_EMBEDDING_DIMENSIONS = 256
 
 /**
  * 特征哈希嵌入。

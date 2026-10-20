@@ -22,7 +22,7 @@ const item = (value: Omit<MenuItem, 'kind'>): MenuItem => ({ kind: 'item', ...va
  * 不会让现有调用点报错；新菜单项则统一走 `run(commandId)`，新增一项只要给一个 Monaco 命令 id，
  * 不必在接口上再加一个方法。`save` 不是 Monaco 命令（走工作台自己的保存回调），继续用具名字段。
  */
-export interface EditorMenuActions {
+interface EditorMenuActions {
   undo(): void
   redo(): void
   cut(): void
@@ -197,7 +197,7 @@ export interface DiffMenuActions {
   toggleDisplay(): void
 }
 
-export interface DiffMenuContext {
+interface DiffMenuContext {
   hasSelection: boolean
   /** 当前显示方式；菜单项给的是「切到另一种」的文案与图标。 */
   mode: 'inline' | 'split'
@@ -223,7 +223,7 @@ export function diffMenuItems(context: DiffMenuContext): MenuEntry[] {
 }
 
 /** 编辑器容器的视口矩形（`getBoundingClientRect()` 的子集，纯函数里不依赖 DOMRect）。 */
-export interface EditorContainerRect {
+interface EditorContainerRect {
   left: number
   top: number
   width: number
@@ -231,7 +231,7 @@ export interface EditorContainerRect {
 }
 
 /** 光标相对编辑器容器左上角的可见位置（`getScrolledVisiblePosition()` 结果的子集）。 */
-export interface CursorOffset {
+interface CursorOffset {
   left: number
   top: number
   height?: number

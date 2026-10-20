@@ -227,7 +227,7 @@ export function preloadTextMate(languageIds: string[] = []): void {
 interface TextMateToken { startIndex: number; scopes: string[] }
 
 /** 一段文本的规模。只取两个计数器，不复制文本内容。 */
-export interface TextMateSize { lines: number; chars: number }
+interface TextMateSize { lines: number; chars: number }
 
 /**
  * 超过这个规模就不再注入 TextMate，回退 Monaco 内置分词。
@@ -257,7 +257,7 @@ export function textMateSize(model: { getLineCount(): number; getValueLength(): 
 }
 
 /** 一段已编译好的语法（真实实现来自 vscode-textmate 的 registry.loadGrammar）。 */
-export interface CompiledGrammar {
+interface CompiledGrammar {
   tokenizeLine(line: string, state: unknown): { ruleStack: unknown; tokens: readonly { startIndex: number; scopes: readonly string[] }[] }
 }
 
@@ -265,15 +265,15 @@ export interface CompiledGrammar {
  * 安装器的依赖面：只抽 compile / register 两个接缝，单测可以注入假实现，
  * 完全不碰真 Monaco、真 registry 与网络。
  */
-export interface TextMateInstallerDeps {
+interface TextMateInstallerDeps {
   compile(languageId: string): Promise<CompiledGrammar | undefined>
   register(languageId: string, grammar: CompiledGrammar): void
 }
 
 /** 一次安装的结果：这次装上了哪些语言、是否因为文件太大而整体跳过。 */
-export interface TextMateInstallOutcome { installed: readonly string[]; skipped: boolean }
+interface TextMateInstallOutcome { installed: readonly string[]; skipped: boolean }
 
-export interface TextMateInstaller {
+interface TextMateInstaller {
   /** 幂等安装：已装过的语言不会再注册。成功装上的语言列在 outcome.installed 里。 */
   install(languageIds: readonly string[], size?: TextMateSize): Promise<TextMateInstallOutcome>
   /** 该语言是否已装上 TextMate（测试与排查用）。 */

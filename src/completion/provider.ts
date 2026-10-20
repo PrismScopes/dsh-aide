@@ -125,7 +125,7 @@ export function localProvider(params: CompletionParams = DEFAULT_COMPLETION_PARA
   }
 }
 
-export interface HttpProviderConfig {
+interface HttpProviderConfig {
   baseUrl: string
   model: string
   apiKey?: string

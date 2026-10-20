@@ -31,7 +31,7 @@ import {
  * 不再是布尔。传 `false` 会被枚举校验丢弃并回落默认值 `singleFile`，也就是「关不掉」；
  * 所以这里把偏好显式翻译成 `off` / `singleFile`（单文件内高亮，正是 VS Code 的划词行为）。
  */
-export type EditorOptions = MonacoEditor.IEditorOptions & MonacoEditor.IGlobalEditorOptions & {
+type EditorOptions = MonacoEditor.IEditorOptions & MonacoEditor.IGlobalEditorOptions & {
   fontSize: number
   lineHeight: number
   tabSize: number
@@ -52,7 +52,7 @@ export type EditorOptions = MonacoEditor.IEditorOptions & MonacoEditor.IGlobalEd
  * 模型级选项。tabSize / insertSpaces 属于 `model.updateOptions`，不是编辑器选项：
  * 差异编辑器的创建选项甚至不接受它们，所以单独给一份，创建后与偏好变化时都喂给模型。
  */
-export interface EditorModelOptions {
+interface EditorModelOptions {
   tabSize: number
   insertSpaces: boolean
 }
@@ -90,7 +90,7 @@ export function editorOptions(preferences: WorkbenchPreferences): EditorOptions 
 }
 
 /** 两个编辑器共用的外框：窄滚动条 + 由偏好决定的概览标尺。 */
-export interface EditorChrome {
+interface EditorChrome {
   renderOverviewRuler: boolean
   overviewRulerLanes: number
   hideCursorInOverviewRuler: boolean
@@ -127,7 +127,7 @@ export function editorChrome(preferences: Pick<WorkbenchPreferences, 'editorOver
  * 且暗色/亮色取值正确。`token` 为空串表示 DSH 没有语义合适的令牌，直接用 VS Code
  * 官方主题的值；有令牌时优先令牌，令牌给不出合法颜色时由调用方的 monacoColor 回落兜底。
  */
-export interface HighlightColorSpec {
+interface HighlightColorSpec {
   /** Monaco 主题 colors 的键名。 */
   readonly id: string
   /** DSH 主题令牌（CSS 变量名）；空串 = 没有合适的令牌。 */

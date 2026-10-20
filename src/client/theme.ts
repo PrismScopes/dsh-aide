@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 /** 解析 #rgb / #rrggbb / rgb() / rgba() 为 [r,g,b]；无法解析时返回 undefined。 */
-export function parseColor(value: string): [number, number, number] | undefined {
+function parseColor(value: string): [number, number, number] | undefined {
   const v = value.trim()
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v)
   if (hex !== null) {
@@ -15,7 +15,7 @@ export function parseColor(value: string): [number, number, number] | undefined 
 }
 
 /** sRGB 相对亮度是否偏暗。 */
-export function isDarkColor(rgb: [number, number, number]): boolean {
+function isDarkColor(rgb: [number, number, number]): boolean {
   const [r, g, b] = rgb.map(c => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4 }) as [number, number, number]
   return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5
 }

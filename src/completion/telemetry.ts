@@ -23,7 +23,7 @@ export interface CompletionTelemetryEvent {
   error?: string
 }
 
-export interface CompletionStats {
+interface CompletionStats {
   shown: number
   accepted: number
   cancelled: number

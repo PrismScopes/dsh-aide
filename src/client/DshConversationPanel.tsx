@@ -7,7 +7,7 @@ import { useLayoutEffect } from 'react'
  * 有同样的滚动节点，所以必须限定在 phase 容器里找，否则会把别人的对话搬进工作台。
  * 0.2.0 的旧结构（滚动节点的父元素带 data-phase / data-content-phase）保留为回退。
  */
-export function findDshConversationRoot(documentRoot: Document = document): HTMLElement | null {
+function findDshConversationRoot(documentRoot: Document = document): HTMLElement | null {
   const phase = documentRoot.querySelector<HTMLElement>('[data-phase] [data-conversation-scroll]')?.closest<HTMLElement>('[data-phase]')
   if (phase != null) return phase
   const scroller = documentRoot.querySelector<HTMLElement>('[data-conversation-scroll]')

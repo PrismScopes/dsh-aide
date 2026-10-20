@@ -28,7 +28,7 @@ export const DEFAULT_CHUNK_LIMITS: ChunkLimits = {
   windowLines: 40,
 }
 
-export type ChunkKind = 'module' | 'class' | 'function' | 'window'
+type ChunkKind = 'module' | 'class' | 'function' | 'window'
 
 export interface Chunk {
   path: string

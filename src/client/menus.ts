@@ -48,7 +48,7 @@ export interface ExplorerMenuActions {
   refresh(): void
 }
 
-export interface ExplorerMenuContext {
+interface ExplorerMenuContext {
   /** 右键落在哪一项；null 表示落在空白处（工作区根）。 */
   entry: FileEntry | null
   /** 文件剪贴板里有没有东西，决定「粘贴」是否可用。 */
@@ -108,7 +108,7 @@ export function explorerMenuItems(context: ExplorerMenuContext): MenuEntry[] {
   return entries
 }
 
-export interface TabMenuActions {
+interface TabMenuActions {
   close(): void
   closeOthers(): void
   closeRight(): void
@@ -118,7 +118,7 @@ export interface TabMenuActions {
   openTerminal(): void
 }
 
-export interface TabMenuContext {
+interface TabMenuContext {
   path: string
   pinned: boolean
   /** 当前标签有没有未保存改动（决定「关闭」是否需要确认，这里只用于提示）。 */
@@ -152,7 +152,7 @@ export function tabMenuItems(context: TabMenuContext): MenuEntry[] {
   return entries
 }
 
-export interface TerminalMenuActions {
+interface TerminalMenuActions {
   newTerminal(): void
   split(): void
   rename(): void
@@ -163,7 +163,7 @@ export interface TerminalMenuActions {
   clear(): void
 }
 
-export interface TerminalMenuContext {
+interface TerminalMenuContext {
   hasSelection: boolean
   canSplit: boolean
   actions: TerminalMenuActions

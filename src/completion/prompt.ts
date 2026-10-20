@@ -15,7 +15,7 @@ import { charBudgetForPrompt, type CompletionParams, DEFAULT_COMPLETION_PARAMS }
  * 文档专门警告过「选错标记会导致补全质量显著下降」，所以两套常见写法都放在这里，由模型 profile
  * 指定用哪一套；默认取 <|fim_*|> 这一套（与多数开源代码模型的分词器一致）。
  */
-export interface FimMarkers { prefix: string; middle: string; suffix: string; end?: string }
+interface FimMarkers { prefix: string; middle: string; suffix: string; end?: string }
 
 export const FIM_MARKERS = {
   /** <|fim_prefix|>前缀<|fim_suffix|>后缀<|fim_middle|> */
@@ -27,7 +27,7 @@ export const FIM_MARKERS = {
 } satisfies Record<string, FimMarkers>
 
 /** 标记的排布方式。 */
-export type FimLayout = 'prefix-suffix-middle' | 'begin-hole-end' | 'instruction'
+type FimLayout = 'prefix-suffix-middle' | 'begin-hole-end' | 'instruction'
 
 export interface PromptProfile {
   id: string
@@ -66,7 +66,7 @@ export const INSTRUCTION_PROMPT_PROFILE: PromptProfile = {
 /** 光标占位符：指令排布与调试输出都用它。 */
 export const CURSOR_MARKER = '<CURSOR>'
 
-export interface PromptInput {
+interface PromptInput {
   filePath: string
   language: string
   document: string
@@ -78,7 +78,7 @@ export interface PromptInput {
   repositoryContext?: string
 }
 
-export interface PromptResult {
+interface PromptResult {
   prompt: string
   prefix: string
   suffix: string
@@ -224,7 +224,7 @@ function endOfLineParts(text: string, from: number, count: number): number {
 }
 
 /** 客户端裁剪后的请求文档与光标位置。 */
-export interface CroppedRequestDocument {
+interface CroppedRequestDocument {
   document: string
   /** 行号 1 起、列 1 起；被丢掉的整行会把行号前移。 */
   rewriteAt: { line: number; column: number }

@@ -16,12 +16,12 @@ import { DEFAULT_PREFERENCES, getPreferences } from './preferences.ts'
 import { CompletionClient, type CompletionResponse } from './completion.ts'
 
 /** 最近一次内容变更是否包含换行。换行意味着语句或块结束，按文档跳过防抖。 */
-export interface ChangeTracker {
+interface ChangeTracker {
   lastChangeHadNewline: boolean
 }
 
 
-export interface InlineCompletionControllerOptions {
+interface InlineCompletionControllerOptions {
   client: CompletionClient
   params?: CompletionParams
   /** 由 Monaco 的触发类型常量注入，避免在纯逻辑里依赖 monaco 的运行时值。 */
@@ -57,7 +57,7 @@ export function buildInlineCompletionItems<TItem, TCommand>(candidates: readonly
 export const ACCEPT_COMMAND_ID = 'dsh-completion.accept'
 
 /** 记账载荷：采纳起点（字符偏移）与采纳文本，区间取 [offset, offset + text.length)。 */
-export interface AcceptPayload { controllerId: string; path: string; offset: number; text: string }
+interface AcceptPayload { controllerId: string; path: string; offset: number; text: string }
 
 
 

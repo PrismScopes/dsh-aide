@@ -7,7 +7,7 @@
  * 试验用的那条。两边都缺时保持既有行为 —— 补全用应用的默认模型，模型失败就报错，不悄悄降级。
  */
 
-export interface CompletionSettings {
+interface CompletionSettings {
   /** 补全单独使用的模型路由（`provider/model`）；不设则跟随应用默认模型。 */
   route?: { provider: string; model: string }
   /** 模型失败时是否回落本地兜底。默认不回落：故障应当显式暴露。 */
@@ -157,7 +157,7 @@ export function resetCompletionSettings(): void {
 /* ────────────────────────────── 设置页的读写面 ────────────────────────────── */
 
 /** 某一项最终由谁给出。顺序即优先级：环境变量 > 设置文件 > 插件配置 > 默认值。 */
-export type SettingsSource = 'env' | 'file' | 'config' | 'default'
+type SettingsSource = 'env' | 'file' | 'config' | 'default'
 
 export interface CompletionSettingsView {
   /** 生效的模型路由（`provider/model`）；null 表示跟随应用的默认模型。 */
