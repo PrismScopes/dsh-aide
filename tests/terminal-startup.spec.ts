@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import type { IPty } from 'node-pty'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { TerminalWorkspaceController } from '../src/client/terminal.ts'
-import { TerminalManager } from '../src/terminal.ts'
+import { TerminalManager, terminalPrewarmEnabled } from '../src/terminal.ts'
 import type { TerminalInfo } from '../src/terminal.ts'
 
 /**
@@ -172,6 +172,66 @@ describe('terminal prewarm', () => {
     manager.dispose()
     expect(created[0]?.killed()).toBe(1)
   })
+
+  it('reads the deployment switch that turns prewarming off', () => {
+    expect(terminalPrewarmEnabled({})).toBe(true)
+    expect(terminalPrewarmEnabled({ DWV_TERMINAL_PREWARM: '1' })).toBe(true)
+    expect(terminalPrewarmEnabled({ DWV_TERMINAL_PREWARM: 'on' })).toBe(true)
+    expect(terminalPrewarmEnabled({ DWV_TERMINAL_PREWARM: '0' })).toBe(false)
+    expect(terminalPrewarmEnabled({ DWV_TERMINAL_PREWARM: 'false' })).toBe(false)
+    expect(terminalPrewarmEnabled({ DWV_TERMINAL_PREWARM: ' OFF ' })).toBe(false)
+  })
+
+  it('becomes a no-op when prewarming is disabled, while normal creation still works', () => {
+    const created: FakePty[] = []
+    const manager = new TerminalManager(() => { const pty = fakePty(); created.push(pty); return pty.child }, 90_000, () => false)
+    manager.prewarm(root)
+    expect(created).toHaveLength(0)
+    // 预热关掉不影响正常新建：点击「新建终端」时照常现起一个 shell。
+    expect(manager.create(root).id).not.toBe('')
+    expect(created).toHaveLength(1)
+    manager.dispose()
+  })
+})
+
+/**
+ * 预热收益的真机测量（默认跳过：要起真的 shell，CI 上慢且依赖本机 shell）。
+ *
+ * 跑法：`DWV_PREWARM_BENCH=1 pnpm vitest run tests/terminal-startup.spec.ts`
+ * 断言的是「认领预热 create 立刻返回，且回放缓冲里已经有提示符」——这就是终端启动收益的证据。
+ */
+describe.skipIf(process.env.DWV_PREWARM_BENCH !== '1')('terminal prewarm benchmark (real pty)', () => {
+  it('adopts a warm shell that already printed its prompt', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const workspace = mkdtempSync(join(tmpdir(), 'dvw-prewarm-bench-'))
+    const manager = new TerminalManager()
+    try {
+      const warmStarted = performance.now()
+      manager.prewarm(workspace)
+      // 等预热 shell 吐出提示符（最多 8 秒；pwsh 实测 ~530ms）。
+      let warmReplay = ''
+      while (performance.now() - warmStarted < 8000) {
+        const handle = (manager as unknown as { warm?: { handle: { replay: { tail(): string } } } }).warm
+        warmReplay = handle?.handle.replay.tail() ?? ''
+        if (warmReplay !== '') break
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+      expect(warmReplay.length).toBeGreaterThan(0)
+      console.log(`[prewarm] warm shell ready after ${(performance.now() - warmStarted).toFixed(0)}ms, replay=${warmReplay.length}B`)
+
+      const adoptedAt = performance.now()
+      const info = manager.create(workspace)
+      const adoptMs = performance.now() - adoptedAt
+      const handle = manager.get(workspace, info.id)
+      const replay = handle?.replay.tail() ?? ''
+      console.log(`[prewarm] create() adopted warm shell in ${adoptMs.toFixed(1)}ms, replay=${replay.length}B`)
+      expect(replay.length).toBeGreaterThan(0)
+      expect(adoptMs).toBeLessThan(50)
+    } finally {
+      manager.dispose()
+      try { rmSync(workspace, { recursive: true, force: true }) } catch { /* Windows 上刚退出的 shell 可能还占着目录。 */ }
+    }
+  }, 30_000)
 })
 
 describe('terminal startup wiring', () => {

@@ -366,6 +366,17 @@ const defaultSpawn: SpawnPty = (shell, args, options) => pty.spawn(shell, args, 
 /** 预热 shell 最多留多久：没人来认领就杀掉，别让后台多出一个长期 shell。 */
 export const PREWARM_TTL_MS = 90_000
 
+/**
+ * 是否启用终端预热。
+ *
+ * 预热是「多一个后台 shell 换启动速度」的取舍；默认开启，但留给不想多进程的部署一个开关：
+ * `DWV_TERMINAL_PREWARM=0`（或 false/off）关掉。未知值一律视为开启。
+ */
+export function terminalPrewarmEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.DWV_TERMINAL_PREWARM?.trim().toLowerCase()
+  return value !== '0' && value !== 'false' && value !== 'off'
+}
+
 /** 跑起来了、但还没有终端 id 的 shell。 */
 interface WarmShell { key: string; target: string; shell: string; handle: TerminalHandle; timer: ReturnType<typeof setTimeout> }
 
@@ -384,7 +395,7 @@ export class TerminalManager {
   private readonly workspaces = new Map<string, Map<string, TerminalHandle>>()
   private warm: WarmShell | undefined
 
-  constructor(private readonly spawn: SpawnPty = defaultSpawn, private readonly warmTtlMs = PREWARM_TTL_MS) {}
+  constructor(private readonly spawn: SpawnPty = defaultSpawn, private readonly warmTtlMs = PREWARM_TTL_MS, private readonly prewarmEnabled: () => boolean = () => terminalPrewarmEnabled()) {}
 
   private workspace(cwd: string): string { return realpathSync(cwd) }
 
@@ -397,6 +408,8 @@ export class TerminalManager {
    * 已有终端时也允许预热：用户可能还要再开一个，而列表状态由客户端判断。
    */
   prewarm(cwd: string): void {
+    // 部署方可以用 DWV_TERMINAL_PREWARM=0 关掉：此时预热请求是空操作，新建照常现起 shell。
+    if (!this.prewarmEnabled()) return
     const key = this.workspace(cwd)
     if (this.warm !== undefined && this.warm.key === key) return
     this.dropWarm()

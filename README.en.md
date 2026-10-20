@@ -62,6 +62,7 @@ replace or disable `ui-layout`.
   after 90 seconds if nobody claims it). Creating a terminal then adopts that shell, whose replay buffer already holds the
   prompt. On this machine `pwsh` needs about 530 ms from spawn to accepting commands; a pre-warmed create costs about 2 ms on
   the host. Create/close/rename each issue a single request, and the panel plus every opened xterm instance stay mounted.
+  Deployments that do not want the extra idle shell can disable prewarming with `DWV_TERMINAL_PREWARM=0` (creation still works).
 - **Rendering and IO**: file-change pushes only update tab state when something actually changed; resizer drags move CSS
   variables and persist the layout once on pointer-up; the Markdown outline and the Git commit graph are memoized.
 - **Reproducible baseline**: `pnpm perf` measures terminal startup (spawn / first byte / interactive readiness for three shells),
