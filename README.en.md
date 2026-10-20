@@ -30,8 +30,8 @@
 - **Complete file experience**: open text, Markdown, images, PDF, and Word files directly; the tree supports drag-and-drop uploads and common file operations.
 - **Reliable and live**: atomic saves and revision checks prevent silent overwrites, while WebSocket updates flag external workspace changes.
 - **Visual Git workflow**: status, staging, commits, branches, diffs, commit files, and a swimlane commit graph.
-- **Persistent workspace context**: restore tabs, tree, views, panels, and widths per workspace; terminals support multiple sessions, splits, and rename.
-- **Built for DSH**: reuse the DSH conversation surface on the right and manage theme and layout from workbench settings.
+- **Persistent workspace context**: restore the tree, views, panels, and widths per workspace; terminals support multiple sessions, splits, and rename.
+- **Built for DSH**: reuse the DSH conversation surface on the right and follow the DSH theme instead of shipping a second color scheme.
 
 ## Features
 
@@ -39,13 +39,14 @@
 - **Preview**: Markdown source, outline, relative links, and images; built-in PDF paging and zoom plus DOCX rendering, with DOC/ODT download support.
 - **Search and Git**: `@vscode/ripgrep` supports case, whole-word, regex, and path filters; Git covers stage, unstage, discard, commit, branches, diffs, commit files, and the graph.
 - **Terminal**: `node-pty` and xterm with up to eight sessions, rename, a right-side switcher, splits, ANSI output, and Ctrl+C.
-- **Layout and DSH**: the primary view, terminal panel, and DSH conversation sidebar can be shown and resized independently; settings manage theme and widths.
+- **Layout and DSH**: the primary view, terminal panel, and DSH conversation sidebar can be shown and resized independently; widths are dragged and double-clicked back to default in place, so they are not duplicated as settings.
+- **Settings page**: the "VS Code Workbench" page under DSH settings manages AI completion (master switch, model route, failure fallback, plus the model actually in use and the last failure) and the editor (font size, word wrap, minimap), with a shortcut reference.
 - **Inline completion**: ghost-text suggestions at the cursor, served by a real model or a local fallback;
   cycle through candidates and accept by block, by line, or by word. Context comes from the current file
   and a local retrieval index that never leaves the workspace directory.
   See [docs/inline-completion.md](docs/inline-completion.md) for implementation and verification status.
   Note: host-side code loads at process start, so **restart the app** after changes (a page reload is enough for the client side).
-- **Sync and restore**: workspace file changes stream to the UI, while reload restores views, tabs, expanded directories, panels, and layout.
+- **Sync and restore**: workspace file changes stream to the UI, while reload restores views, expanded directories, panels, and layout (file tabs are not restored across sessions).
 
 The workbench mounts through the official `sidebar.footer.action` and `shell.overlay` extension points. It does not replace or disable `ui-layout`.
 

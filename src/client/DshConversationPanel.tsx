@@ -15,8 +15,14 @@ export function findDshConversationRoot(documentRoot: Document = document): HTML
   return root instanceof HTMLElement && (root.dataset.phase !== undefined || root.dataset.contentPhase !== undefined) ? root : null
 }
 
+/**
+ * 状态栏高度。工作台的状态栏固定常显（24px），内嵌对话栏要让开它，否则最后一行会被压在下面。
+ * 以前这个值由「状态栏可见性」偏好算出来传进来，现在只有一种高度，直接写常量。
+ */
+const STATUS_HEIGHT = 24
+
 /** Keep the official conversation mounted while presenting it in the workbench's right column. */
-export function DshConversationPanel({ visible, width, statusHeight }: { visible: boolean; width: number; statusHeight: number }) {
+export function DshConversationPanel({ visible, width }: { visible: boolean; width: number }) {
   useLayoutEffect(() => {
     if (!visible) return
     let attached: HTMLElement | null = null
@@ -33,7 +39,7 @@ export function DshConversationPanel({ visible, width, statusHeight }: { visible
       attached = next
       attached?.setAttribute('data-dvw-conversation-panel', '')
       attached?.style.setProperty('--dvw-chat-width', `${width}px`)
-      attached?.style.setProperty('--dvw-status-height', `${statusHeight}px`)
+      attached?.style.setProperty('--dvw-status-height', `${STATUS_HEIGHT}px`)
       /**
        * 只盯对话栏的直接父元素，且**不带 subtree**。会话正文渲染会在 body 子树上搅出成千上万次
        * 变动，每一条都要生成 mutation record——而 DSH 重建会话视图（打开/关闭工作台）时正是这种
@@ -55,7 +61,7 @@ export function DshConversationPanel({ visible, width, statusHeight }: { visible
       attached?.style.removeProperty('--dvw-chat-width')
       attached?.style.removeProperty('--dvw-status-height')
     }
-  }, [visible, width, statusHeight])
+  }, [visible, width])
   return null
 }
 

@@ -76,10 +76,26 @@ export function readSettingsFile(path: string, readFile: (path: string) => strin
   }
 }
 
+/**
+ * `node:fs` 的最小面。
+ *
+ * 动态取用而不是 `import 'node:fs'`：本模块被宿主与测试共用，但设置文件属于宿主侧实现，
+ * 静态引入会让浏览器侧打包把它一起带进来。取不到（非 Node 环境）时按「没有文件系统」处理。
+ */
+interface NodeFsSubset {
+  readFileSync?(path: string, encoding: 'utf8'): string
+  writeFileSync?(path: string, data: string, encoding: 'utf8'): void
+  mkdirSync?(path: string, options: { recursive: boolean }): void
+  renameSync?(from: string, to: string): void
+}
+
+function nodeFs(): NodeFsSubset | undefined {
+  const load = (globalThis.process as unknown as { getBuiltinModule?: (name: string) => NodeFsSubset } | undefined)?.getBuiltinModule
+  return load?.('node:fs')
+}
+
 function defaultReadFile(path: string): string {
-  // 动态取用，避免把 node:fs 带进浏览器侧的打包。
-  const load = (globalThis.process as unknown as { getBuiltinModule?: (name: string) => { readFileSync?: (path: string, encoding: string) => string } } | undefined)?.getBuiltinModule
-  const fs = load?.('node:fs')
+  const fs = nodeFs()
   if (fs?.readFileSync === undefined) throw new Error('readFileSync unavailable')
   return fs.readFileSync(path, 'utf8')
 }
@@ -136,4 +152,143 @@ export function resetCompletionSettings(): void {
   pluginConfig = undefined
   fileValue = undefined
   fileCheckedAt = 0
+}
+
+/* ────────────────────────────── 设置页的读写面 ────────────────────────────── */
+
+/** 某一项最终由谁给出。顺序即优先级：环境变量 > 设置文件 > 插件配置 > 默认值。 */
+export type SettingsSource = 'env' | 'file' | 'config' | 'default'
+
+export interface CompletionSettingsView {
+  /** 生效的模型路由（`provider/model`）；null 表示跟随应用的默认模型。 */
+  route: string | null
+  fallback: boolean
+  routeSource: SettingsSource
+  fallbackSource: SettingsSource
+  /** 设置文件路径。数据目录未知时缺省 —— 那种部署里改不动，设置页会提示只读。 */
+  file?: string
+  /** 环境变量给出的路由；非空说明它会压过设置页里的值。 */
+  envRoute: string | null
+}
+
+/** 设置页提交的改动。字段缺省表示「这一项不改」。 */
+export interface CompletionSettingsPatch {
+  /** `provider/model`；null 或空串表示清除，回到跟随应用默认模型。 */
+  route?: string | null
+  fallback?: boolean
+}
+
+/**
+ * 写设置时的问题。
+ *
+ * 单独一个类型是为了让 HTTP 路由能把它映射成 400（用户输入问题）而不是 500（宿主故障）：
+ * 路由写错格式与文件写不进去，是两件该给用户不同提示的事。
+ */
+export class SettingsWriteError extends Error {}
+
+const processEnv = (): Record<string, string | undefined> => globalThis.process?.env ?? {}
+
+function routeSource(env: Record<string, string | undefined>): SettingsSource {
+  if (parseRoute(env['DSH_COMPLETION_ROUTE']) !== undefined) return 'env'
+  if (fromConfig(fileValue).route !== undefined) return 'file'
+  if (fromConfig(pluginConfig).route !== undefined) return 'config'
+  return 'default'
+}
+
+function fallbackSource(env: Record<string, string | undefined>): SettingsSource {
+  if ((env['DSH_COMPLETION_FALLBACK'] ?? '').toLowerCase() === 'local') return 'env'
+  if (typeof fromConfig(fileValue).fallback === 'boolean') return 'file'
+  if (typeof fromConfig(pluginConfig).fallback === 'boolean') return 'config'
+  return 'default'
+}
+
+/** 用当前内存里的设置算视图，不读盘 —— 写入之后走这条，免得再读一次刚写的文件。 */
+function settingsViewOf(env: Record<string, string | undefined>): CompletionSettingsView {
+  const path = settingsFilePath(env)
+  return {
+    route: current.route === undefined ? null : `${current.route.provider}/${current.route.model}`,
+    fallback: current.fallback,
+    routeSource: routeSource(env),
+    fallbackSource: fallbackSource(env),
+    ...(path === undefined ? {} : { file: path }),
+    envRoute: env['DSH_COMPLETION_ROUTE'] ?? null,
+  }
+}
+
+/** 设置页打开时读一次：立刻重读设置文件，不等两秒的重读周期。 */
+export function completionSettingsView(env: Record<string, string | undefined> = processEnv()): CompletionSettingsView {
+  refreshSettings()
+  return settingsViewOf(env)
+}
+
+/** 设置文件的读写出口；测试用内存实现替换，避免碰真实数据目录。 */
+export interface SettingsFileIo { read(path: string): unknown; write(path: string, value: unknown): void }
+
+/** 原子写：先写临时文件再改名，中途断电也不会留下半份 JSON。 */
+function systemSettingsIo(): SettingsFileIo {
+  const fs = nodeFs()
+  return {
+    read: path => {
+      try { return JSON.parse(defaultReadFile(path)) } catch { return undefined }
+    },
+    write: (path, value) => {
+      if (fs?.writeFileSync === undefined || fs.renameSync === undefined) throw new SettingsWriteError('宿主文件系统不可用，无法保存补全设置')
+      const separator = path.lastIndexOf('/')
+      if (separator > 0) fs.mkdirSync?.(path.slice(0, separator), { recursive: true })
+      const temporary = `${path}.tmp`
+      fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+      fs.renameSync(temporary, path)
+    },
+  }
+}
+
+/**
+ * 把设置文件归一成 `{ completion: { route, fallback } }` 这一种形状。
+ *
+ * 早前的文件可能是平铺的 `{ route, fallback }`（`fromConfig` 两种都认）。写的时候统一收进
+ * `completion` 下面，否则一旦出现 `completion` 字段，平铺的旧值就会被 `fromConfig` 忽略而静默失效。
+ */
+function takeSettingsBucket(root: Record<string, unknown>): Record<string, unknown> {
+  const existing = root['completion']
+  if (typeof existing === 'object' && existing !== null && !Array.isArray(existing)) {
+    return { ...(existing as Record<string, unknown>) }
+  }
+  const nested: Record<string, unknown> = {}
+  for (const key of ['route', 'fallback']) {
+    if (key in root) { nested[key] = root[key]; delete root[key] }
+  }
+  return nested
+}
+
+/**
+ * 写入补全设置并立刻生效。
+ *
+ * 为什么写文件而不是只改内存：模型路由与兜底开关由宿主执行，进程重启后必须还在；而这个文件正是
+ * 本插件既有的设置入口（设置页只是把它从「手改 JSON」变成可点的控件）。写完立刻重算一次，
+ * 用户不必等两秒的重读周期，更不必重启应用。
+ */
+export function updateCompletionSettings(patch: CompletionSettingsPatch, env: Record<string, string | undefined> = processEnv(), io: SettingsFileIo = systemSettingsIo()): CompletionSettingsView {
+  const path = settingsFilePath(env)
+  if (path === undefined) throw new SettingsWriteError('数据目录未知（未设置 DSH_HOME），无法保存补全设置')
+  const stored = io.read(path)
+  const root = typeof stored === 'object' && stored !== null && !Array.isArray(stored) ? { ...(stored as Record<string, unknown>) } : {}
+  const nested = takeSettingsBucket(root)
+  if (patch.route !== undefined) {
+    const raw = (patch.route ?? '').trim()
+    if (raw === '') delete nested['route']
+    else {
+      const route = parseRoute(raw)
+      if (route === undefined) throw new SettingsWriteError('模型路由要写成 provider/model，例如 our-free-model/mimo-v2.6-flash-free')
+      nested['route'] = `${route.provider}/${route.model}`
+    }
+  }
+  if (patch.fallback !== undefined) nested['fallback'] = patch.fallback
+  const next: Record<string, unknown> = { ...root, completion: nested }
+  // 两项都清掉时不留一个空对象：文件回到「什么都没设」的样子。
+  if (Object.keys(nested).length === 0) delete next['completion']
+  io.write(path, next)
+  fileValue = next
+  fileCheckedAt = Date.now()
+  current = resolveSettings(pluginConfig, env, fileValue)
+  return settingsViewOf(env)
 }

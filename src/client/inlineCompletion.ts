@@ -12,6 +12,7 @@ import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from '../completion/
 import { evaluateSecurity, type SecurityRule } from '../completion/security.ts'
 import { triggerPlan } from './completion.ts'
 import { api } from './api.ts'
+import { getPreferences } from './preferences.ts'
 import { CompletionClient, type CompletionResponse } from './completion.ts'
 
 /** 最近一次内容变更是否包含换行。换行意味着语句或块结束，按文档跳过防抖。 */
@@ -253,6 +254,13 @@ export class InlineCompletionController {
    */
   private scheduleTrigger(): void {
     if (this.triggerTimer !== undefined) clearTimeout(this.triggerTimer)
+    // 补全被关掉时不排触发，并且把已经显示的幻影文本收起来 —— 否则它会留成一条点不动的建议，
+    // 一路跟着光标走到下一次编辑。这里读的是当前的偏好值，所以设置页里一关就生效，不用刷新。
+    if (!getPreferences().completionEnabled) {
+      this.triggerTimer = undefined
+      this.options.editor.trigger('dsh-completion', 'editor.action.inlineSuggest.hide', {})
+      return
+    }
     const language = this.languageOf()
     const plan = triggerPlan({ isNewLine: this.tracker.lastChangeHadNewline }, language, this.paramsOf())
     this.triggerTimer = setTimeout(() => {
@@ -262,6 +270,8 @@ export class InlineCompletionController {
   }
 
   async provide(model: monaco.editor.ITextModel, position: monaco.Position, context: monaco.languages.InlineCompletionContext, token: monaco.CancellationToken): Promise<monaco.languages.InlineCompletions | undefined> {
+    // 关闭状态下一条请求都不发：这一层是补全唯一向外发请求的地方。
+    if (!getPreferences().completionEnabled) return undefined
     const params = this.paramsOf()
     const language = model.getLanguageId()
     // 位置一致时直接复用上次候选（文档 4.1：命中缓存直接呈现、不发请求）：

@@ -228,12 +228,12 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const [snapshot, setSnapshot] = useState(() => service.getSnapshot()); const [panels, setPanels] = useState(() => service.getPanels())
   const [layout, setLayout] = useState(() => service.getLayout())
   useEffect(() => service.subscribe(() => { setSnapshot(service.getSnapshot()); setPanels(service.getPanels()); setLayout(service.getLayout()) }), [service])
-  // 布局偏好存在 service 上（设置面板也要读写同一份），这里给出与旧 useState 同形的局部访问器，
-  // 下面各处调用点不必改动。
-  const { primarySideVisible, chatVisible, statusVisible, sideWidth, chatWidth } = layout
+  // 布局偏好存在 service 上（拖分隔条、点标签栏按钮都改它），这里给出与旧 useState 同形的局部访问器，
+  // 下面各处调用点不必改动。状态栏不再可隐藏：它只有 24px、承载工作区路径与返回入口，
+  // 而工作台里没有就地开关可以把它叫回来，所以固定常显。
+  const { primarySideVisible, chatVisible, sideWidth, chatWidth } = layout
   const setPrimarySideVisible = (value: boolean) => service.setLayout({ primarySideVisible: value })
   const setChatVisible = (value: boolean | ((current: boolean) => boolean)) => service.setLayout({ chatVisible: typeof value === 'function' ? value(service.getLayout().chatVisible) : value })
-  const setStatusVisible = (value: boolean) => service.setLayout({ statusVisible: value })
   const setSideWidth = (value: number) => service.setLayout({ sideWidth: value })
   const setChatWidth = (value: number) => service.setLayout({ chatWidth: value })
   // 会话与工作目录由 Overlay 统一从主视图会话解析后传入（0.2.1 不再提供 state.current）。
@@ -243,11 +243,10 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const dshDark = useDshDarkTheme()
   // 不再有手动配色：工作台与内嵌编辑器的深/浅色一律取自 DSH 当前主题。
   const colorScheme: 'dark' | 'light' = dshDark ? 'dark' : 'light'
+  // 只有大纲的显隐还留在 localStorage 里：它属于单次阅读状态，不走布局偏好。
+  // 早前这里还有四条 `dvw:dsh-chat-visible` / `dvw:primary-side-visible` 之类的写入：布局改由
+  // service 统一持久化之后，那几个键已经没有任何读取方，删掉它们（否则每次改宽度都白写一遍）。
   useEffect(()=>localStorage.setItem('dvw:outline',outlineVisible?'open':'closed'),[outlineVisible])
-  useEffect(()=>localStorage.setItem('dvw:dsh-chat-visible',chatVisible?'open':'closed'),[chatVisible])
-  useEffect(()=>localStorage.setItem('dvw:dsh-chat-width',String(Math.round(chatWidth))),[chatWidth])
-  useEffect(()=>localStorage.setItem('dvw:primary-side-visible',primarySideVisible?'open':'closed'),[primarySideVisible])
-  useEffect(()=>localStorage.setItem('dvw:status-visible',statusVisible?'open':'closed'),[statusVisible])
   useEffect(()=>{if(!snapshot.visible)return;const onKey=(event:KeyboardEvent)=>{if(event.isComposing||!event.ctrlKey||!event.altKey||event.shiftKey||event.code!=='KeyB')return;event.preventDefault();setChatVisible(value=>!value)};window.addEventListener('keydown',onKey,true);return()=>window.removeEventListener('keydown',onKey,true)},[snapshot.visible])
   // 打开工作台时预热 TextMate：首次装分词器约 100ms（WASM 加载 + 语法编译），
   // 放在这里就挪到用户不敏感的时刻，点开文件时不再卡那一下。
@@ -313,8 +312,8 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const diffMarkdown=activeTab?.diff!==undefined&&/\.md$/i.test(activeTab.diffSourcePath??'')
   const markdownPreview=markdown||(diffMarkdown&&activeTab?.preview===true)
   const headings=markdownPreview&&activeTab?markdownHeadings(activeTab.diff?.modified??activeTab.draft):[]
-  return <div className="dvw-overlay" data-dvw-chat={chatVisible||undefined} data-dvw-primary-side={primarySideVisible||undefined} data-dvw-status={statusVisible||undefined} style={{'--dvw-side-width':`${sideWidth}px`,'--dvw-chat-width':`${chatWidth}px`} as CSSProperties} role="dialog" aria-label="VS Code 工作台" onDragEnterCapture={suppressAttachmentDrop} onDragOverCapture={suppressAttachmentDrop} onDropCapture={suppressAttachmentDrop}>
-    <DshConversationPanel visible={chatVisible} width={chatWidth} statusHeight={statusVisible?24:0}/>
+  return <div className="dvw-overlay" data-dvw-chat={chatVisible||undefined} data-dvw-primary-side={primarySideVisible||undefined} style={{'--dvw-side-width':`${sideWidth}px`,'--dvw-chat-width':`${chatWidth}px`} as CSSProperties} role="dialog" aria-label="VS Code 工作台" onDragEnterCapture={suppressAttachmentDrop} onDragOverCapture={suppressAttachmentDrop} onDropCapture={suppressAttachmentDrop}>
+    <DshConversationPanel visible={chatVisible} width={chatWidth}/>
     {chatVisible&&<aside className="dvw-chat"><PanelResizer className="dvw-chat-resizer" label="拖动调整 DSH 对话栏宽度" width={chatWidth} min={400} max={720} defaultWidth={420} direction={-1} onWidth={setChatWidth}/><header className="dvw-chat-head"><span><DshMark/> DSH</span><button className="dvw-icon" title="关闭 DSH 对话栏" onClick={()=>setChatVisible(false)}><Icon name="close"/></button></header><div className="dvw-chat-body"/></aside>}
     <nav className="dvw-activity"><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='explorer'} title="资源管理器" onClick={()=>selectView('explorer')}><Icon name="files"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='search'} title="搜索" onClick={()=>selectView('search')}><Icon name="search"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='git'} title="源代码管理" onClick={()=>selectView('git')}><Icon name="source-control"/></button><button className="dvw-act" data-active={snapshot.bottomPanel==='terminal'} disabled={!terminalAvailable} title={terminalAvailable?(snapshot.bottomPanel==='terminal'?'隐藏终端':'显示终端'):'终端适配器未安装'} onClick={()=>toggleTerminal(service)}><Icon name="terminal"/></button><button className="dvw-act dsh" title="返回 DSH" onClick={()=>service.hide()}><Icon name="home"/></button><button className="dvw-act dvw-settings-button" title="在 DSH 设置中管理工作台选项" onClick={()=>service.openDshSettings()}><Icon name="settings"/></button></nav>
     <aside className="dvw-side" data-side-width={sideWidth}>{snapshot.view==='explorer'&&<Explorer sessionId={sessionId} cwd={workspace?.cwd} selected={active} dirty={new Set(tabs.filter(tab=>tab.dirty).map(tab=>tab.path))} onOpen={(path,pin)=>void open(path,undefined,undefined,pin)}/>} {snapshot.view==='search'&&<Search sessionId={sessionId} onOpen={(path,line,column)=>void open(path,line,column)}/>} {snapshot.view==='git'&&<Git sessionId={sessionId} onDiff={(path,diff,title,diffSourcePath)=>{const key=`diff:${path}`;setTabs(rows=>[...rows.filter(row=>row.path!==key),{path:key,title,content:diff.diff,draft:diff.diff,revision:'',size:diff.diff.length,binary:false,tooLarge:false,dirty:false,pinned:true,diff,diffMode:'inline',diffSourcePath}]);setActive(key)}}/>}</aside>

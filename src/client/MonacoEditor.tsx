@@ -3,18 +3,33 @@ import darkPlus from '@shikijs/themes/dark-plus'
 import lightPlus from '@shikijs/themes/light-plus'
 import { installTextMate } from './textmateHighlight.ts'
 import { attachInlineCompletion } from './inlineCompletion.ts'
+import { getPreferences, usePreferences } from './preferences.ts'
 
 type Monaco = typeof import('monaco-editor')
 declare global { interface Window { require?: { (ids: string[], done: () => void): void; config(value: unknown): void }; monaco?: Monaco } }
 let loading: Promise<Monaco> | undefined
-/** Monaco chrome used by both editors so only the narrow native scrollbar remains. */
+/**
+ * 两个编辑器共用的固定外框。
+ *
+ * 缩略图与字号**不在这里**：它们是用户偏好（见 preferences.ts），随设置变化，属于创建参数与
+ * updateOptions 的范畴；这里只留工作台的既定观感 —— 窄滚动条、不要概览标尺。
+ */
 export const WORKBENCH_EDITOR_CHROME = {
-  minimap: { enabled: false },
   renderOverviewRuler: false,
   overviewRulerLanes: 0,
   hideCursorInOverviewRuler: true,
   scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
 } as const
+
+/** 把用户偏好翻成 Monaco 的选项；创建与后续更新都用它，两处不会漂。 */
+function preferenceOptions(): { fontSize: number; wordWrap: 'on' | 'off'; minimap: { enabled: boolean } } {
+  const preferences = getPreferences()
+  return {
+    fontSize: preferences.editorFontSize,
+    wordWrap: preferences.editorWordWrap ? 'on' : 'off',
+    minimap: { enabled: preferences.editorMinimap },
+  }
+}
 
 /** 读 DSH 主题令牌（渲染期从 body 上的 CSS 变量取值；无 document 时回落）。 */
 function tokenOf(name: string, fallback: string): string {
@@ -201,10 +216,13 @@ export function loadMonaco(): Promise<Monaco> {
 
 export function MonacoDiffEditor(props: { uri: string; original: string; modified: string; mode: 'inline' | 'split'; theme: 'dark' | 'light' }) {
   const root=useRef<HTMLDivElement>(null);const editor=useRef<import('monaco-editor').editor.IStandaloneDiffEditor>();const models=useRef<{original:import('monaco-editor').editor.ITextModel;modified:import('monaco-editor').editor.ITextModel}>();const [error,setError]=useState<string>()
-  useEffect(()=>{let disposed=false;void loadMonaco().then(async monaco=>{if(disposed||root.current===null)return;const safe=props.uri.replace(/^\/+/, '');const original=monaco.editor.createModel(props.original,undefined,monaco.Uri.parse(`dvw-diff-original:///${safe}`));const modified=monaco.editor.createModel(props.modified,undefined,monaco.Uri.parse(`dvw-diff-modified:///${safe}`));models.current={original,modified};await installTextMate(monaco,[original.getLanguageId()]).catch(()=>undefined);if(disposed||root.current===null)return;const instance=monaco.editor.createDiffEditor(root.current,{automaticLayout:true,readOnly:true,renderSideBySide:props.mode==='split',theme:dshMonacoTheme(monaco,props.theme),fontSize:14,...WORKBENCH_EDITOR_CHROME,originalEditable:false,ignoreTrimWhitespace:false});instance.setModel({original,modified});editor.current=instance}).catch(error=>setError(error instanceof Error?error.message:String(error)));return()=>{disposed=true;editor.current?.dispose();editor.current=undefined;models.current?.original.dispose();models.current?.modified.dispose();models.current=undefined}},[props.uri])
+  const preferences=usePreferences()
+  useEffect(()=>{let disposed=false;void loadMonaco().then(async monaco=>{if(disposed||root.current===null)return;const safe=props.uri.replace(/^\/+/, '');const original=monaco.editor.createModel(props.original,undefined,monaco.Uri.parse(`dvw-diff-original:///${safe}`));const modified=monaco.editor.createModel(props.modified,undefined,monaco.Uri.parse(`dvw-diff-modified:///${safe}`));models.current={original,modified};await installTextMate(monaco,[original.getLanguageId()]).catch(()=>undefined);if(disposed||root.current===null)return;const instance=monaco.editor.createDiffEditor(root.current,{automaticLayout:true,readOnly:true,renderSideBySide:props.mode==='split',theme:dshMonacoTheme(monaco,props.theme),...preferenceOptions(),...WORKBENCH_EDITOR_CHROME,originalEditable:false,ignoreTrimWhitespace:false});instance.setModel({original,modified});editor.current=instance}).catch(error=>setError(error instanceof Error?error.message:String(error)));return()=>{disposed=true;editor.current?.dispose();editor.current=undefined;models.current?.original.dispose();models.current?.modified.dispose();models.current=undefined}},[props.uri])
   useEffect(()=>{const value=models.current;if(value===undefined)return;if(value.original.getValue()!==props.original)value.original.setValue(props.original);if(value.modified.getValue()!==props.modified)value.modified.setValue(props.modified)},[props.original,props.modified])
   useEffect(()=>{editor.current?.updateOptions({renderSideBySide:props.mode==='split'})},[props.mode])
   useEffect(()=>{if(window.monaco!==undefined)window.monaco.editor.setTheme(dshMonacoTheme(window.monaco,props.theme))},[props.theme])
+  // 字号与换行改了就地更新：差异视图跟着设置页一起变，不必关掉再打开。
+  useEffect(()=>{editor.current?.updateOptions({fontSize:preferences.editorFontSize,wordWrap:preferences.editorWordWrap?'on':'off'})},[preferences.editorFontSize,preferences.editorWordWrap])
   return error===undefined?<div className="dvw-diff dvw-monaco-diff" data-mode={props.mode} data-render-side-by-side={props.mode==='split'} ref={root}/>:<div className="dvw-error">{error}</div>
 }
 
@@ -213,6 +231,7 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
   const editor = useRef<import('monaco-editor').editor.IStandaloneCodeEditor>()
   const callbacks = useRef({ onChange: props.onChange, onSave: props.onSave })
   callbacks.current = { onChange: props.onChange, onSave: props.onSave }
+  const preferences = usePreferences()
   // 挂载 effect 只依赖 uri，闭包里的 props.value 是挂载那一刻的值；内容往往之后才到，
   // 因此这里另存一份最新值，在模型建立后用它写入。
   const valueRef = useRef(props.value)
@@ -231,7 +250,8 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       })
       if (disposed || root.current === null) return
       if (model.getValue() !== valueRef.current) model.setValue(valueRef.current)
-      const instance = monaco.editor.create(root.current, { model, automaticLayout: true, theme: dshMonacoTheme(monaco, props.theme), fontSize: 14, ...WORKBENCH_EDITOR_CHROME, wordWrap: 'off' })
+      // 偏好取当前值而不是本次渲染的闭包值：这个 effect 不随偏好重跑（重跑会重建编辑器）。
+      const instance = monaco.editor.create(root.current, { ...WORKBENCH_EDITOR_CHROME, ...preferenceOptions(), model, automaticLayout: true, theme: dshMonacoTheme(monaco, props.theme) })
       editor.current = instance
       const change = instance.onDidChangeModelContent(() => callbacks.current.onChange(instance.getValue()))
       instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => callbacks.current.onSave())
@@ -246,5 +266,9 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
     const model = editor.current?.getModel(); if (model !== null && model !== undefined && model.getValue() !== props.value) model.setValue(props.value)
   }, [props.value])
   useEffect(() => { if (window.monaco !== undefined) window.monaco.editor.setTheme(dshMonacoTheme(window.monaco, props.theme)) }, [props.theme])
+  // 三项偏好各自就地更新，改设置时不影响编辑器里已有的滚动位置与选择。
+  useEffect(() => { editor.current?.updateOptions({ fontSize: preferences.editorFontSize }) }, [preferences.editorFontSize])
+  useEffect(() => { editor.current?.updateOptions({ wordWrap: preferences.editorWordWrap ? 'on' : 'off' }) }, [preferences.editorWordWrap])
+  useEffect(() => { editor.current?.updateOptions({ minimap: { enabled: preferences.editorMinimap } }) }, [preferences.editorMinimap])
   return error === undefined ? <div ref={root} style={{ position: 'absolute', inset: 0 }} /> : <div className="dvw-error">{error}</div>
 }

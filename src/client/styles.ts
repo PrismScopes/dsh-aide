@@ -67,6 +67,21 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-set-arrow:hover:not(:disabled){color:var(--dsw-alias-label-primary)}
 .dvw-set-arrow:disabled{opacity:.4;cursor:default}
 .dvw-set-unit{color:var(--dsw-alias-label-secondary);font-size:14px}
+/* 设置页里的补充控件：整行文本输入、只读信息行、键帽、页脚说明。
+   开关与步进器的规格见上；这几样 DSH 设置页里没有直接对应的控件，按同一套令牌与圆角重画。 */
+.dvw-set-row-stack{flex-direction:column;align-items:stretch;gap:8px;padding-top:8px;padding-bottom:10px}
+.dvw-set-input{width:100%;height:36px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;outline:none}
+.dvw-set-input::placeholder{color:var(--dsw-alias-label-tertiary)}
+.dvw-set-input:focus{border-color:var(--dsw-alias-state-business-primary)}
+.dvw-set-input:disabled{opacity:.5;cursor:not-allowed}
+.dvw-set-switch:disabled{opacity:.45;cursor:not-allowed}
+.dvw-set-info{display:flex;gap:10px;padding:4px 2px;font-size:12px;line-height:1.5}
+.dvw-set-info-label{flex:none;color:var(--dsw-alias-label-tertiary)}
+.dvw-set-info-value{min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.dvw-set-info[data-tone=warn] .dvw-set-info-value{color:var(--dsw-alias-state-warn-primary,#d7ba7d)}
+.dvw-set-info[data-tone=error] .dvw-set-info-value{color:var(--dsw-alias-state-error-primary,#f48771)}
+.dvw-set-keycap{display:inline-block;min-width:22px;padding:1px 6px;border:1px solid var(--dsw-alias-border-l2);border-bottom-width:2px;border-radius:6px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:center}
+.dvw-set-footnote{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6}
 /* 侧栏面板行：图标占一个正常 flex 位，命中层另用绝对定位铺满整行并在冒泡阶段吃掉点击，
    避免 DSH 把主区域切到空面板（那会卸载整个会话视图，是打开工作台时整屏卡顿的来源）。 */
 .dvw-panel-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px}
@@ -86,7 +101,6 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-overlay:not([data-dvw-primary-side=true]){grid-template-columns:48px 0 minmax(0,1fr)}
 .dvw-overlay[data-dvw-chat=true]:not([data-dvw-primary-side=true]){grid-template-columns:48px 0 minmax(0,1fr) var(--dvw-chat-width)}
 .dvw-overlay:not([data-dvw-primary-side=true]) .dvw-side{visibility:hidden;border-right:0}
-.dvw-overlay:not([data-dvw-status=true]){grid-template-rows:minmax(0,1fr) auto 0}.dvw-overlay:not([data-dvw-status=true]) .dvw-status{display:none}
 .dvw-overlay[data-dvw-chat=true] .dvw-status{grid-column:1/-1;padding-right:calc(var(--dvw-chat-width) + 8px)}
 .dvw-chat{grid-column:4;grid-row:1/3;min-width:0;background:var(--dvw-base);border-left:1px solid var(--dvw-border);position:relative}
 .dvw-chat-head{height:36px;display:flex;align-items:center;justify-content:space-between;padding:0 6px 0 12px;border-bottom:1px solid var(--dvw-border);background:var(--dvw-base);font-weight:600}

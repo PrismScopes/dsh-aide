@@ -10,7 +10,8 @@ import { readGrammar } from './assets.ts'
 import { authorize, readBinaryBody, readBody, send, sendError, WorkbenchError } from './wire.ts'
 import { localBase } from './terminal.ts'
 import { dispatch } from './api.ts'
-import { registerCompletionRoute } from './completion/register.ts'
+import { completionTelemetry, registerCompletionRoute, resolveProvider } from './completion/register.ts'
+import { completionSettingsView, SettingsWriteError, updateCompletionSettings, type CompletionSettingsPatch } from './completion/settings.ts'
 
 /**
  * 宿主侧的全部 HTTP / WebSocket 路由。
@@ -71,6 +72,24 @@ export class WorkspaceWatch {
   size(): number { return this.entries.size }
 }
 
+/**
+ * 设置页要显示的全部状态。
+ *
+ * 除设置本身，还带上「当前实际在用哪个模型」和「最近一次补全失败原因」：排查「没有补全」时
+ * 这两条决定下一步该看哪里 —— 是路由配错了，还是模型调用本身失败。来源解析与补全请求走同一套
+ * resolveProvider，所以这里显示的就是请求真正会用的那条路。
+ */
+function settingsPayload(ctx: HostContext): unknown {
+  const resolved = resolveProvider(ctx)
+  return {
+    completion: {
+      ...completionSettingsView(),
+      effective: { source: resolved.source, model: resolved.model },
+      lastFailure: completionTelemetry.failure() ?? null,
+    },
+  }
+}
+
 export function registerWorkbenchRoutes(ctx: HostContext): void {
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', handler: async (req, res) => {
@@ -129,6 +148,35 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
 
   // 补全走独立的 SSE 端点：它要边算边发，与 /api 的一问一答不同。
   registerCompletionRoute(ctx, { authorize: (req, res) => authorize(req, res, ctx.connection), readBody, send, sendError, cwdFor: sessionId => cwdFor(ctx, sessionId) })
+
+  // 设置页的读写端点。
+  // 为什么单独一条、而不是并进 /api：/api 的每个方法都要先解析会话工作目录（dispatch 里第一行），
+  // 而设置页在「还没选会话」时也要能用 —— 那时 /api 一律 409。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: '/dsh-vscode/settings', handler: async (req, res) => {
+      if (!authorize(req, res, ctx.connection)) return
+      try {
+        if (req.method === 'GET') return send(res, 200, { ok: true, value: settingsPayload(ctx) })
+        if (req.method !== 'POST') return send(res, 405, { ok: false, error: { code: 'method', message: 'GET or POST required' } })
+        const body = await readBody(req)
+        const patch: CompletionSettingsPatch = {}
+        if ('route' in body) {
+          if (body['route'] !== null && typeof body['route'] !== 'string') throw new WorkbenchError('invalid-argument', 'route must be a string or null')
+          patch.route = body['route'] as string | null
+        }
+        if ('fallback' in body) {
+          if (typeof body['fallback'] !== 'boolean') throw new WorkbenchError('invalid-argument', 'fallback must be a boolean')
+          patch.fallback = body['fallback']
+        }
+        updateCompletionSettings(patch)
+        send(res, 200, { ok: true, value: settingsPayload(ctx) })
+      } catch (error) {
+        // 路由格式写错、数据目录不可写：这两类要给出可读的提示，而不是一句 internal。
+        if (error instanceof SettingsWriteError) send(res, 400, { ok: false, error: { code: 'settings-write', message: error.message } })
+        else sendError(res, error)
+      }
+    },
+  }), 'dsh-vscode-workbench: settings')
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/upload', handler: async (req, res) => {

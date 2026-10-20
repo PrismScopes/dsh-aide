@@ -1,15 +1,25 @@
 import { useEffect, useState } from 'react'
-import { LAYOUT_LIMITS, type VscodeWorkbench, type WorkbenchLayout } from './service.ts'
+import type { CompletionSettingsView, WorkbenchSettingsView } from './api.ts'
+import { ApiError, readWorkbenchSettings, writeWorkbenchSettings } from './api.ts'
+import { PREFERENCE_LIMITS, updatePreferences, usePreferences } from './preferences.ts'
 
 /**
  * 工作台的设置页。
  *
- * 注册进 DSH 设置导航（settings.section），排「插件市场」之后，所以它渲染在 DSH 设置面板的
- * 内容列内，必须自己贴合 DSH 的观感 —— 颜色一律取 --dsw-alias-* 令牌，不写死色值，
- * 深浅色由 DSH 自己切换。
+ * 注册进 DSH 设置导航（settings.section），渲染在设置面板的内容列里，所以必须贴合 DSH 的观感 ——
+ * 颜色一律取 --dsw-alias-* 令牌，不写死色值，深浅色由 DSH 自己切换。
  *
- * 两个控件按 DSH 设置页里的真实规格复刻（那些 class 是 CSS Module 哈希，插件里用不了，
- * 只能照尺寸与配色重画）：
+ * **这一页只放「界面上改不了的东西」。** 早前那五项（左右栏与状态栏显隐、两个栏宽）已经移除：
+ * 它们在工作台里本来就有就地控件 —— 活动栏点图标即切换左栏、标签栏按钮与 Ctrl+Alt+B 切对话栏、
+ * 拖拽分隔条改宽度且双击恢复默认。把可拖动的东西再抄一份成数字设置，只会让同一个状态有两个入口，
+ * 用户还得记住改哪个才算数。
+ *
+ * 现在三组：
+ *   1. AI 补全 —— 总开关（客户端）、模型路由与失败兜底（宿主侧设置文件），外加当前生效与最近失败；
+ *   2. 编辑器 —— 字号、自动换行、缩略图（这三项原先写死在代码里，只能改代码才变）；
+ *   3. 快捷键 —— 只读清单：这些键位没有别的入口能发现。
+ *
+ * 两个控件的规格照 DSH 设置页重画（那些 class 是 CSS Module 哈希，插件里用不了）：
  *   - 开关：36×20、radius 999px；开启时轨道取前景色、圆钮取底色（反色），关闭时轨道为 16% 前景色、圆钮为三级文字色。
  *   - 步进器：72×36、radius 12px、底色为 bg-layer-3；数值用等宽数字，上下箭头默认透明、悬停才显形。
  */
@@ -26,8 +36,8 @@ function Row({ title, description, children }: { title: string; description?: st
 }
 
 /** 开关。role="switch" 与 DSH 自己的写法一致。 */
-function Switch({ checked, label, onChange }: { checked: boolean; label: string; onChange(value: boolean): void }) {
-  return <button type="button" role="switch" aria-checked={checked} aria-label={label} className="dvw-set-switch" onClick={() => onChange(!checked)}>
+function Switch({ checked, label, disabled, onChange }: { checked: boolean; label: string; disabled?: boolean; onChange(value: boolean): void }) {
+  return <button type="button" role="switch" aria-checked={checked} aria-label={label} className="dvw-set-switch" disabled={disabled} onClick={() => onChange(!checked)}>
     <span className="dvw-set-knob"/>
   </button>
 }
@@ -60,34 +70,134 @@ function Stepper({ value, min, max, step, unit, label, onChange }: { value: numb
   </>
 }
 
-export function SettingsPanel({ service }: { service: VscodeWorkbench }) {
-  const [layout, setLayout] = useState<WorkbenchLayout>(() => service.getLayout())
-  // 布局存在 service 上，订阅它就能让设置页和工作台保持一致（比如用快捷键切换对话栏之后）。
-  useEffect(() => service.subscribe(() => setLayout(service.getLayout())), [service])
-  const patch = (value: Partial<WorkbenchLayout>) => service.setLayout(value)
+/** 一行只读信息（当前生效、失败原因、文件位置）。 */
+function Info({ label, value, tone }: { label: string; value: string; tone?: 'warn' | 'error' }) {
+  return <div className="dvw-set-info" data-tone={tone}>
+    <span className="dvw-set-info-label">{label}</span>
+    <span className="dvw-set-info-value">{value}</span>
+  </div>
+}
 
+/** 把宿主的错误翻成一句能照着做的话。 */
+function messageOf(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** 补全这一步实际由谁执行 —— 与宿主 resolveProvider 的三种来源对应。 */
+function effectiveLabel(completion: CompletionSettingsView): string {
+  if (completion.effective.source === 'local') return '本地兜底 · 当前没有可用的模型服务'
+  if (completion.effective.source === 'http') return `自定义端点 · ${completion.effective.model}`
+  return `DSH 模型 · ${completion.effective.model}`
+}
+
+/** 只读键位清单：这些能力在工作台里没有任何可见入口，不写在设置页就只能靠猜。 */
+const SHORTCUTS: ReadonlyArray<{ keys: readonly string[]; label: string }> = [
+  { keys: ['Tab'], label: '采纳整条补全建议' },
+  { keys: ['Ctrl', 'Alt', '→'], label: '只采纳补全的下一行' },
+  { keys: ['Ctrl', 'S'], label: '保存当前文件' },
+  { keys: ['Ctrl', 'Alt', 'B'], label: '显示或隐藏右侧 DSH 对话栏' },
+  { keys: ['Ctrl', 'Shift', 'E'], label: '资源管理器' },
+  { keys: ['Ctrl', 'Shift', 'F'], label: '搜索' },
+  { keys: ['Ctrl', 'Shift', 'G'], label: '源代码管理' },
+  { keys: ['Ctrl', '`'], label: '显示或隐藏终端' },
+  { keys: ['Ctrl', 'Shift', '`'], label: '新建终端' },
+]
+
+export function SettingsPanel() {
+  const preferences = usePreferences()
+  // 宿主侧的补全设置：还没读到（或旧宿主没有这个端点）时为 undefined，此时只禁用那两项。
+  const [view, setView] = useState<WorkbenchSettingsView>()
+  const [loadError, setLoadError] = useState<string>()
+  const [writeError, setWriteError] = useState<string>()
+  const [saving, setSaving] = useState(false)
+  // 输入框的草稿：失焦或回车才提交，不为每一个按键写一次盘。
+  const [routeDraft, setRouteDraft] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void readWorkbenchSettings(controller.signal)
+      .then(next => { setView(next); setRouteDraft(next.completion.route ?? ''); setLoadError(undefined) })
+      .catch(error => { if (!controller.signal.aborted) setLoadError(messageOf(error)) })
+    return () => controller.abort()
+  }, [])
+
+  const completionUnavailable = view === undefined
+  const commit = async (patch: { route?: string | null; fallback?: boolean }) => {
+    setSaving(true); setWriteError(undefined)
+    try {
+      const next = await writeWorkbenchSettings(patch)
+      setView(next); setRouteDraft(next.completion.route ?? '')
+    } catch (error) { setWriteError(messageOf(error)) }
+    finally { setSaving(false) }
+  }
+  const commitRoute = () => {
+    if (saving || completionUnavailable) return
+    const stored = view.completion.route ?? ''
+    const next = routeDraft.trim()
+    if (next === stored) return
+    void commit({ route: next === '' ? null : next })
+  }
+
+  const completion = view?.completion
   return <div className="dvw-settings-panel">
     <section className="dvw-set-group">
-      <h3 className="dvw-set-group-title">界面</h3>
-      <Row title="显示左侧视图" description="资源管理器、搜索与源代码管理所在的一栏。">
-        <Switch checked={layout.primarySideVisible} label="显示左侧视图" onChange={(value) => patch({ primarySideVisible: value })}/>
+      <h3 className="dvw-set-group-title">AI 补全</h3>
+      <Row title="行内补全" description="在编辑器里按 Tab 采纳建议。关闭后一次模型请求都不会发出。">
+        <Switch checked={preferences.completionEnabled} label="行内补全" onChange={value => updatePreferences({ completionEnabled: value })}/>
       </Row>
-      <Row title="显示 DSH 对话栏" description="工作台右侧常驻的 DSH 对话区，也可用 Ctrl+Alt+B 切换。">
-        <Switch checked={layout.chatVisible} label="显示 DSH 对话栏" onChange={(value) => patch({ chatVisible: value })}/>
+      <div className="dvw-set-row dvw-set-row-stack">
+        <div className="dvw-set-text">
+          <span className="dvw-set-title">模型路由</span>
+          <span className="dvw-set-desc">补全单独使用的模型，写成 provider/model。留空则跟随 DSH 的默认模型；回车或离开输入框即保存，立即生效。</span>
+        </div>
+        <input className="dvw-set-input" value={routeDraft} placeholder="跟随 DSH 默认模型" aria-label="补全模型路由" spellCheck={false} autoComplete="off"
+          disabled={completionUnavailable || saving}
+          onChange={event => setRouteDraft(event.target.value)}
+          onBlur={commitRoute}
+          onKeyDown={event => {
+            if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); return }
+            if (event.key !== 'Escape') return
+            event.preventDefault()
+            setRouteDraft(completion?.route ?? '')
+            event.currentTarget.blur()
+          }}/>
+      </div>
+      <Row title="模型失败时回落本地兜底" description="默认关闭：故障应当显式暴露。开启后仍有候选可用，回落原因会写进补全诊断日志。">
+        <Switch checked={completion?.fallback ?? false} label="模型失败时回落本地兜底" disabled={completionUnavailable || saving}
+          onChange={value => { if (!saving && completion !== undefined) void commit({ fallback: value }) }}/>
       </Row>
-      <Row title="显示底部状态栏" description="显示工作区路径与光标位置的那一条。">
-        <Switch checked={layout.statusVisible} label="显示底部状态栏" onChange={(value) => patch({ statusVisible: value })}/>
+      {completion !== undefined && <Info label="当前生效" value={effectiveLabel(completion)}/>}
+      {completion?.routeSource === 'env' && <Info tone="warn" label="环境变量覆盖" value={`DSH_COMPLETION_ROUTE=${completion.envRoute ?? ''} 正在覆盖这里设置的路由`}/>}
+      {completion?.fallbackSource === 'env' && <Info tone="warn" label="环境变量覆盖" value="DSH_COMPLETION_FALLBACK=local 正在覆盖这里的兜底开关"/>}
+      {completion?.lastFailure != null && <Info tone="warn" label="最近一次失败" value={completion.lastFailure}/>}
+      {completion?.file !== undefined && <Info label="设置文件" value={completion.file}/>}
+      {loadError !== undefined && <Info tone="warn" label="宿主设置不可用" value={`${loadError}。模型路由与兜底需要重启 DSH 后才能在这里改，界面偏好不受影响。`}/>}
+      {writeError !== undefined && <Info tone="error" label="保存失败" value={writeError}/>}
+    </section>
+
+    <section className="dvw-set-group">
+      <h3 className="dvw-set-group-title">编辑器</h3>
+      <Row title="字号" description="源码编辑器与差异对比的字体大小。">
+        <Stepper value={preferences.editorFontSize} min={PREFERENCE_LIMITS.editorFontSize.min} max={PREFERENCE_LIMITS.editorFontSize.max} step={1} unit="px" label="编辑器字号"
+          onChange={value => updatePreferences({ editorFontSize: value })}/>
+      </Row>
+      <Row title="自动换行" description="长行在编辑器宽度处折行，不再需要横向滚动。">
+        <Switch checked={preferences.editorWordWrap} label="自动换行" onChange={value => updatePreferences({ editorWordWrap: value })}/>
+      </Row>
+      <Row title="缩略图" description="编辑器右侧的代码缩略图。关闭后只留滚动条。">
+        <Switch checked={preferences.editorMinimap} label="缩略图" onChange={value => updatePreferences({ editorMinimap: value })}/>
       </Row>
     </section>
 
     <section className="dvw-set-group">
-      <h3 className="dvw-set-group-title">尺寸</h3>
-      <Row title="左侧视图宽度">
-        <Stepper value={layout.sideWidth} min={LAYOUT_LIMITS.sideWidth.min} max={LAYOUT_LIMITS.sideWidth.max} step={10} unit="px" label="左侧视图宽度" onChange={(value) => patch({ sideWidth: value })}/>
-      </Row>
-      <Row title="DSH 对话栏宽度">
-        <Stepper value={layout.chatWidth} min={LAYOUT_LIMITS.chatWidth.min} max={LAYOUT_LIMITS.chatWidth.max} step={10} unit="px" label="DSH 对话栏宽度" onChange={(value) => patch({ chatWidth: value })}/>
-      </Row>
+      <h3 className="dvw-set-group-title">快捷键</h3>
+      {SHORTCUTS.map(shortcut => <div className="dvw-set-row" key={shortcut.label}>
+        <div className="dvw-set-text"><span className="dvw-set-title">{shortcut.label}</span></div>
+        <div className="dvw-set-control">{shortcut.keys.map(key => <kbd className="dvw-set-keycap" key={key}>{key}</kbd>)}</div>
+      </div>)}
     </section>
+
+    <p className="dvw-set-footnote">界面偏好保存在本机浏览器里；补全的模型路由与兜底写入 DSH 数据目录，重启后仍然有效。</p>
   </div>
 }

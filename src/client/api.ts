@@ -78,8 +78,48 @@ async function callOnce<T>(method: string, body: Record<string, unknown>, signal
   const response = await fetch(`/dsh-vscode/api/${method}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
   })
+  return readAnswer<T>(response)
+}
+
+/** 读宿主统一的应答信封：`{ ok, value, wsBase, error }`。 */
+async function readAnswer<T>(response: Response): Promise<T> {
   const answer = await response.json() as { ok: boolean; value?: T; wsBase?: string; error?: { code?: string; message?: string } }
   if (!response.ok || !answer.ok) throw new ApiError(answer.error?.code ?? 'request-failed', answer.error?.message ?? `request failed (${response.status})`)
   if (typeof answer.wsBase === 'string') hostBase = answer.wsBase
   return answer.value as T
+}
+
+/** 补全这一步最终由谁执行：DSH 的模型服务、本地兜底，还是自定义的 OpenAI 兼容端点。 */
+export type CompletionSource = 'dsh' | 'local' | 'http'
+/** 某一项设置的来源，同时也是优先级：环境变量 > 设置文件 > 插件配置 > 默认值。 */
+export type SettingsSource = 'env' | 'file' | 'config' | 'default'
+
+export interface CompletionSettingsView {
+  /** 模型路由（`provider/model`）；null 表示跟随应用的默认模型。 */
+  route: string | null
+  fallback: boolean
+  routeSource: SettingsSource
+  fallbackSource: SettingsSource
+  /** 设置文件路径；宿主数据目录未知时缺省。 */
+  file?: string
+  envRoute: string | null
+  /** 请求实际会走的那条路（由宿主的 resolveProvider 给出）。 */
+  effective: { source: CompletionSource; model: string }
+  /** 最近一次补全失败原因，没有失败时为 null。 */
+  lastFailure: string | null
+}
+
+export interface WorkbenchSettingsView { completion: CompletionSettingsView }
+
+/** 与 api() 不同：设置页不依赖会话，所以走独立的端点，也不做会话未就绪的重试。 */
+export async function readWorkbenchSettings(signal?: AbortSignal): Promise<WorkbenchSettingsView> {
+  const response = await fetch('/dsh-vscode/settings', { cache: 'no-store', ...(signal === undefined ? {} : { signal }) })
+  return readAnswer<WorkbenchSettingsView>(response)
+}
+
+export async function writeWorkbenchSettings(patch: { route?: string | null; fallback?: boolean }): Promise<WorkbenchSettingsView> {
+  const response = await fetch('/dsh-vscode/settings', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
+  })
+  return readAnswer<WorkbenchSettingsView>(response)
 }

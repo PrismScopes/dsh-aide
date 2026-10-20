@@ -12,18 +12,20 @@ export interface WorkbenchSnapshot { visible: boolean; view: WorkbenchView; bott
 interface WorkbenchStorage { getItem(key:string):string|null; setItem(key:string,value:string):unknown }
 
 /**
- * 工作台布局偏好。这些选项属于工作台自身，但入口放在 DSH 设置里（settings.plugins.tab），
- * 由设置面板与工作台共享同一份状态，所以状态必须待在 service 上而不是某个组件的 useState 里。
+ * 工作台布局。这些状态由工作台自身产生（拖分隔条、点活动栏图标、标签栏的对话栏按钮），
+ * 也由它自己持久化，所以状态必须待在 service 上而不是某个组件的 useState 里。
+ *
+ * 它们**不在**设置页里：每一个都有就地控件，把可拖动的东西再抄一份成数字只会让同一个状态有两个入口。
+ * 状态栏可见性已移除：24px 的一条，承载工作区路径与返回入口，工作台里没有就地开关能把它叫回来。
  */
 export interface WorkbenchLayout {
   primarySideVisible: boolean
   chatVisible: boolean
-  statusVisible: boolean
   sideWidth: number
   chatWidth: number
 }
 export const LAYOUT_LIMITS = { sideWidth: { min: 210, max: 640 }, chatWidth: { min: 400, max: 720 } } as const
-export const DEFAULT_LAYOUT: WorkbenchLayout = { primarySideVisible: true, chatVisible: true, statusVisible: true, sideWidth: 210, chatWidth: 420 }
+export const DEFAULT_LAYOUT: WorkbenchLayout = { primarySideVisible: true, chatVisible: true, sideWidth: 210, chatWidth: 420 }
 
 const SNAPSHOT_KEY='dvw:workbench:snapshot:v1'
 const LAYOUT_KEY='dvw:workbench:layout:v1'
@@ -42,7 +44,6 @@ function restoreLayout(storage:WorkbenchStorage|undefined):WorkbenchLayout{
     return {
       primarySideVisible:typeof value.primarySideVisible==='boolean'?value.primarySideVisible:DEFAULT_LAYOUT.primarySideVisible,
       chatVisible:typeof value.chatVisible==='boolean'?value.chatVisible:DEFAULT_LAYOUT.chatVisible,
-      statusVisible:typeof value.statusVisible==='boolean'?value.statusVisible:DEFAULT_LAYOUT.statusVisible,
       sideWidth:clamp(value.sideWidth,LAYOUT_LIMITS.sideWidth.min,LAYOUT_LIMITS.sideWidth.max,DEFAULT_LAYOUT.sideWidth),
       chatWidth:clamp(value.chatWidth,LAYOUT_LIMITS.chatWidth.min,LAYOUT_LIMITS.chatWidth.max,DEFAULT_LAYOUT.chatWidth)
     }
@@ -63,8 +64,8 @@ export interface VscodeWorkbench {
   getLayout(): WorkbenchLayout
   setLayout(patch: Partial<WorkbenchLayout>): void
   /**
-   * 打开 DSH 自己的设置面板。布局偏好的入口已迁到那里（settings.section），
-   * 工作台不再自建设置界面；具体实现由 Overlay 注册（触发时机要等侧栏入口恢复显示）。
+   * 打开 DSH 自己的设置面板（插件页在 settings.section，内容见 SettingsPanel）。
+   * 工作台不自建设置界面；具体实现由 Overlay 注册（触发时机要等侧栏入口恢复显示）。
    */
   openDshSettings(): void
   /** 注册 openDshSettings 的实现。Overlay 挂载时注入，卸载时恢复成 no-op。 */
@@ -109,7 +110,6 @@ export class WorkbenchController implements VscodeWorkbench {
     const next: WorkbenchLayout = {
       primarySideVisible: patch.primarySideVisible ?? this.layout.primarySideVisible,
       chatVisible: patch.chatVisible ?? this.layout.chatVisible,
-      statusVisible: patch.statusVisible ?? this.layout.statusVisible,
       sideWidth: clamp(patch.sideWidth,LAYOUT_LIMITS.sideWidth.min,LAYOUT_LIMITS.sideWidth.max,this.layout.sideWidth),
       chatWidth: clamp(patch.chatWidth,LAYOUT_LIMITS.chatWidth.min,LAYOUT_LIMITS.chatWidth.max,this.layout.chatWidth)
     }
