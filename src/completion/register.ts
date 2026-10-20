@@ -156,13 +156,32 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
       const resolved = resolveProvider(ctx, groupParams)
       const cwd = safeCwd(ctx, helpers, request.sessionId)
       // 解析不到工作区就不注入片段（文档把检索列为可选上下文来源）：好过索引错目录。
-      const index = cwd === undefined ? undefined : await completionIndexFor(cwd, groupParams)
+      //
+      // 索引加载/构建可能要几十毫秒（大工作区首次 open 要解析 index.json）。响应头不该等它：
+      // 先把 SSE 头送出去，再在响应内部等索引；事件序列保持 meta → output* → done 不变，
+      // 也不额外插入心跳事件（客户端解析只认这几种事件）。
+      const indexPromise: Promise<WorkspaceIndex> | undefined = cwd === undefined ? undefined : completionIndexFor(cwd, groupParams)
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-cache, no-transform',
         connection: 'keep-alive',
         'x-accel-buffering': 'no',
       })
+      try {
+        res.flushHeaders()
+      } catch {
+        // 连接在下发响应头前就断了：没有可写的对端，直接结束这次请求。
+        return
+      }
+      let index: WorkspaceIndex | undefined
+      if (indexPromise !== undefined) {
+        try {
+          index = await indexPromise
+        } catch (error) {
+          // 索引不可用时按「没有片段」继续：检索本来就是可选上下文，不能让它拖垮补全。
+          noteCompletion(`索引不可用，按无检索上下文继续：${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
       try {
         let candidateCount = 0
         let firstByteMs: number | undefined
@@ -218,10 +237,15 @@ const indexes = new Map<string, Promise<WorkspaceIndex>>()
 export function completionIndexFor(cwd: string, params: CompletionParams = DEFAULT_COMPLETION_PARAMS): Promise<WorkspaceIndex> {
   const existing = indexes.get(cwd)
   if (existing !== undefined) return existing
-  const created = WorkspaceIndex.open({ root: cwd, params }).then(index => {
+  let created: Promise<WorkspaceIndex>
+  created = WorkspaceIndex.open({ root: cwd, params }).then(index => {
     // 首次或过期时在后台刷新，补全请求不等它。
     void index.ensureFresh()?.catch(() => undefined)
     return index
+  }).catch(error => {
+    // 失败的 promise 不能永久留在缓存里：否则这个工作区之后的每次请求都会拿到同一个失败。
+    if (indexes.get(cwd) === created) indexes.delete(cwd)
+    throw error
   })
   indexes.set(cwd, created)
   return created

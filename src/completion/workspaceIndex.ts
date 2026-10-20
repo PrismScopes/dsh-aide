@@ -7,11 +7,19 @@
  * 增量策略：扫描时先问 `needsUpdate`，未变更的文件不读内容；全量重建由周期（默认 24 小时）或
  * 显式刷新触发。刷新在后台进行，不阻塞补全请求 —— 检索没就绪时按「没有片段」继续。
  */
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import type { CompletionParams } from './params.ts'
 import type { CompletionRequest } from './protocol.ts'
 import { formatSnippets, RetrievalIndex, buildQuery, snippetKey, type IndexStatus } from './retrieval.ts'
+
+/** 片段读取按行扫描时的块大小。命中行靠前时可以只读文件开头。 */
+const SNIPPET_READ_CHUNK_BYTES = 256 * 1024
+
+interface LineRange {
+  startLine: number
+  endLine: number
+}
 
 /** 索引自身的产物与常见依赖/构建目录都排除在外。 */
 export const INDEX_IGNORED_DIRS = new Set([
@@ -151,22 +159,132 @@ export class WorkspaceIndex {
    * 检索一次补全请求对应的片段，并拼成注入 prompt 的文本。
    *
    * 正文是按行范围从文件里读的：索引不存正文，所以片段永远与磁盘一致，也不会让索引把整个仓库
-   * 复制一份（实测存正文时索引文件 66.9 MB）。只读命中的那几个文件，开销可忽略。
+   * 复制一份（实测存正文时索引文件 66.9 MB）。
+   *
+   * 同一文件的多个命中只读一遍：先按路径归组，用一次顺序扫描把各组需要的行范围都取出来，
+   * 不再为每条命中 readFile 整文件再 split。
    */
   async retrieve(request: CompletionRequest): Promise<string[]> {
     const { line, column } = request.cursor.rewriteAt
     const query = buildQuery(request.cursor.document, line, column)
     const hits = this.index.search(query, request.cursor.filePath)
     const texts = new Map<string, string>()
+
+    const rangesByPath = new Map<string, Map<string, LineRange>>()
     for (const hit of hits) {
-      const body = await this.readLines(hit.path, hit.startLine, hit.endLine)
-      if (body !== undefined) texts.set(snippetKey(hit), body)
+      const key = snippetKey(hit)
+      // 没有可用的行号信息时退回整文件读取（旧行为），保证调用方拿到的文本不变。
+      if (!Number.isInteger(hit.startLine) || !Number.isInteger(hit.endLine) || hit.startLine < 1 || hit.endLine < hit.startLine) {
+        const body = await this.readWholeFileLines(hit.path, hit.startLine, hit.endLine)
+        if (body !== undefined) texts.set(key, body)
+        continue
+      }
+      const ranges = rangesByPath.get(hit.path) ?? new Map<string, LineRange>()
+      ranges.set(`${hit.startLine}-${hit.endLine}`, { startLine: hit.startLine, endLine: hit.endLine })
+      rangesByPath.set(hit.path, ranges)
+    }
+
+    for (const [path, ranges] of rangesByPath) {
+      let bodies: Map<string, string> | undefined
+      try {
+        bodies = await this.readLineRanges(join(this.options.root, path), [...ranges.values()])
+      } catch {
+        // 文件读不到（被删/权限/竞态）：与旧实现一样按「这条片段没有正文」跳过。
+        continue
+      }
+      for (const hit of hits) {
+        if (hit.path !== path) continue
+        const body = bodies.get(`${hit.startLine}-${hit.endLine}`)
+        if (body !== undefined) texts.set(snippetKey(hit), body)
+      }
     }
     return formatSnippets(hits, texts, this.index.snippetChars)
   }
 
-  /** 按行范围读取片段正文；读不到就返回 undefined，由调用方跳过这一条。 */
-  private async readLines(path: string, startLine: number, endLine: number): Promise<string | undefined> {
+  /**
+   * 一次顺序扫描读出若干个行范围。
+   *
+   * 行为对齐旧的 `text.split('\n').slice(startLine-1, endLine).join('\n')`：
+   * 行文本保留 `\r`（CRLF 文件），范围外不读、读到最大 endLine 即停。
+   * 文件在范围末尾之前就结束时，按 slice 的夹取语义返回实际能取到的行；
+   * startLine 超过文件行数时返回空串（不是 undefined）。
+   */
+  private async readLineRanges(absolutePath: string, ranges: readonly LineRange[]): Promise<Map<string, string>> {
+    if (ranges.length === 0) return new Map()
+    interface Bucket { startLine: number; endLine: number; startOffset?: number; endOffset?: number }
+    const buckets = new Map<string, Bucket>()
+    for (const range of ranges) {
+      const key = `${range.startLine}-${range.endLine}`
+      if (!buckets.has(key)) buckets.set(key, { ...range })
+    }
+    const maxEnd = Math.max(...ranges.map(range => range.endLine))
+    const handle = await open(absolutePath, 'r')
+    try {
+      const buffer = Buffer.allocUnsafe(SNIPPET_READ_CHUNK_BYTES)
+      let position = 0
+      let totalBytes = 0
+      let lineNumber = 1
+      let lineStartOffset = 0
+      let done = false
+      while (!done) {
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, position)
+        if (bytesRead === 0) break
+        totalBytes = position + bytesRead
+        let scanFrom = 0
+        while (true) {
+          // 用 Buffer.indexOf 找换行（原生扫描），不逐字节走 JS；UTF-8 多字节字符里不会出现 0x0A。
+          const newline = buffer.indexOf(10, scanFrom)
+          if (newline === -1 || newline >= bytesRead) break
+          const newlineOffset = position + newline
+          for (const bucket of buckets.values()) {
+            if (lineNumber === bucket.startLine) bucket.startOffset = lineStartOffset
+            if (lineNumber === bucket.endLine) bucket.endOffset = newlineOffset
+          }
+          lineNumber++
+          lineStartOffset = newlineOffset + 1
+          if (lineNumber > maxEnd) {
+            done = true
+            break
+          }
+          scanFrom = newline + 1
+        }
+        position += bytesRead
+      }
+      if (!done) {
+        // 文件结束：最后一行的起点是 lineStartOffset，终点是文件末尾。
+        // 以换行结尾时这里对应 split('\n') 末尾那个空行。
+        for (const bucket of buckets.values()) {
+          if (lineNumber === bucket.startLine) bucket.startOffset = lineStartOffset
+          if (lineNumber === bucket.endLine) bucket.endOffset = totalBytes
+        }
+      }
+      const result = new Map<string, string>()
+      for (const [key, bucket] of buckets) {
+        const start = bucket.startOffset
+        if (start === undefined) {
+          // 起点越过文件末尾时旧实现的 slice 得到空数组，join 后是空串。
+          result.set(key, '')
+          continue
+        }
+        const end = bucket.endOffset ?? totalBytes
+        const length = Math.max(0, end - start)
+        const slice = Buffer.allocUnsafe(length)
+        let filled = 0
+        while (filled < length) {
+          const { bytesRead } = await handle.read(slice, filled, length - filled, start + filled)
+          if (bytesRead === 0) break
+          filled += bytesRead
+        }
+        result.set(key, slice.toString('utf8', 0, filled))
+      }
+      return result
+    } finally {
+      await handle.close().catch(() => undefined)
+    }
+  }
+
+  /** 旧实现：整文件读取后按行切。仅在命中缺少行号信息时使用。 */
+  private async readWholeFileLines(path: string, startLine: number, endLine: number): Promise<string | undefined> {
     try {
       const text = await readFile(join(this.options.root, path), 'utf8')
       return text.split('\n').slice(Math.max(0, startLine - 1), endLine).join('\n')

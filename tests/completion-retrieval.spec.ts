@@ -7,7 +7,7 @@ import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
 import { runCompletion } from '../src/completion/service.ts'
 import type { CompletionEvent, CompletionRequest } from '../src/completion/protocol.ts'
 import type { CompletionProvider } from '../src/completion/provider.ts'
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WorkspaceIndex } from '../src/completion/workspaceIndex.ts'
@@ -311,6 +311,80 @@ describe('workspace index', () => {
     // 两个 hook 文件都与查询相关，谁排前面取决于长度与词元重合，所以断言相关性而不是名次。
     expect(snippets.some(snippet => snippet.includes('useState(initial)'))).toBe(true)
     expect(snippets[0]).toMatch(/src\/(hooks\/useToggle|counter)\.ts/)
+  })
+
+  it('extracts every line range byte-for-byte like the legacy whole-file read', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dvw-ranges-'))
+    const fixtures: Record<string, string> = {
+      'lf.ts': 'line1\nline2\nline3\n',
+      'crlf.ts': 'line1\r\nline2\r\nline3\r\n',
+      'unicode.ts': '第一行\n第二行🙂\n第三行',
+      'empty.ts': '',
+      'no-eol.ts': 'one\ntwo\nthree',
+      'trailing.ts': 'a\nb\n',
+      'long-line.ts': `${'x'.repeat(200_000)}\nsecond\nthird`,
+    }
+    for (const [name, text] of Object.entries(fixtures)) writeFileSync(join(root, name), text, 'utf8')
+    const index = await WorkspaceIndex.open({ root, params: DEFAULT_COMPLETION_PARAMS })
+    const reader = index as unknown as {
+      readLineRanges(absolutePath: string, ranges: Array<{ startLine: number; endLine: number }>): Promise<Map<string, string>>
+      readWholeFileLines(path: string, startLine: number, endLine: number): Promise<string | undefined>
+    }
+    const cases: Array<[number, number]> = [[1, 1], [1, 2], [1, 3], [2, 2], [2, 3], [2, 99], [4, 5], [1, 4]]
+    for (const name of Object.keys(fixtures)) {
+      const absolute = join(root, name)
+      const text = readFileSync(absolute, 'utf8')
+      for (const [startLine, endLine] of cases) {
+        const legacy = text.split('\n').slice(Math.max(0, startLine - 1), endLine).join('\n')
+        const bodies = await reader.readLineRanges(absolute, [{ startLine, endLine }])
+        expect(bodies.get(`${startLine}-${endLine}`), `${name} ${startLine}-${endLine}`).toBe(legacy)
+      }
+      // 同一文件的多个范围一次扫描也必须逐字符一致。
+      const ranges = [{ startLine: 1, endLine: 2 }, { startLine: 2, endLine: 3 }, { startLine: 3, endLine: 5 }]
+      const bodies = await reader.readLineRanges(absolute, ranges)
+      for (const range of ranges) {
+        const legacy = text.split('\n').slice(range.startLine - 1, range.endLine).join('\n')
+        expect(bodies.get(`${range.startLine}-${range.endLine}`)).toBe(legacy)
+      }
+    }
+    // 缺少合法行号信息（start<1 / end<start）时退回整文件读取，语义与旧实现一致。
+    const text = readFileSync(join(root, 'lf.ts'), 'utf8')
+    for (const [startLine, endLine] of [[0, 2], [3, 1], [99, 100]] as Array<[number, number]>) {
+      expect(await reader.readWholeFileLines('lf.ts', startLine, endLine)).toBe(text.split('\n').slice(Math.max(0, startLine - 1), endLine).join('\n'))
+    }
+  })
+
+  it('retrieve output is byte-for-byte the legacy formatting', async () => {
+    const root = makeWorkspace()
+    const index = await WorkspaceIndex.open({ root, params: DEFAULT_COMPLETION_PARAMS })
+    await index.refresh()
+    const request: CompletionRequest = {
+      sessionId: 's',
+      environment: { ideVersion: '1', extensionVersion: '1', region: '', channel: 'dev', repository: '' },
+      language: 'typescript',
+      trigger: 'inline',
+      edits: [],
+      cursor: {
+        filePath: 'src/value.ts',
+        rewriteAt: { line: 5, column: 22 },
+        document: ["import { useState } from 'react'", '', 'function Value() {', '  const [count, setCount] = useState(0)', '  const value = useState'].join('\n'),
+      },
+      diagnostics: [],
+      forceRewrite: false,
+    }
+    const snippets = await index.retrieve(request)
+    expect(snippets.length).toBeGreaterThan(0)
+    const maxChars = DEFAULT_COMPLETION_PARAMS.snippetChars
+    // 用旧实现（整文件 read+split）重建预期字符串，与 formatSnippets 拼法一致。
+    const legacy = snippets.map(snippet => {
+      const header = snippet.split('\n')[0] ?? ''
+      const match = /^\/\/ (.+):(\d+)-(\d+)/.exec(header)
+      expect(match, `unexpected snippet header: ${header}`).not.toBeNull()
+      const [, path, startText, endText] = match as RegExpExecArray
+      const body = readFileSync(join(root, path as string), 'utf8').split('\n').slice(Number(startText) - 1, Number(endText)).join('\n')
+      return `${header}\n${body.length > maxChars ? body.slice(0, maxChars) : body}`
+    })
+    expect(snippets).toEqual(legacy)
   })
 })
 
