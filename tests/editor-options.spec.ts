@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_PREFERENCES, EDITOR_LINE_HEIGHT_MIN, PREFERENCE_LIMITS, type WorkbenchPreferences } from '../src/client/preferences.ts'
 import {
-  DEFAULT_EDITOR_OPTION_PREFERENCES,
   EDITOR_HIGHLIGHT_COLORS,
   SCROLLBAR_SLIDER_ALPHA,
   WORKBENCH_SCROLLBAR,
@@ -11,7 +11,6 @@ import {
   editorOptions,
   highlightThemeColors,
   withAlpha,
-  type EditorOptionPreferences,
 } from '../src/client/editorOptions.ts'
 
 /**
@@ -21,8 +20,8 @@ import {
  */
 
 /** 构造一份偏好；坏值测试故意绕过类型（设置存储里可能出现任意 JSON）。 */
-function preferences(patch: Record<string, unknown> = {}): EditorOptionPreferences {
-  return { ...DEFAULT_EDITOR_OPTION_PREFERENCES, ...patch } as EditorOptionPreferences
+function preferences(patch: Record<string, unknown> = {}): WorkbenchPreferences {
+  return { ...DEFAULT_PREFERENCES, ...patch } as WorkbenchPreferences
 }
 
 describe('editorOptions', () => {
@@ -118,18 +117,76 @@ describe('editorOptions', () => {
       editorMinimap: 'yes',
       editorSmoothScrolling: null,
     }))
-    expect(broken.fontSize).toBe(DEFAULT_EDITOR_OPTION_PREFERENCES.editorFontSize)
-    expect(broken.wordWrap).toBe(DEFAULT_EDITOR_OPTION_PREFERENCES.editorWordWrap)
-    expect(broken.renderWhitespace).toBe(DEFAULT_EDITOR_OPTION_PREFERENCES.editorRenderWhitespace)
-    expect(broken.cursorStyle).toBe(DEFAULT_EDITOR_OPTION_PREFERENCES.editorCursorStyle)
-    expect(broken.minimap).toEqual({ enabled: DEFAULT_EDITOR_OPTION_PREFERENCES.editorMinimap })
-    expect(broken.smoothScrolling).toBe(DEFAULT_EDITOR_OPTION_PREFERENCES.editorSmoothScrolling)
+    expect(broken.fontSize).toBe(DEFAULT_PREFERENCES.editorFontSize)
+    expect(broken.wordWrap).toBe(DEFAULT_PREFERENCES.editorWordWrap)
+    expect(broken.renderWhitespace).toBe(DEFAULT_PREFERENCES.editorRenderWhitespace)
+    expect(broken.cursorStyle).toBe(DEFAULT_PREFERENCES.editorCursorStyle)
+    expect(broken.minimap).toEqual({ enabled: DEFAULT_PREFERENCES.editorMinimap })
+    expect(broken.smoothScrolling).toBe(DEFAULT_PREFERENCES.editorSmoothScrolling)
   })
 
   it('falls back to the full default set for an empty or malformed preference object', () => {
     const defaults = editorOptions(preferences())
-    expect(editorOptions({} as EditorOptionPreferences)).toEqual(defaults)
-    expect(editorOptions(undefined as unknown as EditorOptionPreferences)).toEqual(defaults)
+    expect(editorOptions({} as WorkbenchPreferences)).toEqual(defaults)
+    expect(editorOptions(undefined as unknown as WorkbenchPreferences)).toEqual(defaults)
+  })
+})
+
+describe('single source of truth', () => {
+  // C-1：编辑器选项的默认值、范围、清洗规则只能在 preferences.ts 维护一份。
+  // 下面几条用例分别从「行为」与「源码形状」两个角度钉住这件事。
+  it('derives every default editor option from DEFAULT_PREFERENCES', () => {
+    const options = editorOptions(DEFAULT_PREFERENCES)
+    expect(options).toMatchObject({
+      fontSize: DEFAULT_PREFERENCES.editorFontSize,
+      lineHeight: DEFAULT_PREFERENCES.editorLineHeight,
+      tabSize: DEFAULT_PREFERENCES.editorTabSize,
+      insertSpaces: DEFAULT_PREFERENCES.editorInsertSpaces,
+      wordWrap: DEFAULT_PREFERENCES.editorWordWrap,
+      wordWrapColumn: DEFAULT_PREFERENCES.editorWordWrapColumn,
+      minimap: { enabled: DEFAULT_PREFERENCES.editorMinimap },
+      occurrencesHighlight: DEFAULT_PREFERENCES.editorOccurrencesHighlight ? 'singleFile' : 'off',
+      selectionHighlight: DEFAULT_PREFERENCES.editorOccurrencesHighlight,
+      renderWhitespace: DEFAULT_PREFERENCES.editorRenderWhitespace,
+      cursorStyle: DEFAULT_PREFERENCES.editorCursorStyle,
+      smoothScrolling: DEFAULT_PREFERENCES.editorSmoothScrolling,
+      stickyScroll: { enabled: DEFAULT_PREFERENCES.editorStickyScroll },
+    })
+    expect(editorModelOptions(DEFAULT_PREFERENCES)).toEqual({
+      tabSize: DEFAULT_PREFERENCES.editorTabSize,
+      insertSpaces: DEFAULT_PREFERENCES.editorInsertSpaces,
+    })
+    expect(editorChrome(DEFAULT_PREFERENCES).renderOverviewRuler).toBe(DEFAULT_PREFERENCES.editorOverviewRuler)
+  })
+
+  it('keeps ranges, defaults and cleaning rules only in preferences.ts', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/client/editorOptions.ts', import.meta.url)), 'utf8')
+    // 旧的重复实现：默认值、范围表、清洗函数、二次清洗入口。任何一个回来都说明事实源又分叉了。
+    for (const gone of [
+      'DEFAULT_EDITOR_OPTION_PREFERENCES',
+      'DEFAULT_PREFERENCES',
+      'RANGES',
+      'NumericRange',
+      'numberIn(',
+      'booleanOf(',
+      'oneOf(',
+      'lineHeightOf(',
+      'function normalized',
+      'EDITOR_LINE_HEIGHT_MIN',
+    ]) {
+      expect(source).not.toContain(gone)
+    }
+    // 映射层复用 preferences.ts 导出的同一个清洗入口，而不是自己维护一套。
+    expect(source).toContain("from './preferences.ts'")
+    expect(source).toContain('normalizePreferences(')
+  })
+
+  it('normalizes direct editorOptions calls with the same rules as the preferences store', () => {
+    // 同一份坏值走 preferences.ts 的规则：lineHeight 的特殊区间与数值上下限都只有一处实现。
+    expect(editorOptions(preferences({ editorLineHeight: 5 })).lineHeight).toBe(EDITOR_LINE_HEIGHT_MIN)
+    expect(editorOptions(preferences({ editorLineHeight: 99 })).lineHeight).toBe(PREFERENCE_LIMITS.editorLineHeight.max)
+    expect(editorOptions(preferences({ editorFontSize: 99 })).fontSize).toBe(PREFERENCE_LIMITS.editorFontSize.max)
+    expect(editorOptions(preferences({ editorTabSize: 0 })).tabSize).toBe(PREFERENCE_LIMITS.editorTabSize.min)
   })
 })
 
@@ -160,8 +217,8 @@ describe('editorChrome', () => {
   })
 
   it('defaults to the overview ruler being visible', () => {
-    expect(DEFAULT_EDITOR_OPTION_PREFERENCES.editorOverviewRuler).toBe(true)
-    expect(editorChrome(DEFAULT_EDITOR_OPTION_PREFERENCES).renderOverviewRuler).toBe(true)
+    expect(DEFAULT_PREFERENCES.editorOverviewRuler).toBe(true)
+    expect(editorChrome(DEFAULT_PREFERENCES).renderOverviewRuler).toBe(true)
   })
 })
 

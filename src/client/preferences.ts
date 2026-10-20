@@ -139,6 +139,9 @@ function enumValue<T extends string>(value: unknown, allowed: readonly T[], fall
 /**
  * 逐字段校验并夹取范围：一份写坏的存储只让出错的那一项回到默认值，
  * 其余偏好仍然生效 —— 不要因为一个字段的类型不对把整页设置清空。
+ *
+ * 这是偏好归一化的唯一实现：editorOptions.ts 的映射入口也调用它（见其文件头），
+ * 默认值、取值范围与 lineHeight 特殊规则都只在 preferences.ts 维护一份。
  */
 export function normalizePreferences(value: unknown): WorkbenchPreferences {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return { ...DEFAULT_PREFERENCES }

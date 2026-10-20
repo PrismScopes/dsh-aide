@@ -7,121 +7,21 @@
  * loader 之后加载，node 单测里跑不起来。这里只做「偏好对象 → 普通对象」的映射，返回值的
  * 字段名与 Monaco 的选项一一对应（类型上直接交叉 Monaco 的 IEditorOptions /
  * IGlobalEditorOptions，写错字段名会编译失败），单测在 node 环境里断言这些对象即可。
+ *
+ * 偏好的类型、取值范围、默认值与清洗规则全部在 preferences.ts（单一事实源）；这里只做
+ * 「WorkbenchPreferences 字段 → Monaco 选项名」的翻译，不再自带一份范围/默认值/清洗函数。
+ * 映射入口仍过一遍 normalizePreferences：防的是手改 localStorage 的坏值 —— 未知值回落
+ * 默认而不是喂给 Monaco（Monaco 的枚举校验会静默丢弃，表现为「设置页改了却没生效」）。
+ * 这只是复用同一份规则，不是第二套实现。
  */
 import type { editor as MonacoEditor } from 'monaco-editor'
-
-export type WordWrapMode = 'off' | 'on' | 'bounded'
-export type RenderWhitespace = 'none' | 'selection' | 'all'
-export type CursorStyle = 'line' | 'block' | 'underline'
-
-/**
- * 编辑器相关偏好。字段与 preferences.ts 里的 WorkbenchPreferences 同名同义；
- * 这里只读不写 —— 偏好的归属（校验、持久化、设置页）全在 preferences.ts。
- */
-export interface EditorOptionPreferences {
-  /** 字号（px），11–24。 */
-  editorFontSize: number
-  /** 行高（px）；0 = 由 Monaco 按字号自动算，16–40 = 固定值。 */
-  editorLineHeight: number
-  /** 一个制表符等于几个空格，1–8（模型级选项）。 */
-  editorTabSize: number
-  /** 按 Tab 时插入空格而不是制表符（模型级选项）。 */
-  editorInsertSpaces: boolean
-  /** 自动换行：关 / 在视口宽度处折行 / 在指定列折行。 */
-  editorWordWrap: WordWrapMode
-  /** 按列折行时的列宽，40–200（只在 bounded 模式下生效）。 */
-  editorWordWrapColumn: number
-  /** 右侧代码缩略图。 */
-  editorMinimap: boolean
-  /** 右侧概览标尺（滚动条旁边那条全局标记带）。 */
-  editorOverviewRuler: boolean
-  /** 选中一个词后，在全文高亮所有同类词（VS Code 的「划词高亮」）。 */
-  editorOccurrencesHighlight: boolean
-  /** 空白字符显示时机：不显示 / 只显示选区内的 / 全部显示。 */
-  editorRenderWhitespace: RenderWhitespace
-  /** 光标样式。 */
-  editorCursorStyle: CursorStyle
-  /** 平滑滚动。 */
-  editorSmoothScrolling: boolean
-  /** 粘性滚动（滚动时把外层作用域固定在顶部）。 */
-  editorStickyScroll: boolean
-}
-
-interface NumericRange { readonly min: number; readonly max: number }
-
-/** 与 preferences.ts 的 PREFERENCE_LIMITS 一致；这里是最后一道夹取。 */
-const RANGES: Readonly<Record<'fontSize' | 'lineHeight' | 'tabSize' | 'wordWrapColumn', NumericRange>> = {
-  fontSize: { min: 11, max: 24 },
-  lineHeight: { min: 16, max: 40 },
-  tabSize: { min: 1, max: 8 },
-  wordWrapColumn: { min: 40, max: 200 },
-}
-
-/** 偏好缺失/损坏时的兜底。取值由设置页的默认值对齐（见 preferences.ts 的 DEFAULT_PREFERENCES）。 */
-export const DEFAULT_EDITOR_OPTION_PREFERENCES: Readonly<EditorOptionPreferences> = {
-  editorFontSize: 14,
-  editorLineHeight: 0,
-  editorTabSize: 4,
-  editorInsertSpaces: true,
-  editorWordWrap: 'off',
-  editorWordWrapColumn: 80,
-  editorMinimap: false,
-  editorOverviewRuler: true,
-  editorOccurrencesHighlight: true,
-  editorRenderWhitespace: 'none',
-  editorCursorStyle: 'line',
-  editorSmoothScrolling: false,
-  editorStickyScroll: false,
-}
-
-function numberIn(value: unknown, range: NumericRange, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
-  return Math.max(range.min, Math.min(range.max, Math.round(value)))
-}
-
-function lineHeightOf(value: unknown): number {
-  // 与 preferences.ts 的 normalizeLineHeight 同一套规则：0（含负数）在 Monaco 里是
-  // 「按字号自动」的合法值，不能像其他数字那样夹到 16 以上；1–15 是无效区，向上夹到 16。
-  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_EDITOR_OPTION_PREFERENCES.editorLineHeight
-  const rounded = Math.round(value)
-  if (rounded <= 0) return 0
-  return numberIn(rounded, RANGES.lineHeight, DEFAULT_EDITOR_OPTION_PREFERENCES.editorLineHeight)
-}
-
-function booleanOf(value: unknown, fallback: boolean): boolean {
-  return typeof value === 'boolean' ? value : fallback
-}
-
-function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
-  return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
-}
-
-/**
- * 逐字段校验并夹取。
- *
- * preferences.ts 已经清洗过一次，这里仍做一遍：编辑器是最后的使用方，从 localStorage
- * 手改坏的枚举值（比如 wordWrap: 'wrap'）如果漏过去，Monaco 的枚举校验会把整项静默
- * 回落默认值，表现为「设置页明明改了却没生效」。未知值一律回落默认，不抛错。
- */
-function normalized(preferences: EditorOptionPreferences): EditorOptionPreferences {
-  const input = (typeof preferences === 'object' && preferences !== null ? preferences : {}) as Partial<Record<keyof EditorOptionPreferences, unknown>>
-  const defaults = DEFAULT_EDITOR_OPTION_PREFERENCES
-  return {
-    editorFontSize: numberIn(input.editorFontSize, RANGES.fontSize, defaults.editorFontSize),
-    editorLineHeight: lineHeightOf(input.editorLineHeight),
-    editorTabSize: numberIn(input.editorTabSize, RANGES.tabSize, defaults.editorTabSize),
-    editorInsertSpaces: booleanOf(input.editorInsertSpaces, defaults.editorInsertSpaces),
-    editorWordWrap: oneOf(input.editorWordWrap, ['off', 'on', 'bounded'] as const, defaults.editorWordWrap),
-    editorWordWrapColumn: numberIn(input.editorWordWrapColumn, RANGES.wordWrapColumn, defaults.editorWordWrapColumn),
-    editorMinimap: booleanOf(input.editorMinimap, defaults.editorMinimap),
-    editorOverviewRuler: booleanOf(input.editorOverviewRuler, defaults.editorOverviewRuler),
-    editorOccurrencesHighlight: booleanOf(input.editorOccurrencesHighlight, defaults.editorOccurrencesHighlight),
-    editorRenderWhitespace: oneOf(input.editorRenderWhitespace, ['none', 'selection', 'all'] as const, defaults.editorRenderWhitespace),
-    editorCursorStyle: oneOf(input.editorCursorStyle, ['line', 'block', 'underline'] as const, defaults.editorCursorStyle),
-    editorSmoothScrolling: booleanOf(input.editorSmoothScrolling, defaults.editorSmoothScrolling),
-    editorStickyScroll: booleanOf(input.editorStickyScroll, defaults.editorStickyScroll),
-  }
-}
+import {
+  normalizePreferences,
+  type CursorStyle,
+  type RenderWhitespace,
+  type WordWrapMode,
+  type WorkbenchPreferences,
+} from './preferences.ts'
 
 /**
  * 编辑器选项。交叉了 Monaco 的两个选项接口，所以字段名与取值都受 Monaco 类型检查 ——
@@ -157,14 +57,14 @@ export interface EditorModelOptions {
   insertSpaces: boolean
 }
 
-export function editorModelOptions(preferences: EditorOptionPreferences): EditorModelOptions {
-  const value = normalized(preferences)
+export function editorModelOptions(preferences: WorkbenchPreferences): EditorModelOptions {
+  const value = normalizePreferences(preferences)
   return { tabSize: value.editorTabSize, insertSpaces: value.editorInsertSpaces }
 }
 
 /** 偏好 → 编辑器选项。创建与后续 updateOptions 共用它，两条路径不会漂。 */
-export function editorOptions(preferences: EditorOptionPreferences): EditorOptions {
-  const value = normalized(preferences)
+export function editorOptions(preferences: WorkbenchPreferences): EditorOptions {
+  const value = normalizePreferences(preferences)
   return {
     fontSize: value.editorFontSize,
     lineHeight: value.editorLineHeight,
@@ -207,8 +107,9 @@ export const WORKBENCH_SCROLLBAR = { verticalScrollbarSize: 10, horizontalScroll
  * 三条泳道：选区、同类词、查找各一条），并让光标在标尺上可见。
  * 概览标尺关：完全收起（0 条泳道），不占水平空间、不画光标标记。
  */
-export function editorChrome(preferences: Pick<EditorOptionPreferences, 'editorOverviewRuler'>): EditorChrome {
-  const overviewRuler = booleanOf(preferences?.editorOverviewRuler, DEFAULT_EDITOR_OPTION_PREFERENCES.editorOverviewRuler)
+export function editorChrome(preferences: Pick<WorkbenchPreferences, 'editorOverviewRuler'>): EditorChrome {
+  // 未知值按默认（开）处理：概览标尺是 VS Code 的默认观感；清洗规则与偏好存储是同一份。
+  const overviewRuler = normalizePreferences(preferences).editorOverviewRuler
   return {
     renderOverviewRuler: overviewRuler,
     overviewRulerLanes: overviewRuler ? 3 : 0,
