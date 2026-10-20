@@ -91,44 +91,63 @@ function settingsPayload(ctx: HostContext): unknown {
   }
 }
 
-export function registerWorkbenchRoutes(ctx: HostContext): void {
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', handler: async (req, res) => {
-      if (!authorize(req, res, ctx.connection)) return
-      try {
-        const asset = codiconAsset()
-        res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
-        res.end(await readFile(asset.path))
-      } catch (error) { sendError(res, error) }
-    },
-  }), 'dsh-vscode-workbench: Codicon font')
+interface ImmutableAssetFile { path: string; type: string }
+interface ImmutableAssetJson { json: string }
 
+/** 一条 immutable 静态资源路由的声明（七个资源端点共用同一个 handler 骨架）。 */
+interface ImmutableAssetRoute {
+  /** ctx.effect 标签；与拆分前逐字一致，便于排查/卸载。 */
+  label: string
+  kind: 'exact' | 'prefix'
+  path: string
+  /**
+   * prefix 路由从 pathname 取资源名；不提供表示这条路由没有路径参数（codicon/pdfjs/onig）。
+   * 需要解码的路由自己在这里 decodeURIComponent —— 语法名历史上不解码，行为保持原样。
+   */
+  resource?: (pathname: string) => string
+  /** 返回要发送的文件描述，或已经序列化好的 JSON 文本。 */
+  resolve: (resource: string) => ImmutableAssetFile | ImmutableAssetJson | Promise<ImmutableAssetFile | ImmutableAssetJson>
+}
+
+const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+
+/**
+ * 注册一条静态资源路由。
+ *
+ * 七个资源 handler 原先各写一遍 authorize → 解析路径 → 取 asset → writeHead → readFile → sendError，
+ * 差异只有三处：exact/prefix、是否 decodeURIComponent、文件还是 JSON。这里用参数表达差异；
+ * URL、响应头（含字段顺序）、缓存策略与错误路径全部保持不变。
+ */
+function registerImmutableAssetRoute(ctx: HostContext, route: ImmutableAssetRoute): void {
   ctx.effect(() => ctx.webServer.register({
-    kind: 'exact', path: '/dsh-vscode/pdfjs/worker.mjs', handler: async (req, res) => {
+    kind: route.kind,
+    path: route.path,
+    handler: async (req, res) => {
       if (!authorize(req, res, ctx.connection)) return
       try {
-        const asset = pdfWorkerAsset()
-        res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
-        res.end(await readFile(asset.path))
+        // 只有带资源名的 prefix 路由才解析 URL；exact 路由保持原先「不碰 req.url」的行为。
+        const resource = route.resource === undefined ? '' : route.resource(new URL(req.url ?? '/', 'http://dsh.local').pathname)
+        // 先把内容取好再写 header：writeHead 之后抛错无法再 sendError（二次 writeHead 会中断连接）。
+        const asset = await route.resolve(resource)
+        if ('json' in asset) {
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': IMMUTABLE_CACHE_CONTROL })
+          res.end(asset.json)
+        } else {
+          res.writeHead(200, { 'content-type': asset.type, 'cache-control': IMMUTABLE_CACHE_CONTROL })
+          res.end(await readFile(asset.path))
+        }
       } catch (error) { sendError(res, error) }
     },
-  }), 'dsh-vscode-workbench: PDF.js worker')
+  }), route.label)
+}
+
+export function registerWorkbenchRoutes(ctx: HostContext): void {
+  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: Codicon font', kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', resolve: () => codiconAsset() })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: PDF.js worker', kind: 'exact', path: '/dsh-vscode/pdfjs/worker.mjs', resolve: () => pdfWorkerAsset() })
 
   // TextMate 语法按需提供：全部语法约 2.5MB，留在宿主侧就不会进客户端 bundle。
   // 客户端只在真正需要某种语言时取一次，之后由 immutable 缓存接管。
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'prefix', path: '/dsh-vscode/grammar', handler: async (req, res) => {
-      if (!authorize(req, res, ctx.connection)) return
-      try {
-        const name = new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/grammar/'.length)
-        // 先把数据取好再写 header：一旦 writeHead 发出，后面的异常就无法再用 sendError
-        // 正常响应了（二次 writeHead 会 ERR_HTTP_HEADERS_SENT，客户端只看到连接中断）。
-        const grammar = JSON.stringify(await readGrammar(name))
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=31536000, immutable' })
-        res.end(grammar)
-      } catch (error) { sendError(res, error) }
-    },
-  }), 'dsh-vscode-workbench: TextMate grammars')
+  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: TextMate grammars', kind: 'prefix', path: '/dsh-vscode/grammar', resource: pathname => pathname.slice('/dsh-vscode/grammar/'.length), resolve: async name => ({ json: JSON.stringify(await readGrammar(name)) }) })
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/api', handler: async (req, res) => {
@@ -201,52 +220,10 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
     kind:'prefix',path:'/dsh-vscode/file',handler:async(req,res)=>{if(!authorize(req,res,ctx.connection))return;try{const url=new URL(req.url??'/','http://dsh.local');const sessionId=url.searchParams.get('sessionId');const path=url.searchParams.get('path');if(sessionId===null||path===null)throw new WorkbenchError('bad-request','sessionId and path are required');const asset=await workspacePreviewFile(cwdFor(ctx,sessionId),path);res.writeHead(200,{'content-type':asset.type,'x-content-type-options':'nosniff','cache-control':'no-store'});res.end(await readFile(asset.path))}catch(error){sendError(res,error)}}
   }), 'dsh-vscode-workbench: file preview')
 
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'prefix', path: '/dsh-vscode/monaco', handler: async (req, res) => {
-      if (!authorize(req, res, ctx.connection)) return
-      try {
-        const raw = decodeURIComponent(new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/monaco/'.length))
-        const asset = monacoAsset(raw)
-        res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
-        res.end(await readFile(asset.path))
-      } catch (error) { sendError(res, error) }
-    },
-  }), 'dsh-vscode-workbench: Monaco assets')
-
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'prefix', path: '/dsh-vscode/katex', handler: async (req, res) => {
-      if (!authorize(req, res, ctx.connection)) return
-      try {
-        const raw = decodeURIComponent(new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/katex/'.length))
-        const asset = katexAsset(raw)
-        res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
-        res.end(await readFile(asset.path))
-      } catch (error) { sendError(res, error) }
-    },
-  }), 'dsh-vscode-workbench: KaTeX assets')
-
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'prefix', path: '/dsh-vscode/file-icons', handler: async (req, res) => {
-      if (!authorize(req, res, ctx.connection)) return
-      try {
-        const raw = decodeURIComponent(new URL(req.url ?? '/', 'http://dsh.local').pathname.slice('/dsh-vscode/file-icons/'.length))
-        const asset = fileIconAsset(raw)
-        res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
-        res.end(await readFile(asset.path))
-      } catch (error) { sendError(res, error) }
-    },
-  }), 'dsh-vscode-workbench: file type icons')
-
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'prefix', path: '/dsh-vscode/onig', handler: async (req, res) => {
-      if (!authorize(req, res, ctx.connection)) return
-      try {
-        const asset = onigWasmAsset()
-        res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'public, max-age=31536000, immutable' })
-        res.end(await readFile(asset.path))
-      } catch (error) { sendError(res, error) }
-    },
-  }), 'dsh-vscode-workbench: oniguruma wasm')
+  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: Monaco assets', kind: 'prefix', path: '/dsh-vscode/monaco', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/monaco/'.length)), resolve: monacoAsset })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: KaTeX assets', kind: 'prefix', path: '/dsh-vscode/katex', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/katex/'.length)), resolve: katexAsset })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: file type icons', kind: 'prefix', path: '/dsh-vscode/file-icons', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/file-icons/'.length)), resolve: fileIconAsset })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: oniguruma wasm', kind: 'prefix', path: '/dsh-vscode/onig', resolve: () => onigWasmAsset() })
 
   const wss = new WebSocketServer({ noServer: true })
   const watches = new WorkspaceWatch(createWorkspaceWatcher)

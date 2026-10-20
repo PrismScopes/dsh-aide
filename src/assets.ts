@@ -3,7 +3,7 @@ import { dirname, extname, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { WorkbenchError } from './wire.ts'
-import { inside } from './host.ts'
+import { inside } from './paths.ts'
 
 const require = createRequire(import.meta.url)
 

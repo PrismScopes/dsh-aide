@@ -6,6 +6,7 @@ import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm
 import { constants } from 'node:fs'
 import type { HostContext } from './context.ts'
 import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchRequest } from './types.ts'
+import { inside, resolveCreatableWorkspacePath, resolveExistingWorkspacePath, type WorkspacePathErrors } from './paths.ts'
 import { WorkbenchError } from './wire.ts'
 
 // 静态资源解析已拆到 assets.ts；从这里重新导出，保持既有引用（含路由与单测）不变。
@@ -30,10 +31,17 @@ export function cwdFor(ctx: HostContext, sessionId: string): string {
   return normalize(cwd)
 }
 
-/** target 是否落在 root 之内（含 root 本身）。assets.ts 也用它守卫包目录。 */
-export function inside(root: string, target: string): boolean {
-  const rel = relative(root, target)
-  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
+/** 文件 API 的错误码与消息；与重构前逐字一致（tests/host.spec.ts 依赖这些 code）。 */
+const PATH_ERRORS: WorkspacePathErrors = {
+  outside: () => new WorkbenchError('path-outside', 'path is outside the workspace', 403),
+  symlinkOutside: () => new WorkbenchError('path-outside', 'path follows a symlink outside the workspace', 403),
+  missing: () => new WorkbenchError('not-found', 'path does not exist', 404),
+}
+
+/** create 模式只要求父目录存在，父目录缺失是独立错误码（与重构前一致）。 */
+const PARENT_PATH_ERRORS: WorkspacePathErrors = {
+  ...PATH_ERRORS,
+  missing: () => new WorkbenchError('parent-missing', 'parent directory does not exist', 404),
 }
 
 async function canonicalRoot(cwd: string): Promise<string> {
@@ -44,15 +52,9 @@ async function canonicalRoot(cwd: string): Promise<string> {
 export async function workspacePath(cwd: string, raw: string, create = false): Promise<{ root: string; absolute: string }> {
   if (isAbsolute(raw)) throw new WorkbenchError('path-invalid', 'absolute paths are not accepted')
   const root = await canonicalRoot(cwd)
-  const absolute = resolve(root, raw === '' ? '.' : raw)
-  if (!inside(root, absolute)) throw new WorkbenchError('path-outside', 'path is outside the workspace', 403)
-  if (create) {
-    const parent = await realpath(dirname(absolute)).catch(() => { throw new WorkbenchError('parent-missing', 'parent directory does not exist', 404) })
-    if (!inside(root, parent)) throw new WorkbenchError('path-outside', 'path follows a symlink outside the workspace', 403)
-  } else {
-    const actual = await realpath(absolute).catch(() => { throw new WorkbenchError('not-found', 'path does not exist', 404) })
-    if (!inside(root, actual)) throw new WorkbenchError('path-outside', 'path follows a symlink outside the workspace', 403)
-  }
+  const { absolute } = create
+    ? await resolveCreatableWorkspacePath(root, raw, PARENT_PATH_ERRORS)
+    : await resolveExistingWorkspacePath(root, raw, PATH_ERRORS)
   return { root, absolute }
 }
 

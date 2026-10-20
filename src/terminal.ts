@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, realpathSync, statSync } from 'node:fs'
-import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import * as pty from 'node-pty'
 import type { IPty } from 'node-pty'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { HostContext } from './context.ts'
-import { cwdFor, inside } from './host.ts'
+import { cwdFor } from './host.ts'
+import { resolveExistingWorkspacePathSync, type WorkspacePathErrors } from './paths.ts'
 import { authorize, readBody, send, sendError, WorkbenchError } from './wire.ts'
 
 export interface TerminalInfo { id: string; title: string; cwd: string; running: boolean; exitCode?: number; sequence: number }
@@ -212,6 +213,14 @@ export function uniqueTerminalTitle(base: string, taken: Iterable<string>): stri
   return `${base} (${used.size})`
 }
 
+/** 终端面向用户的错误码/中文消息；与重构前逐字一致（tests/terminal-directory.spec.ts 依赖）。 */
+const TERMINAL_PATH_ERRORS: WorkspacePathErrors = {
+  outside: raw => new WorkbenchError('directory-outside', `终端目录超出了工作区：${raw}`, 400),
+  symlinkOutside: raw => new WorkbenchError('directory-outside', `终端目录通过符号链接指向了工作区之外：${raw}`, 400),
+  missing: raw => new WorkbenchError('directory-not-found', `终端目录不存在：${raw}`, 400),
+  notDirectory: raw => new WorkbenchError('directory-invalid', `终端目录不是文件夹：${raw}`, 400),
+}
+
 /**
  * 解析「在终端中打开」给出的目录。
  *
@@ -227,16 +236,7 @@ export function resolveTerminalDirectory(cwd: string, directory?: string): strin
   const root = realpathSync(cwd)
   if (directory === undefined || directory === '') return root
   if (isAbsolute(directory)) throw new WorkbenchError('directory-invalid', '终端目录必须是工作区内的相对路径', 400)
-  const absolute = resolve(root, directory)
-  if (!inside(root, absolute)) throw new WorkbenchError('directory-outside', `终端目录超出了工作区：${directory}`, 400)
-  // realpath 既确认存在，也把符号链接展开 —— 越界可能只体现在展开之后的目标上。
-  let actual: string
-  try { actual = realpathSync(absolute) } catch { throw new WorkbenchError('directory-not-found', `终端目录不存在：${directory}`, 400) }
-  if (!inside(root, actual)) throw new WorkbenchError('directory-outside', `终端目录通过符号链接指向了工作区之外：${directory}`, 400)
-  let isDirectory: boolean
-  try { isDirectory = statSync(actual).isDirectory() } catch { throw new WorkbenchError('directory-not-found', `终端目录不存在：${directory}`, 400) }
-  if (!isDirectory) throw new WorkbenchError('directory-invalid', `终端目录不是文件夹：${directory}`, 400)
-  return actual
+  return resolveExistingWorkspacePathSync(root, directory, TERMINAL_PATH_ERRORS, { kind: 'directory' }).actual
 }
 
 /** Own interactive terminals by their canonical workspace directory. */
