@@ -97,7 +97,7 @@ describe('workbench settings page', () => {
     expect(html).toContain('编辑器内查找')
     expect(html).toContain('显示或隐藏终端')
     expect(html).toContain('版本')
-    expect(html).toContain('0.2.4')
+    expect(html).toContain('0.2.5')
     expect(html).toContain('DSH 设置文件')
     expect(html).toContain(PREFERENCES_KEY)
     expect(html).toContain('恢复默认设置')

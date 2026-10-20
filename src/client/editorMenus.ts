@@ -15,9 +15,6 @@ import { separator, type MenuEntry, type MenuItem } from './ContextMenu.tsx'
 
 const item = (value: Omit<MenuItem, 'kind'>): MenuItem => ({ kind: 'item', ...value })
 
-/** 菜单图标；限定为 Icon.tsx 里已有的 CodiconName，不新增字形。 */
-type MenuIcon = NonNullable<MenuItem['icon']>
-
 /**
  * 源码编辑器菜单里每个动作的落点；具体实现由 MonacoEditor.tsx 提供。
  *
@@ -82,9 +79,8 @@ export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
   /**
    * 一条「执行 Monaco 命令」的菜单项：id 稳定，label 中文，shortcut 仅展示。
    *
-   * 这里刻意不提供 `icon`：叶子项一律不带图标（VS Code 的右键菜单也几乎不用图标）。
-   * 图标只留给六个子菜单父项，否则同一枚字形会在几十行里反复出现 —— 用户反馈的
-   * 「右键菜单 SVG 太多重复的」正是这么来的，而且满屏图标反而看不出这一组动作的重点。
+   * 菜单项一律不带图标：右键菜单纯文字更清爽（VS Code 的右键菜单也几乎不用图标），
+   * 之前满屏重复字形反而看不出这一组动作的重点。
    */
   const command = (options: {
     id: string
@@ -104,16 +100,14 @@ export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
    * 子菜单父项。`onSelect` 是接口必需字段，但 ContextMenu 对带 `submenu` 的项只会展开、不会执行它；
    * 父项在所有叶子都禁用时也禁用 —— 否则用户点开的是一个全灰的子菜单，等于多一步空操作。
    *
-   * `icon` 在这里是必填的：图标是「一组动作」的视觉锚点，六组各一枚、互不重复（叶子不带图标）。
-   * 必填而不是可选，是为了新增一组时不会漏配，也避免又退回到「只有一半父项有图标」的参差观感。
+   * 父项也不带图标（用户要求整体去掉右键菜单图标）；`chevron-right` 由菜单壳统一画，表示可展开。
    *
    * 父项 id 统一带 `-menu` 后缀（叶子 id 保持既有约定不变），这样整张菜单的 id 全局唯一：
    * 埋点/测试按 id 定位时不必再关心它是父项还是叶子，也避免以后新增同名项时撞 id。
    */
-  const group = (options: { id: string; label: string; icon: MenuIcon; entries: MenuEntry[] }): MenuItem => item({
+  const group = (options: { id: string; label: string; entries: MenuEntry[] }): MenuItem => item({
     id: options.id,
     label: options.label,
-    icon: options.icon,
     disabled: options.entries.every(entry => entry.kind === 'separator' || entry.disabled === true),
     submenu: options.entries,
     onSelect: () => {},
@@ -129,7 +123,6 @@ export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
     group({
       id: 'editor-select-menu',
       label: '选择',
-      icon: 'selection',
       entries: [
         command({ id: 'editor-select-all', commandId: 'editor.action.selectAll', label: '全选', shortcut: 'Ctrl+A' }),
         command({ id: 'editor-select-highlights', commandId: 'editor.action.selectHighlights', label: '选择所有出现', shortcut: 'Ctrl+Shift+L', disabled: !hasSelection || !isSupported('editor.action.selectHighlights') }),
@@ -141,7 +134,6 @@ export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
     group({
       id: 'editor-find-menu',
       label: '查找',
-      icon: 'search',
       entries: [
         command({ id: 'editor-find', commandId: 'actions.find', label: '查找', shortcut: 'Ctrl+F' }),
         command({ id: 'editor-replace', commandId: 'editor.action.startFindReplaceAction', label: '替换', shortcut: 'Ctrl+H' }),
@@ -151,7 +143,6 @@ export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
     group({
       id: 'editor-goto-menu',
       label: '转到',
-      icon: 'go-to-file',
       entries: [
         command({ id: 'editor-reveal-definition', commandId: 'editor.action.revealDefinition', label: '转到定义', shortcut: 'F12', disabled: !isSupported('editor.action.revealDefinition') }),
         command({ id: 'editor-find-references', commandId: 'editor.action.referenceSearch.trigger', label: '查找引用', shortcut: 'Shift+F12', disabled: !isSupported('editor.action.referenceSearch.trigger') }),
@@ -161,7 +152,6 @@ export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
     group({
       id: 'editor-lines-menu',
       label: '行操作',
-      icon: 'list-ordered',
       entries: [
         command({ id: 'editor-move-line-up', commandId: 'editor.action.moveLinesUpAction', label: '上移行', shortcut: 'Alt+↑', disabled: readOnly }),
         command({ id: 'editor-move-line-down', commandId: 'editor.action.moveLinesDownAction', label: '下移行', shortcut: 'Alt+↓', disabled: readOnly }),
@@ -175,7 +165,6 @@ export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
     group({
       id: 'editor-convert-menu',
       label: '转换',
-      icon: 'case-sensitive',
       entries: [
         command({ id: 'editor-transform-uppercase', commandId: 'editor.action.transformToUppercase', label: '转为大写', disabled: readOnly || !hasSelection }),
         command({ id: 'editor-transform-lowercase', commandId: 'editor.action.transformToLowercase', label: '转为小写', disabled: readOnly || !hasSelection }),
@@ -187,7 +176,6 @@ export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
     group({
       id: 'editor-format-menu',
       label: '格式化',
-      icon: 'wand',
       entries: [
         command({ id: 'editor-format', commandId: 'editor.action.formatDocument', label: '格式化文档', shortcut: 'Shift+Alt+F', disabled: readOnly || !canFormat }),
         command({ id: 'editor-format-selection', commandId: 'editor.action.formatSelection', label: '格式化选中内容', shortcut: 'Ctrl+K Ctrl+F', disabled: readOnly || !canFormat || !hasSelection }),
@@ -223,13 +211,12 @@ export interface DiffMenuContext {
 export function diffMenuItems(context: DiffMenuContext): MenuEntry[] {
   const { hasSelection, mode, actions } = context
   return [
-    item({ id: 'diff-copy', label: '复制', icon: 'copy', shortcut: 'Ctrl+C', disabled: !hasSelection, onSelect: actions.copy }),
+    item({ id: 'diff-copy', label: '复制', shortcut: 'Ctrl+C', disabled: !hasSelection, onSelect: actions.copy }),
     item({ id: 'diff-select-all', label: '全选', shortcut: 'Ctrl+A', onSelect: actions.selectAll }),
     separator(),
     item({
       id: 'diff-toggle-display',
       label: mode === 'split' ? '切换到行内显示' : '切换到并排显示',
-      icon: mode === 'split' ? 'diff-single' : 'diff-sidebyside',
       onSelect: actions.toggleDisplay,
     }),
   ]

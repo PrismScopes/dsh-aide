@@ -46,14 +46,14 @@ export function changeMenuItems(context: ChangeMenuContext): MenuEntry[] {
   const { group, untracked, absoluteRoot, actions } = context
   const discardable = group === 'worktree' || untracked
   return [
-    item({ id: 'open-change', label: '打开更改', icon: 'diff', onSelect: actions.open }),
+    item({ id: 'open-change', label: '打开更改', onSelect: actions.open }),
     separator(),
     group === 'staged'
-      ? item({ id: 'unstage-change', label: '取消暂存', icon: 'remove', onSelect: actions.unstage })
-      : item({ id: 'stage-change', label: '暂存更改', icon: 'add', onSelect: actions.stage }),
-    item({ id: 'discard-change', label: '放弃更改', icon: 'discard', danger: true, disabled: !discardable, onSelect: actions.discard }),
+      ? item({ id: 'unstage-change', label: '取消暂存', onSelect: actions.unstage })
+      : item({ id: 'stage-change', label: '暂存更改', onSelect: actions.stage }),
+    item({ id: 'discard-change', label: '放弃更改', danger: true, disabled: !discardable, onSelect: actions.discard }),
     separator(),
-    item({ id: 'copy-relative-path', label: '复制相对路径', icon: 'copy', onSelect: () => actions.copyPath(false) }),
+    item({ id: 'copy-relative-path', label: '复制相对路径', onSelect: () => actions.copyPath(false) }),
     item({ id: 'copy-absolute-path', label: '复制绝对路径', disabled: absoluteRoot === undefined, onSelect: () => actions.copyPath(true) }),
   ]
 }
@@ -77,10 +77,10 @@ export interface CommitMenuContext {
 export function commitMenuItems(context: CommitMenuContext): MenuEntry[] {
   const { expanded, actions } = context
   return [
-    item({ id: 'copy-commit-hash', label: '复制提交哈希', icon: 'copy', onSelect: actions.copyHash }),
+    item({ id: 'copy-commit-hash', label: '复制提交哈希', onSelect: actions.copyHash }),
     // 文案跟随当前状态：已展开时再写「查看」会让人以为点了不生效。
-    item({ id: 'toggle-commit-files', label: expanded ? '隐藏提交文件' : '查看提交文件', icon: 'list-tree', onSelect: actions.toggleFiles }),
-    item({ id: 'copy-commit-message', label: '复制提交说明', icon: 'edit', onSelect: actions.copyMessage }),
+    item({ id: 'toggle-commit-files', label: expanded ? '隐藏提交文件' : '查看提交文件', onSelect: actions.toggleFiles }),
+    item({ id: 'copy-commit-message', label: '复制提交说明', onSelect: actions.copyMessage }),
   ]
 }
 
@@ -101,7 +101,7 @@ export interface CommitFileMenuContext {
 export function commitFileMenuItems(context: CommitFileMenuContext): MenuEntry[] {
   const { actions } = context
   return [
-    item({ id: 'open-commit-file-diff', label: '打开差异', icon: 'diff', onSelect: actions.openDiff }),
-    item({ id: 'copy-commit-file-path', label: '复制路径', icon: 'copy', onSelect: actions.copyPath }),
+    item({ id: 'open-commit-file-diff', label: '打开差异', onSelect: actions.openDiff }),
+    item({ id: 'copy-commit-file-path', label: '复制路径', onSelect: actions.copyPath }),
   ]
 }

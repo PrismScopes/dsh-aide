@@ -68,16 +68,16 @@ export function explorerMenuItems(context: ExplorerMenuContext): MenuEntry[] {
   const { entry, canPaste, absolute, actions } = context
   if (entry === null) {
     const entries: MenuEntry[] = [
-      item({ id: 'create-file', label: '新建文件', icon: 'new-file', onSelect: () => actions.createFile('') }),
-      item({ id: 'create-directory', label: '新建文件夹', icon: 'new-folder', onSelect: () => actions.createDirectory('') }),
-      item({ id: 'upload', label: '上传文件…', icon: 'cloud-upload', onSelect: () => actions.upload('') }),
+      item({ id: 'create-file', label: '新建文件', onSelect: () => actions.createFile('') }),
+      item({ id: 'create-directory', label: '新建文件夹', onSelect: () => actions.createDirectory('') }),
+      item({ id: 'upload', label: '上传文件…', onSelect: () => actions.upload('') }),
       separator(),
       item({ id: 'paste', label: '粘贴', disabled: !canPaste, onSelect: () => actions.paste('') }),
       separator(),
-      item({ id: 'refresh', label: '刷新', icon: 'refresh', onSelect: () => actions.refresh() }),
+      item({ id: 'refresh', label: '刷新', onSelect: () => actions.refresh() }),
     ]
-    if (absolute !== undefined) entries.push(item({ id: 'copy-workspace-path', label: '复制工作区路径', icon: 'copy', onSelect: () => actions.copyWorkspacePath() }))
-    entries.push(item({ id: 'open-terminal', label: '在终端中打开', icon: 'terminal', onSelect: () => actions.openTerminal('') }))
+    if (absolute !== undefined) entries.push(item({ id: 'copy-workspace-path', label: '复制工作区路径', onSelect: () => actions.copyWorkspacePath() }))
+    entries.push(item({ id: 'open-terminal', label: '在终端中打开', onSelect: () => actions.openTerminal('') }))
     return entries
   }
 
@@ -85,25 +85,25 @@ export function explorerMenuItems(context: ExplorerMenuContext): MenuEntry[] {
   const container = entry.kind === 'directory' ? entry.path : parentDirectory(entry.path)
   const entries: MenuEntry[] = []
   if (entry.kind === 'file') {
-    entries.push(item({ id: 'open', label: '打开', icon: 'file', shortcut: 'Enter', onSelect: () => actions.open(entry) }))
+    entries.push(item({ id: 'open', label: '打开', shortcut: 'Enter', onSelect: () => actions.open(entry) }))
     entries.push(separator())
   }
   entries.push(
-    item({ id: 'create-file', label: '新建文件', icon: 'new-file', onSelect: () => actions.createFile(container) }),
-    item({ id: 'create-directory', label: '新建文件夹', icon: 'new-folder', onSelect: () => actions.createDirectory(container) }),
-    item({ id: 'upload', label: '上传文件…', icon: 'cloud-upload', onSelect: () => actions.upload(container) }),
+    item({ id: 'create-file', label: '新建文件', onSelect: () => actions.createFile(container) }),
+    item({ id: 'create-directory', label: '新建文件夹', onSelect: () => actions.createDirectory(container) }),
+    item({ id: 'upload', label: '上传文件…', onSelect: () => actions.upload(container) }),
     separator(),
     item({ id: 'cut', label: '剪切', onSelect: () => actions.copy(entry, 'cut') }),
-    item({ id: 'copy', label: '复制', icon: 'copy', onSelect: () => actions.copy(entry, 'copy') }),
+    item({ id: 'copy', label: '复制', onSelect: () => actions.copy(entry, 'copy') }),
     item({ id: 'paste', label: '粘贴', disabled: !canPaste, onSelect: () => actions.paste(container) }),
     separator(),
-    item({ id: 'rename', label: '重命名', icon: 'edit', shortcut: 'F2', onSelect: () => actions.rename(entry) }),
-    item({ id: 'delete', label: '删除', icon: 'trash', shortcut: 'Delete', danger: true, onSelect: () => actions.remove(entry) }),
+    item({ id: 'rename', label: '重命名', shortcut: 'F2', onSelect: () => actions.rename(entry) }),
+    item({ id: 'delete', label: '删除', shortcut: 'Delete', danger: true, onSelect: () => actions.remove(entry) }),
     separator(),
-    item({ id: 'copy-relative-path', label: '复制相对路径', icon: 'copy', onSelect: () => actions.copyPath(entry, false) }),
+    item({ id: 'copy-relative-path', label: '复制相对路径', onSelect: () => actions.copyPath(entry, false) }),
     item({ id: 'copy-absolute-path', label: '复制绝对路径', disabled: absolute === undefined, onSelect: () => actions.copyPath(entry, true) }),
     separator(),
-    item({ id: 'open-terminal', label: entry.kind === 'directory' ? '在终端中打开' : '在终端中打开所在目录', icon: 'terminal', onSelect: () => actions.openTerminal(entry.kind === 'directory' ? entry.path : parentDirectory(entry.path)) }),
+    item({ id: 'open-terminal', label: entry.kind === 'directory' ? '在终端中打开' : '在终端中打开所在目录', onSelect: () => actions.openTerminal(entry.kind === 'directory' ? entry.path : parentDirectory(entry.path)) }),
   )
   return entries
 }
@@ -137,17 +137,17 @@ export interface TabMenuContext {
 export function tabMenuItems(context: TabMenuContext): MenuEntry[] {
   const { actions, others, right, saved, pinned, absolute } = context
   const entries: MenuEntry[] = [
-    item({ id: 'close', label: '关闭', icon: 'close', onSelect: actions.close }),
-    item({ id: 'close-others', label: '关闭其他', icon: 'close-all', disabled: !others, onSelect: actions.closeOthers }),
-    item({ id: 'close-right', label: '关闭右侧', icon: 'close-all', disabled: !right, onSelect: actions.closeRight }),
-    item({ id: 'close-saved', label: '关闭已保存', icon: 'check-all', disabled: !saved, onSelect: actions.closeSaved }),
+    item({ id: 'close', label: '关闭', onSelect: actions.close }),
+    item({ id: 'close-others', label: '关闭其他', disabled: !others, onSelect: actions.closeOthers }),
+    item({ id: 'close-right', label: '关闭右侧', disabled: !right, onSelect: actions.closeRight }),
+    item({ id: 'close-saved', label: '关闭已保存', disabled: !saved, onSelect: actions.closeSaved }),
     separator(),
-    item({ id: 'toggle-pin', label: pinned ? '取消固定' : '固定标签', icon: 'pin', onSelect: actions.togglePin }),
+    item({ id: 'toggle-pin', label: pinned ? '取消固定' : '固定标签', onSelect: actions.togglePin }),
     separator(),
-    item({ id: 'copy-relative-path', label: '复制相对路径', icon: 'copy', disabled: context.path.startsWith('diff:'), onSelect: () => actions.copyPath(false) }),
+    item({ id: 'copy-relative-path', label: '复制相对路径', disabled: context.path.startsWith('diff:'), onSelect: () => actions.copyPath(false) }),
     item({ id: 'copy-absolute-path', label: '复制绝对路径', disabled: absolute === undefined || context.path.startsWith('diff:'), onSelect: () => actions.copyPath(true) }),
     separator(),
-    item({ id: 'open-terminal', label: '在终端中打开所在目录', icon: 'terminal', disabled: context.path.startsWith('diff:'), onSelect: actions.openTerminal }),
+    item({ id: 'open-terminal', label: '在终端中打开所在目录', disabled: context.path.startsWith('diff:'), onSelect: actions.openTerminal }),
   ]
   return entries
 }
@@ -173,15 +173,15 @@ export interface TerminalMenuContext {
 export function terminalPaneMenuItems(context: TerminalMenuContext): MenuEntry[] {
   const { actions, hasSelection, canSplit } = context
   return [
-    item({ id: 'terminal-new', label: '新建终端', icon: 'add', onSelect: actions.newTerminal }),
-    item({ id: 'terminal-split', label: '拆分终端', icon: 'split-horizontal', disabled: !canSplit, onSelect: actions.split }),
+    item({ id: 'terminal-new', label: '新建终端', onSelect: actions.newTerminal }),
+    item({ id: 'terminal-split', label: '拆分终端', disabled: !canSplit, onSelect: actions.split }),
     separator(),
-    item({ id: 'terminal-copy', label: '复制', icon: 'copy', shortcut: 'Ctrl+Shift+C', disabled: !hasSelection, onSelect: actions.copySelection }),
+    item({ id: 'terminal-copy', label: '复制', shortcut: 'Ctrl+Shift+C', disabled: !hasSelection, onSelect: actions.copySelection }),
     item({ id: 'terminal-paste', label: '粘贴', shortcut: 'Ctrl+Shift+V', onSelect: actions.paste }),
     item({ id: 'terminal-select-all', label: '全选', onSelect: actions.selectAll }),
-    item({ id: 'terminal-clear', label: '清屏', icon: 'clear-all', onSelect: actions.clear }),
+    item({ id: 'terminal-clear', label: '清屏', onSelect: actions.clear }),
     separator(),
-    item({ id: 'terminal-rename', label: '重命名', icon: 'edit', onSelect: actions.rename }),
-    item({ id: 'terminal-kill', label: '终止终端', icon: 'trash', danger: true, onSelect: actions.kill }),
+    item({ id: 'terminal-rename', label: '重命名', onSelect: actions.rename }),
+    item({ id: 'terminal-kill', label: '终止终端', danger: true, onSelect: actions.kill }),
   ]
 }

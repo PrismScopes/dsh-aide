@@ -1,7 +1,6 @@
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as MenuKeyEvent } from 'react'
-import type { CodiconName } from './Icon.tsx'
 import { Icon } from './Icon.tsx'
 
 /**
@@ -25,7 +24,6 @@ export interface MenuItem {
   /** 稳定标识，供测试与埋点断言「这一项在不在」。 */
   id: string
   label: string
-  icon?: CodiconName
   /** 右侧的快捷键提示（纯展示，不注册键位）。 */
   shortcut?: string
   disabled?: boolean
@@ -341,7 +339,6 @@ export function ContextMenu({ position, entries, label, onClose }: ContextMenuPr
       run(entry)
     }}
   >
-    <span className="dvw-menu-icon">{entry.icon === undefined ? null : <Icon name={entry.icon}/>}</span>
     <span className="dvw-menu-label">{entry.label}</span>
     {entry.shortcut !== undefined && <span className="dvw-menu-shortcut">{entry.shortcut}</span>}
     {context === 'root' && entry.submenu !== undefined && <span className="dvw-menu-arrow"><Icon name="chevron-right"/></span>}

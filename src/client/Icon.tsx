@@ -4,11 +4,6 @@ export type CodiconName =  | 'add' | 'check' | 'check-all' | 'chevron-down' | 'c
   | 'diff' | 'diff-sidebyside' | 'diff-single' | 'discard' | 'file' | 'file-code' | 'file-media' | 'file-pdf' | 'file-zip'
   | 'files' | 'folder' | 'folder-opened' | 'git-branch' | 'git-commit' | 'graph' | 'home' | 'list-tree' | 'new-file'
   | 'layout-sidebar-right' | 'layout-sidebar-right-off' | 'new-folder' | 'pin' | 'preview' | 'refresh' | 'remove' | 'search' | 'settings' | 'source-control' | 'sparkle' | 'split-horizontal' | 'terminal' | 'trash'
-  // 菜单图标（2026-10 去重时补的一批）：右键菜单里同一枚图标重复出现会看起来像"没做完"，
-  // 这批名字连同 styles.ts 里的字形一起加，给不同语义的菜单项各配一枚。
-  | 'comment' | 'comment-discussion' | 'book' | 'wrench' | 'tools' | 'beaker' | 'note' | 'checklist' | 'quote'
-  | 'selection' | 'go-to-file' | 'go-to-search' | 'replace' | 'list-ordered' | 'arrow-up' | 'arrow-down' | 'arrow-left'
-  | 'case-sensitive' | 'wand' | 'text-size' | 'references' | 'symbol-method' | 'indent' | 'save' | 'link'
 
 /** Render one glyph from Microsoft's VS Code Codicon font. */
 export function Icon({ name, className = '' }: { name: CodiconName; className?: string }) {

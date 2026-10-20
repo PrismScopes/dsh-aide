@@ -44,16 +44,16 @@ export function dshMenuEntries(context: DshMenuContext): readonly MenuEntry[] {
   const { hasSelection, available, actions } = context
   const canAsk = hasSelection && available
   return [
-    item({ id: 'dsh-add', label: '添加至对话', icon: 'comment-discussion', disabled: !canAsk, onSelect: actions.addToConversation }),
+    item({ id: 'dsh-add', label: '添加至对话', disabled: !canAsk, onSelect: actions.addToConversation }),
     line(),
-    item({ id: 'dsh-ask', label: '询问 DSH…', icon: 'comment', disabled: !canAsk, onSelect: () => actions.ask('ask') }),
-    item({ id: 'dsh-explain', label: '解释这段代码', icon: 'book', disabled: !canAsk, onSelect: () => actions.ask('explain') }),
-    item({ id: 'dsh-fix', label: '修复这段代码', icon: 'wrench', disabled: !canAsk, onSelect: () => actions.ask('fix') }),
-    item({ id: 'dsh-refactor', label: '重构这段代码', icon: 'tools', disabled: !canAsk, onSelect: () => actions.ask('refactor') }),
-    item({ id: 'dsh-tests', label: '生成单元测试', icon: 'beaker', disabled: !canAsk, onSelect: () => actions.ask('tests') }),
-    item({ id: 'dsh-comment', label: '添加注释', icon: 'note', disabled: !canAsk, onSelect: () => actions.ask('comment') }),
-    item({ id: 'dsh-review', label: '审查这段代码', icon: 'checklist', disabled: !canAsk, onSelect: () => actions.ask('review') }),
+    item({ id: 'dsh-ask', label: '询问 DSH…', disabled: !canAsk, onSelect: () => actions.ask('ask') }),
+    item({ id: 'dsh-explain', label: '解释这段代码', disabled: !canAsk, onSelect: () => actions.ask('explain') }),
+    item({ id: 'dsh-fix', label: '修复这段代码', disabled: !canAsk, onSelect: () => actions.ask('fix') }),
+    item({ id: 'dsh-refactor', label: '重构这段代码', disabled: !canAsk, onSelect: () => actions.ask('refactor') }),
+    item({ id: 'dsh-tests', label: '生成单元测试', disabled: !canAsk, onSelect: () => actions.ask('tests') }),
+    item({ id: 'dsh-comment', label: '添加注释', disabled: !canAsk, onSelect: () => actions.ask('comment') }),
+    item({ id: 'dsh-review', label: '审查这段代码', disabled: !canAsk, onSelect: () => actions.ask('review') }),
     line(),
-    item({ id: 'dsh-copy-quote', label: '复制为引用', icon: 'quote', disabled: !hasSelection, onSelect: actions.copyQuote }),
+    item({ id: 'dsh-copy-quote', label: '复制为引用', disabled: !hasSelection, onSelect: actions.copyQuote }),
   ]
 }

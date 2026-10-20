@@ -67,26 +67,6 @@ describe('dsh menu entries', () => {
     }
   })
 
-  it('gives every item a distinct icon that matches the agreed table', () => {
-    const entries = items(dshMenuEntries(context()))
-    // 用户反馈：旧版 sparkle×3 / edit×3 / check×2 看起来像没做完 —— 9 项必须互不重复。
-    const icons = entries.map(entry => entry.icon)
-    expect(new Set(icons).size).toBe(icons.length)
-    expect(Object.fromEntries(entries.map(entry => [entry.id, entry.icon]))).toEqual({
-      'dsh-add': 'comment-discussion',
-      'dsh-ask': 'comment',
-      'dsh-explain': 'book',
-      'dsh-fix': 'wrench',
-      'dsh-refactor': 'tools',
-      'dsh-tests': 'beaker',
-      'dsh-comment': 'note',
-      'dsh-review': 'checklist',
-      'dsh-copy-quote': 'quote',
-    })
-    // 父项仍用 sparkle，不在这 9 项里重复。
-    expect(icons).not.toContain('sparkle')
-  })
-
   it('disables every selection action without a selection', () => {
     const entries = items(dshMenuEntries(context({ hasSelection: false })))
     expect(entries.every(entry => entry.disabled === true)).toBe(true)

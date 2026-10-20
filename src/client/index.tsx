@@ -233,7 +233,6 @@ function dshHarnessEntry(target: EditorMenuTarget): MenuEntry {
     kind: 'item',
     id: 'dsh-harness',
     label: 'DeepSeek Harness',
-    icon: 'sparkle',
     // 带 submenu 的父项不会执行 onSelect，但字段是必填的。
     onSelect: () => {},
     submenu: dshMenuEntries({
