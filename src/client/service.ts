@@ -29,7 +29,7 @@ const SNAPSHOT_KEY='dvw:workbench:snapshot:v1'
 const LAYOUT_KEY='dvw:workbench:layout:v1'
 const DEFAULT_SNAPSHOT:WorkbenchSnapshot={visible:false,view:'explorer'}
 function browserStorage():WorkbenchStorage|undefined{try{return globalThis.localStorage}catch{return undefined}}
-function restoreSnapshot(storage:WorkbenchStorage|undefined):WorkbenchSnapshot{if(storage===undefined)return {...DEFAULT_SNAPSHOT};try{const raw=storage.getItem(SNAPSHOT_KEY);if(raw===null)return {...DEFAULT_SNAPSHOT};const value=JSON.parse(raw) as Partial<WorkbenchSnapshot>;const view=value.view==='explorer'||value.view==='search'||value.view==='git'?value.view:'explorer';return {visible:value.visible===true,view,...(typeof value.bottomPanel==='string'?{bottomPanel:value.bottomPanel}:{})}}catch{return {...DEFAULT_SNAPSHOT}}}
+function restoreSnapshot(storage:WorkbenchStorage|undefined):WorkbenchSnapshot{if(storage===undefined)return {...DEFAULT_SNAPSHOT};try{const raw=storage.getItem(SNAPSHOT_KEY);if(raw===null)return {...DEFAULT_SNAPSHOT};const value=JSON.parse(raw) as Partial<WorkbenchSnapshot>;const view=value.view==='explorer'||value.view==='search'||value.view==='git'?value.view:'explorer';return {visible:false,view,...(typeof value.bottomPanel==='string'?{bottomPanel:value.bottomPanel}:{})}}catch{return {...DEFAULT_SNAPSHOT}}}
 
 /** 逐个字段校验并夹取范围，坏数据不会让整份布局回落到默认值。 */
 function restoreLayout(storage:WorkbenchStorage|undefined):WorkbenchLayout{

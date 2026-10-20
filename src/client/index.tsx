@@ -175,7 +175,8 @@ const PanelIcon = ({ service }: { service: VscodeWorkbench }) => {
  */
 const PanelPage = ({ service, layout }: { service: VscodeWorkbench; layout?: unknown }) => {
   useEffect(() => {
-    service.show()
+    // 这里不调用 show()：DSH 恢复主区域时也会挂载本组件，那样工作台会在启动时自动弹出。
+    // 打开工作台只有一条路径 —— 侧栏入口（见 PanelIcon）。
     const release = () => {
       const select = (layout as LayoutLike | undefined)?.selectPanel
       if (typeof select === 'function') select.call(layout, null)
