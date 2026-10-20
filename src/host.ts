@@ -5,7 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, reso
 import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import type { HostContext } from './context.ts'
-import type { FileDocument, FileEntry, GitBranchList, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
+import type { FileDocument, FileEntry, GitBranchList, GitChange, GitCommit, GitCommitFile, GitDiff, GitStash, GitStatus, GitTag, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
 import { inside, resolveCreatableWorkspacePath, resolveExistingWorkspacePath, type WorkspacePathErrors } from './paths.ts'
 import { WorkbenchError } from './wire.ts'
 
@@ -554,19 +554,30 @@ export async function gitStatus(cwd: string, runner: ProcessRunner = run): Promi
 }
 
 /**
- * 分支名守卫。
+ * 引用名守卫（分支 / 标签共用）。
  *
  * git 自己的规则很碎（`check-ref-format`），这里只挡「明显非法 / 危险」的写法：
  * 选项注入（以 `-` 开头）、空白、`..`、以及 git 明确禁止的字符，避免把用户输入当命令参数。
  */
-const FORBIDDEN_BRANCH_CHARS = [' ', '~', '^', ':', '?', '*', '[', '\\']
-export function validateBranchName(value: string | undefined): string {
+const FORBIDDEN_REF_CHARS = [' ', '~', '^', ':', '?', '*', '[', '\\']
+function validateRefName(value: string | undefined, label: string): string {
   const name = (value ?? '').trim()
   if (name === '' || name.startsWith('-') || name.includes('..') || name.endsWith('/') || name.endsWith('.')) {
-    throw new WorkbenchError('bad-request', 'branch name is invalid')
+    throw new WorkbenchError('bad-request', `${label} name is invalid`)
   }
-  if (FORBIDDEN_BRANCH_CHARS.some(char => name.includes(char))) throw new WorkbenchError('bad-request', 'branch name is invalid')
+  if (FORBIDDEN_REF_CHARS.some(char => name.includes(char))) throw new WorkbenchError('bad-request', `${label} name is invalid`)
   return name
+}
+
+export function validateBranchName(value: string | undefined): string { return validateRefName(value, 'branch') }
+
+/** 标签名规则与分支一致：`check-ref-format` 对 refs/heads 与 refs/tags 是同一套。 */
+export function validateTagName(value: string | undefined): string { return validateRefName(value, 'tag') }
+
+/** 贮藏索引只接受纯数字：它会被拼进 `stash@{n}`，不能带任何其它字符。 */
+function stashIndex(value: string | undefined): string {
+  if (!/^\d+$/.test(value ?? '')) throw new WorkbenchError('bad-request', 'stash index is invalid')
+  return value!
 }
 
 /** 提交图的取数：`-n` 条，可选 `--all`（显示全部分支）。 */
@@ -600,20 +611,50 @@ async function gitBranchList(runGit: (args: string[]) => Promise<ProcessResult>)
   }
 }
 
+/** 远程名列表：`remotes` / `remote.add` / `remote.remove` 返回同一形状（字符串数组）。 */
+async function gitRemoteNames(runGit: (args: string[]) => Promise<ProcessResult>): Promise<string[]> {
+  const result = await runGit(['remote'])
+  if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr, 500)
+  return result.stdout.split('\n').map(item => item.trim()).filter(Boolean)
+}
+
+/** 第一个远程名：push 类动作都约定推到第一个远程（与 VS Code 的提示语义一致）。 */
+async function firstRemote(runGit: (args: string[]) => Promise<ProcessResult>): Promise<string> {
+  const name = (await gitRemoteNames(runGit))[0]
+  if (name === undefined) throw new WorkbenchError('git-failed', '没有配置远程仓库', 409)
+  return name
+}
+
 /** 推送参数：有上游就普通 push，没有上游就把当前分支推到第一个远程（与 VS Code 的提示语义一致）。 */
 async function gitPushArgs(runGit: (args: string[]) => Promise<ProcessResult>): Promise<string[]> {
   const upstream = await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
   if (upstream.code === 0) return ['push']
-  const remote = await runGit(['remote'])
-  const name = remote.stdout.split('\n').map(value => value.trim()).filter(Boolean)[0]
-  if (name === undefined) throw new WorkbenchError('git-failed', '没有配置远程仓库', 409)
+  const name = await firstRemote(runGit)
   const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])
   const branchName = branch.code === 0 ? branch.stdout.trim() : ''
   if (branchName === '' || branchName === 'HEAD') throw new WorkbenchError('git-failed', '当前不在任何分支上，无法推送', 409)
   return ['push', '--set-upstream', name, branchName]
 }
 
+/**
+ * 把远程仓库克隆到工作区里的一个子目录。
+ *
+ * 不能先走 `gitRoot`：调用时工作区还不是 git 仓库（克隆成功后才变成仓库），所以这是唯一
+ * 在解析仓库根之前执行的动作。目标只接受工作区相对路径：绝对路径或 `..` 一律拒绝，
+ * 避免把仓库写到用户没有指定的位置；目录已存在等错误由 git 自己报，原样回传 stderr。
+ */
+async function cloneRepository(cwd: string, path: string | undefined, url: string | undefined, runner: ProcessRunner = run): Promise<{ cloned: true }> {
+  const target = path ?? ''
+  if (target === '' || isAbsolute(target) || target.split(/[\\/]/).some(part => part === '..')) throw new WorkbenchError('bad-request', 'clone destination is invalid')
+  if (url === undefined || url === '') throw new WorkbenchError('bad-request', 'clone url is required')
+  const result = await runner('git', ['clone', '--', url, target], cwd)
+  if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 409)
+  return { cloned: true }
+}
+
 export async function gitAction(cwd: string, action: string, path?: string, value?: string, runner: ProcessRunner = run): Promise<unknown> {
+  // clone 必须在 gitRoot 之前：这是唯一能把「非仓库工作区」变成仓库的动作。
+  if (action === 'clone') return cloneRepository(cwd, path, value, runner)
   const repository = await gitRoot(cwd, runner)
   // 同一个动作里的所有 git 调用共用一个已解析的仓库根：不再每个 run 都重新 rev-parse。
   const runGit = (gitArgs: string[]): Promise<ProcessResult> => runner('git', gitArgs, repository)
@@ -638,6 +679,16 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       return gitStatus(cwd, runner)
     }
     case 'commit': args = ['commit', '-m', value ?? '']; break
+    // 一次做完 add -A + commit：客户端「提交全部」少一次往返，也避免两步之间工作区被外部改脏。
+    case 'commit.all': {
+      const add = await runGit(['add', '-A'])
+      if (add.code !== 0) throw new WorkbenchError('git-failed', add.stderr || add.stdout, 409)
+      const commit = await runGit(['commit', '-m', value ?? ''])
+      if (commit.code !== 0) throw new WorkbenchError('git-failed', commit.stderr || commit.stdout, 409)
+      return gitStatus(cwd, runner)
+    }
+    // 软回退：提交内容退回暂存区，工作区不动；没有 HEAD 时 git 自己非零退出。
+    case 'commit.undo': args = ['reset', '--soft', 'HEAD~1']; break
     case 'branch.create': args = ['switch', '-c', validateBranchName(value)]; break
     case 'branch.switch': {
       const name = validateBranchName(value)
@@ -651,11 +702,85 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       return gitStatus(cwd, runner)
     }
     case 'branch.delete': args = ['branch', '-d', validateBranchName(value)]; break
+    // path 复用为旧名、value 为新名：与 commit.branch 的「path 放名字」约定一致。
+    case 'branch.rename': args = ['branch', '-m', validateBranchName(path), validateBranchName(value)]; break
     case 'branch.list': return gitBranchList(runGit)
-    case 'remotes': {
-      const result = await runGit(['remote'])
-      if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr, 500)
-      return result.stdout.split('\n').map(item => item.trim()).filter(Boolean)
+    // 冲突时 git 非零退出；这里不自动 abort，由用户决定解冲突还是 merge.abort。
+    case 'merge': {
+      const branch = validateBranchName(value)
+      const merged = await runGit(['merge', '--no-edit', branch])
+      if (merged.code !== 0) throw new WorkbenchError('git-failed', merged.stderr || merged.stdout, 409)
+      return gitStatus(cwd, runner)
+    }
+    case 'merge.abort': args = ['merge', '--abort']; break
+    case 'rebase': args = ['rebase', validateBranchName(value)]; break
+    // 贮藏：默认连未跟踪文件一起收走，否则 stash 之后工作区仍然是脏的（面板「贮藏」的用户预期）。
+    // `--staged` 只贮藏已暂存内容；这时未暂存/未跟踪的改动留在工作区。
+    case 'stash.push': {
+      const message = value ?? ''
+      args = path === 'staged' ? ['stash', 'push', '--staged'] : ['stash', 'push', '--include-untracked']
+      if (message !== '') args.push('-m', message)
+      break
+    }
+    case 'stash.list': {
+      // 不能用 `%gI`：git 没有这个 pretty 占位符（会原样输出）；`%cI` 同样是严格 ISO 8601。
+      // 也不能带 `--date=...`：那会把 `%gd` 从 `stash@{0}` 变成日期形式，索引就取不出来了。
+      const listed = await runGit(['stash', 'list', '--pretty=format:%gd%x1f%gs%x1f%cI%x00'])
+      if (listed.code !== 0) throw new WorkbenchError('git-failed', listed.stderr || listed.stdout, 500)
+      const stashes: GitStash[] = []
+      // `%x00` 之后 git 还会补一个换行：先剥掉记录之间的分隔符。
+      for (const record of listed.stdout.split('\0')) {
+        const line = record.replace(/^\r?\n/, '')
+        if (line === '') continue
+        const [ref = '', message = '', date = ''] = line.split('\x1f')
+        const match = /stash@\{(\d+)\}/.exec(ref)
+        if (match === null) continue
+        stashes.push({ index: Number(match[1]), message, date })
+      }
+      return stashes
+    }
+    case 'stash.apply':
+    case 'stash.pop':
+    case 'stash.drop': {
+      // 索引会拼进 stash@{n}：只接受纯数字，绝不能把别的字符带进 git 参数。
+      args = ['stash', action.slice('stash.'.length), `stash@{${stashIndex(value)}}`]
+      break
+    }
+    case 'tag.list': {
+      // for-each-ref 的转义是 `%xx`（不是 pretty 格式的 `%xNN`），所以这里写 `%1f`；`%x1f` 会印成字面量。
+      const listed = await runGit(['for-each-ref', '--format=%(refname:short)%1f%(objectname:short)%1f%(subject)', 'refs/tags'])
+      if (listed.code !== 0) throw new WorkbenchError('git-failed', listed.stderr || listed.stdout, 500)
+      return listed.stdout.split('\n').filter(Boolean).map((record): GitTag => {
+        const [name = '', hash = '', subject = ''] = record.split('\x1f')
+        return { name, hash, subject }
+      })
+    }
+    case 'tag.create': {
+      const name = validateTagName(value)
+      // 轻量标签：不传 path 就钉在 HEAD，传了就钉在指定提交上。
+      args = path === undefined || path === '' ? ['tag', name] : ['tag', name, validateCommitHash(path)]
+      break
+    }
+    case 'tag.delete': args = ['tag', '-d', validateTagName(value)]; break
+    case 'tag.push': {
+      // 空串表示推送全部标签；空值不进 args，否则会被统一的「空参数」检查误判成 bad-request。
+      const name = (value ?? '') === '' ? undefined : validateTagName(value)
+      const remote = await firstRemote(runGit)
+      args = name === undefined ? ['push', remote, '--tags'] : ['push', remote, name]
+      break
+    }
+    case 'remotes': return gitRemoteNames(runGit)
+    case 'remote.add': {
+      if (path === undefined || path === '' || value === undefined || value === '') throw new WorkbenchError('bad-request', 'remote name and url are required')
+      const added = await runGit(['remote', 'add', path, value])
+      if (added.code !== 0) throw new WorkbenchError('git-failed', added.stderr || added.stdout, 409)
+      return gitRemoteNames(runGit)
+    }
+    case 'remote.remove': {
+      if (value === undefined || value === '') throw new WorkbenchError('bad-request', 'remote name is required')
+      const removed = await runGit(['remote', 'remove', value])
+      if (removed.code !== 0) throw new WorkbenchError('git-failed', removed.stderr || removed.stdout, 409)
+      return gitRemoteNames(runGit)
     }
     case 'branches': {
       const result = await runGit(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])

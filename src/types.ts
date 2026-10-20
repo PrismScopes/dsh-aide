@@ -65,3 +65,7 @@ export interface GitCommit { hash: string; parents: string[]; author: string; da
 export interface GitCommitFile { path: string; previousPath?: string; status: string }
 /** Unified patch and full texts used by the Monaco diff editor. */
 export interface GitDiff { diff: string; original: string; modified: string }
+/** 一条贮藏记录（`git stash list`）。 */
+export interface GitStash { index: number; message: string; date: string }
+/** 一个标签（`git for-each-ref refs/tags`）。 */
+export interface GitTag { name: string; hash: string; subject: string }

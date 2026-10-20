@@ -1,18 +1,27 @@
 import { separator, type MenuEntry, type MenuItem } from './ContextMenu.tsx'
 
 /**
- * 源代码管理面板（Git）的三套右键菜单内容 —— **纯数据**，不碰 DOM，也不直接调 API。
+ * 源代码管理面板 / 提交图标签页的菜单内容 —— **纯数据**，不碰 DOM，也不直接调 API。
  *
  * 与 menus.ts 同样的理由：菜单项只描述「有哪些项、什么图标、何时禁用、点了做什么」，
- * 真正的动作由 GitPanel 注入（复用面板里已有的 action/toggleCommit/openCommitFile），
- * 于是分组顺序、按暂存/未跟踪/绝对根变化的禁用规则、破坏性标记都能单测，
- * 而不需要渲染 React 或模拟 git 服务。
+ * 真正的动作由面板注入（复用面板里已有的 action / 选择器），于是分组顺序、按状态变化的禁用规则、
+ * 破坏性标记都能单测，而不需要渲染 React 或模拟 git 服务。
+ *
+ * 菜单结构对齐 VS Code 源代码管理视图标题上的 `...`：一级项 + 带箭头的一级子菜单
+ * （查看和排序 / 提交 / 更改 / 拉取，推送 / 分支 / 远程 / 存储 / 标记）。
  */
 
-const item = (value: Omit<MenuItem, 'kind'>): MenuItem => ({ kind: 'item', ...value })
+/**
+ * 菜单项构造器。
+ *
+ * `onSelect` 在带子菜单的父项上没有意义（ContextMenu 展开子菜单而不是执行它），
+ * 这里给它一个空操作的默认值，避免每个子菜单父项都写一遍 `onSelect: () => undefined`。
+ */
+type MenuItemInput = Omit<MenuItem, 'kind' | 'onSelect'> & { onSelect?: MenuItem['onSelect'] }
+const item = (value: MenuItemInput): MenuItem => ({ kind: 'item', onSelect: () => undefined, ...value })
 
 /** 改动行菜单里，面板能提供的那几个动作。 */
-interface ChangeMenuActions {
+export interface ChangeMenuActions {
   /** 打开差异：未跟踪文件需要 untracked 模式，否则按 staged/worktree 取 diff。 */
   open(): void
   stage(): void
@@ -59,7 +68,7 @@ export function changeMenuItems(context: ChangeMenuContext): MenuEntry[] {
 }
 
 /** 提交图里某次提交的菜单动作。 */
-interface CommitMenuActions {
+export interface CommitMenuActions {
   copyHash(): void
   /** 等同于点一下提交行：展开/收起这次提交的文件列表。 */
   toggleFiles(): void
@@ -68,6 +77,8 @@ interface CommitMenuActions {
   checkout(): void
   /** 以这次提交为基准新建分支（名字由面板层的分支选择器输入）。 */
   createBranch(): void
+  /** 在这次提交上打标签（名字由输入框给）。 */
+  createTag(): void
   /** 把这次提交拣选到当前分支。 */
   cherryPick(): void
   /** 反向提交，撤销这次提交的改动（危险操作，面板层负责二次确认）。 */
@@ -85,25 +96,26 @@ interface CommitMenuContext {
  * 提交图行的菜单。
  *
  * 前一组是「点开一次就能拿到的信息」，后一组是 Git Graph 扩展里对单次提交的常用操作
- * （检出 / 建分支 / 拣选 / 还原）；写操作都放在分隔线之后，避免手滑点到。
+ * （检出 / 建分支 / 打标签 / 拣选 / 还原）；写操作都放在分隔线之后，避免手滑点到。
  */
 export function commitMenuItems(context: CommitMenuContext): MenuEntry[] {
   const { expanded, actions } = context
   return [
     item({ id: 'copy-commit-hash', label: '复制提交哈希', onSelect: actions.copyHash }),
+    item({ id: 'copy-commit-message', label: '复制提交说明', onSelect: actions.copyMessage }),
     // 文案跟随当前状态：已展开时再写「查看」会让人以为点了不生效。
     item({ id: 'toggle-commit-files', label: expanded ? '隐藏提交文件' : '查看提交文件', onSelect: actions.toggleFiles }),
-    item({ id: 'copy-commit-message', label: '复制提交说明', onSelect: actions.copyMessage }),
     separator(),
     item({ id: 'commit-checkout', label: '检出此提交', onSelect: actions.checkout }),
-    item({ id: 'commit-create-branch', label: '在此创建分支', onSelect: actions.createBranch }),
+    item({ id: 'commit-create-branch', label: '在此创建分支…', onSelect: actions.createBranch }),
+    item({ id: 'commit-create-tag', label: '在此创建标签…', onSelect: actions.createTag }),
     item({ id: 'commit-cherry-pick', label: '拣选此提交', onSelect: actions.cherryPick }),
     item({ id: 'commit-revert', label: '还原此提交', danger: true, onSelect: actions.revert }),
   ]
 }
 
 /** 某次提交里的文件菜单动作。 */
-interface CommitFileMenuActions {
+export interface CommitFileMenuActions {
   openDiff(): void
   /** 复制该文件在提交里的路径（仓库相对路径，git 命令可直接用）。 */
   copyPath(): void
@@ -124,61 +136,207 @@ export function commitFileMenuItems(context: CommitFileMenuContext): MenuEntry[]
   ]
 }
 
-/** 面板顶部「更多操作」菜单（VS Code 源代码管理视图标题上的 `...`）。 */
-interface ScmMenuActions {
+/**
+ * 菜单里每一项能触发的动作。
+ *
+ * 面板与提交图标签页共用同一份菜单结构，各自注入实现：面板在侧栏就地打开选择器，
+ * 标签页在编辑器里做同样的事，两边的行为（含二次确认）不会分叉。
+ */
+export interface GitMenuActions {
   refresh(): void
-  fetch(): void
   pull(): void
   push(): void
+  fetch(): void
   sync(): void
+  clone(): void
+  checkout(): void
+  commitStaged(): void
+  commitAll(): void
+  undoCommit(): void
   stageAll(): void
   unstageAll(): void
   discardAll(): void
-  checkout(): void
-  createBranch(): void
-  deleteBranch(): void
+  branchCreate(): void
+  branchRename(): void
+  branchDelete(): void
+  branchMerge(): void
+  branchRebase(): void
+  openGraph(all: boolean): void
+  remoteAdd(): void
+  remoteRemove(): void
+  stashPush(staged: boolean): void
+  stashApply(): void
+  stashPop(): void
+  stashDrop(): void
+  tagCreate(): void
+  tagDelete(): void
+  tagPush(): void
+  copyBranch(): void
+  copyRepository(): void
+  toggleTree(): void
+  sortByPath(): void
+  sortByName(): void
+  /** 提交图多取一页（只有图表标签页/图表分组用得到）。 */
+  loadMore(): void
+  showOutput(): void
 }
 
-interface ScmMenuContext {
+/** 源代码管理视图标题菜单的上下文。 */
+export interface ScmMenuContext {
   busy: boolean
-  /** 是否配置了远程：拉取/推送/同步/获取在没远程时禁用而不是隐藏，菜单位置不会跳。 */
+  /** 是否配置了远程：拉取/推送/同步/抓取在没远程时禁用而不是隐藏，菜单位置不会跳。 */
   remote: boolean
-  /** 暂存区条目数，决定「取消暂存所有更改」是否可点。 */
+  /** 暂存区条目数，决定「取消暂存所有更改」「提交已暂存的更改」是否可点。 */
   stagedCount: number
   /** 未暂存条目数，决定「暂存 / 放弃所有更改」是否可点。 */
   changeCount: number
-  actions: ScmMenuActions
+  /** 更改列表是否按目录分组（查看和排序子菜单里切换）。 */
+  tree?: boolean
+  /** 更改列表排序方式（查看和排序子菜单里切换）。 */
+  sort?: 'path' | 'name'
+  actions: GitMenuActions
 }
 
 /**
- * 顶部菜单。分组顺序与 VS Code 一致：先同步（拉取/推送/同步/获取），
- * 再整批的暂存与放弃，最后才是分支操作；破坏性操作带 danger 标记。
+ * 源代码管理视图标题上的 `...` 菜单。
+ *
+ * 一级结构照 VS Code：查看和排序 / 拉取·推送·克隆·签出·抓取 / 提交 / 更改 / 拉取，推送 /
+ * 分支 / 远程 / 存储 / 标记 / 显示输出。会写仓库的项带 `danger`，没有远程时远程相关项禁用。
  */
 export function scmMenuItems(context: ScmMenuContext): MenuEntry[] {
-  const { busy, remote, stagedCount, changeCount, actions } = context
+  const { busy, remote, stagedCount, changeCount, tree, sort, actions } = context
   const offline = busy || !remote
   return [
     item({ id: 'scm-refresh', label: '刷新', disabled: busy, onSelect: actions.refresh }),
+    item({
+      id: 'scm-view', label: '查看和排序', submenu: [
+        item({ id: 'scm-view-tree', label: tree === true ? '按路径列表查看' : '按目录分组查看', onSelect: actions.toggleTree }),
+        item({ id: 'scm-view-sort-path', label: sort === 'name' ? '按路径排序' : '按路径排序（当前）', onSelect: actions.sortByPath }),
+        item({ id: 'scm-view-sort-name', label: sort === 'name' ? '按名称排序（当前）' : '按名称排序', onSelect: actions.sortByName }),
+      ],
+    }),
     separator(),
     item({ id: 'scm-pull', label: '拉取', disabled: offline, onSelect: actions.pull }),
     item({ id: 'scm-push', label: '推送', disabled: offline, onSelect: actions.push }),
-    item({ id: 'scm-sync', label: '同步', disabled: offline, onSelect: actions.sync }),
-    item({ id: 'scm-fetch', label: '获取', disabled: offline, onSelect: actions.fetch }),
+    item({ id: 'scm-clone', label: '克隆…', disabled: busy, onSelect: actions.clone }),
+    item({ id: 'scm-checkout', label: '签出到…', disabled: busy, onSelect: actions.checkout }),
+    item({ id: 'scm-fetch', label: '抓取', disabled: offline, onSelect: actions.fetch }),
     separator(),
-    item({ id: 'scm-stage-all', label: '暂存所有更改', disabled: busy || changeCount === 0, onSelect: actions.stageAll }),
-    item({ id: 'scm-unstage-all', label: '取消暂存所有更改', disabled: busy || stagedCount === 0, onSelect: actions.unstageAll }),
-    item({ id: 'scm-discard-all', label: '放弃所有更改', danger: true, disabled: busy || changeCount === 0, onSelect: actions.discardAll }),
+    item({
+      id: 'scm-commit-group', label: '提交', submenu: [
+        item({ id: 'scm-commit-staged', label: '提交已暂存的更改…', disabled: busy || stagedCount === 0, onSelect: actions.commitStaged }),
+        item({ id: 'scm-commit-all', label: '提交所有更改…', disabled: busy || stagedCount + changeCount === 0, onSelect: actions.commitAll }),
+        item({ id: 'scm-commit-undo', label: '撤销上次提交…', danger: true, disabled: busy, onSelect: actions.undoCommit }),
+      ],
+    }),
+    item({
+      id: 'scm-changes-group', label: '更改', submenu: [
+        item({ id: 'scm-changes-stage', label: '暂存所有更改', disabled: busy || changeCount === 0, onSelect: actions.stageAll }),
+        item({ id: 'scm-changes-unstage', label: '取消暂存所有更改', disabled: busy || stagedCount === 0, onSelect: actions.unstageAll }),
+        item({ id: 'scm-changes-discard', label: '放弃所有更改', danger: true, disabled: busy || changeCount === 0, onSelect: actions.discardAll }),
+      ],
+    }),
+    item({
+      id: 'scm-sync-group', label: '拉取，推送', submenu: [
+        item({ id: 'scm-sync-pull', label: '拉取', disabled: offline, onSelect: actions.pull }),
+        item({ id: 'scm-sync-push', label: '推送', disabled: offline, onSelect: actions.push }),
+        item({ id: 'scm-sync', label: '同步', disabled: offline, onSelect: actions.sync }),
+        item({ id: 'scm-sync-fetch', label: '抓取', disabled: offline, onSelect: actions.fetch }),
+        item({ id: 'scm-sync-tags', label: '推送全部标签', disabled: offline, onSelect: actions.tagPush }),
+      ],
+    }),
+    item({
+      id: 'scm-branch-group', label: '分支', submenu: [
+        item({ id: 'scm-branch-create', label: '新建分支…', disabled: busy, onSelect: actions.branchCreate }),
+        item({ id: 'scm-branch-rename', label: '重命名分支…', disabled: busy, onSelect: actions.branchRename }),
+        item({ id: 'scm-branch-delete', label: '删除分支…', disabled: busy, onSelect: actions.branchDelete }),
+        item({ id: 'scm-branch-merge', label: '合并到当前分支…', disabled: busy, onSelect: actions.branchMerge }),
+        item({ id: 'scm-branch-rebase', label: '变基到当前分支…', disabled: busy, onSelect: actions.branchRebase }),
+        item({ id: 'scm-branch-graph', label: '打开提交图', disabled: busy, onSelect: () => actions.openGraph(false) }),
+      ],
+    }),
+    item({
+      id: 'scm-remote-group', label: '远程', submenu: [
+        item({ id: 'scm-remote-add', label: '添加远程…', disabled: busy, onSelect: actions.remoteAdd }),
+        item({ id: 'scm-remote-remove', label: '移除远程…', disabled: busy || !remote, onSelect: actions.remoteRemove }),
+      ],
+    }),
+    item({
+      id: 'scm-stash-group', label: '存储', submenu: [
+        item({ id: 'scm-stash-push', label: '贮藏所有更改…', disabled: busy, onSelect: () => actions.stashPush(false) }),
+        item({ id: 'scm-stash-push-staged', label: '贮藏已暂存的更改…', disabled: busy || stagedCount === 0, onSelect: () => actions.stashPush(true) }),
+        item({ id: 'scm-stash-apply', label: '应用贮藏…', disabled: busy, onSelect: actions.stashApply }),
+        item({ id: 'scm-stash-pop', label: '弹出最新贮藏', disabled: busy, onSelect: actions.stashPop }),
+        item({ id: 'scm-stash-drop', label: '删除贮藏…', danger: true, disabled: busy, onSelect: actions.stashDrop }),
+      ],
+    }),
+    item({
+      id: 'scm-tag-group', label: '标记', submenu: [
+        item({ id: 'scm-tag-create', label: '创建标签…', disabled: busy, onSelect: actions.tagCreate }),
+        item({ id: 'scm-tag-delete', label: '删除标签…', disabled: busy, onSelect: actions.tagDelete }),
+        item({ id: 'scm-tag-push', label: '推送全部标签', disabled: offline, onSelect: actions.tagPush }),
+      ],
+    }),
     separator(),
-    item({ id: 'scm-checkout', label: '检出到…', disabled: busy, onSelect: actions.checkout }),
-    item({ id: 'scm-create-branch', label: '新建分支…', disabled: busy, onSelect: actions.createBranch }),
-    item({ id: 'scm-delete-branch', label: '删除分支…', disabled: busy, onSelect: actions.deleteBranch }),
+    item({ id: 'scm-output', label: '显示 Git 输出', onSelect: actions.showOutput }),
+  ]
+}
+
+/** 提交图标签页工具栏菜单的上下文。 */
+export interface GraphMenuContext {
+  busy: boolean
+  /** 是否配置了远程：推送标签需要远程。 */
+  remote: boolean
+  /** 提交图当前是否显示全部分支。 */
+  allCommits: boolean
+  canLoadMore: boolean
+  actions: GitMenuActions
+}
+
+/** 提交图标签页标题上的 `...` 菜单：范围、分页、提交/分支/贮藏/标记操作。 */
+export function graphMenuItems(context: GraphMenuContext): MenuEntry[] {
+  const { busy, remote, allCommits, canLoadMore, actions } = context
+  return [
+    item({ id: 'graph-refresh', label: '刷新提交图', disabled: busy, onSelect: actions.refresh }),
+    item({
+      id: 'graph-range', label: '提交范围', submenu: [
+        item({ id: 'graph-range-current', label: allCommits ? '仅当前分支' : '仅当前分支（当前）', disabled: busy, onSelect: () => actions.openGraph(false) }),
+        item({ id: 'graph-range-all', label: allCommits ? '全部分支（当前）' : '全部分支', disabled: busy, onSelect: () => actions.openGraph(true) }),
+      ],
+    }),
+    item({ id: 'graph-load-more', label: '加载更多提交', disabled: busy || !canLoadMore, onSelect: actions.loadMore }),
+    separator(),
+    item({ id: 'graph-checkout', label: '签出到…', disabled: busy, onSelect: actions.checkout }),
+    item({
+      id: 'graph-branch-group', label: '分支', submenu: [
+        item({ id: 'graph-branch-create', label: '新建分支…', disabled: busy, onSelect: actions.branchCreate }),
+        item({ id: 'graph-branch-delete', label: '删除分支…', disabled: busy, onSelect: actions.branchDelete }),
+        item({ id: 'graph-branch-merge', label: '合并到当前分支…', disabled: busy, onSelect: actions.branchMerge }),
+      ],
+    }),
+    item({
+      id: 'graph-stash-group', label: '存储', submenu: [
+        item({ id: 'graph-stash-push', label: '贮藏所有更改…', disabled: busy, onSelect: () => actions.stashPush(false) }),
+        item({ id: 'graph-stash-apply', label: '应用贮藏…', disabled: busy, onSelect: actions.stashApply }),
+        item({ id: 'graph-stash-pop', label: '弹出最新贮藏', disabled: busy, onSelect: actions.stashPop }),
+      ],
+    }),
+    item({
+      id: 'graph-tag-group', label: '标记', submenu: [
+        item({ id: 'graph-tag-create', label: '创建标签…', disabled: busy, onSelect: actions.tagCreate }),
+        item({ id: 'graph-tag-delete', label: '删除标签…', disabled: busy, onSelect: actions.tagDelete }),
+        item({ id: 'graph-tag-push', label: '推送全部标签', disabled: busy || !remote, onSelect: actions.tagPush }),
+      ],
+    }),
+    separator(),
+    item({ id: 'graph-copy-branch', label: '复制当前分支名', onSelect: actions.copyBranch }),
   ]
 }
 
 /** 分组标题上的 `...` 菜单：暂存的更改 / 更改 / 图表。 */
 export type GitGroup = 'staged' | 'changes' | 'graph'
 
-interface GroupMenuActions {
+export interface GroupMenuActions {
   stageAll(): void
   unstageAll(): void
   discardAll(): void

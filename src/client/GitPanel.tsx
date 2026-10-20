@@ -1,23 +1,23 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
-import type { GitBranchList, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus } from '../types.ts'
+import type { ReactNode } from 'react'
+import type { GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus } from '../types.ts'
 import { ApiError, api } from './api.ts'
 import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
 import { copyText } from './clipboard.ts'
-import { changeMenuItems, commitFileMenuItems, commitMenuItems, groupMenuItems, scmMenuItems, type GitGroup } from './gitMenus.ts'
-import { graphSubtitle, refKind, refLabel, shortHash } from './gitGraph.ts'
+import { changeMenuItems, commitFileMenuItems, groupMenuItems, type GitGroup } from './gitMenus.ts'
+import { graphSubtitle, refKind, refLabel } from './gitGraph.ts'
+import { useGitCommands } from './gitCommands.tsx'
+import { recordGitCommand } from './gitOutput.ts'
 import { fileIcon, Icon } from './Icon.tsx'
 import { useDebouncedCallback } from './hooks.ts'
 
 /**
- * 源代码管理面板：工作区改动分组、提交、以及提交图表（Graph）。
+ * 源代码管理面板：工作区改动分组、提交、以及提交图表（Graph）的紧凑入口。
  * 从 Workbench.tsx 拆出，其中 graphRows / graphTrackPath 是纯函数、有单测覆盖，
  * 由 Workbench.tsx 重新导出以保持既有引用不变。
  *
- * 本轮按 VS Code 的源代码管理视图补齐：
- * - 面板标题、三个分组标题都有 `...` 菜单（scmMenuItems / groupMenuItems）；
- * - 分支按钮打开可搜索的分支选择器（替代原来的 window.prompt）；
- * - 提交图支持「全部提交 / 仅当前分支」与分批加载，提交行按 VS Code Git Graph 扩展的方式分类引用、上色。
+ * 菜单结构（`...` 与子菜单）在 gitMenus.ts，菜单动作与选择器在 useGitCommands：
+ * 编辑器里的提交图标签页用的是同一份，两处行为不会分叉。
  */
 export interface GraphTrack { hash: string; color: number }
 export interface GraphRow { commit: GitCommit; lane: number; before: GraphTrack[]; after: GraphTrack[]; parentLanes: number[] }
@@ -108,60 +108,6 @@ type GitMenuState =
   | { kind: 'scm'; x: number; y: number }
   | { kind: 'group'; y: number; x: number; group: GitGroup }
 
-/** 分支选择器的模式：切换 / 新建（可基于某次提交）/ 删除。 */
-interface BranchPickerState { mode: 'switch' | 'create' | 'delete'; base?: string }
-
-const PICKER_TITLES: Record<BranchPickerState['mode'], string> = { switch: '检出到…', create: '新建分支…', delete: '删除分支…' }
-
-/**
- * 分支选择器（VS Code 的 quick pick 样式：顶部居中、可输入过滤）。
- *
- * 打开前由面板先取回 `branch.list`，所以这里只负责渲染与键盘；真正的切换/新建/删除仍走面板的 action()，
- * 不在这里发请求 —— 动作失败时错误展示在面板顶部，和右键菜单里那些操作是同一条路径。
- */
-function BranchPicker(props: { mode: BranchPickerState['mode']; base?: string; branches: GitBranchList; onClose(): void; onPick(name: string): void; onCreate(name: string): void }) {
-  const { mode, branches } = props
-  const [filter, setFilter] = useState('')
-  const [active, setActive] = useState(0)
-  const names = useMemo(() => mode === 'delete'
-    ? branches.local.filter(name => name !== branches.current)
-    : [...branches.local, ...branches.remote], [mode, branches])
-  const options = useMemo(() => {
-    const needle = filter.trim().toLowerCase()
-    return (needle === '' ? names : names.filter(name => name.toLowerCase().includes(needle))).slice(0, 200)
-  }, [names, filter])
-  useEffect(() => setActive(0), [filter])
-  const choose = (name: string) => { if (mode === 'create') props.onCreate(name); else props.onPick(name) }
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Escape') { event.preventDefault(); props.onClose(); return }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      setActive(value => event.key === 'ArrowDown' ? Math.min(value + 1, Math.max(0, options.length - 1)) : Math.max(value - 1, 0))
-      return
-    }
-    if (event.key !== 'Enter') return
-    event.preventDefault()
-    if (mode === 'create') { const name = filter.trim(); if (name !== '') props.onCreate(name); return }
-    const name = options[active]
-    if (name !== undefined) props.onPick(name)
-  }
-  return <div className="dvw-quickpick-backdrop" onMouseDown={props.onClose}>
-    <div className="dvw-quickpick" role="dialog" aria-label={PICKER_TITLES[mode]} onMouseDown={event => event.stopPropagation()}>
-      <div className="dvw-quickpick-head">{PICKER_TITLES[mode]}{props.base === undefined ? '' : `（基于 ${shortHash(props.base)}）`}</div>
-      <input className="dvw-input" autoFocus value={filter} aria-label={PICKER_TITLES[mode]} placeholder={mode === 'create' ? '新分支名称' : mode === 'delete' ? '筛选要删除的分支' : '搜索分支'} onChange={event => setFilter(event.target.value)} onKeyDown={onKeyDown}/>
-      {mode === 'create' && filter.trim() !== '' && <button className="dvw-quickpick-item dvw-quickpick-create" onClick={() => props.onCreate(filter.trim())}><Icon name="add"/><span>创建分支 “{filter.trim()}”</span></button>}
-      <div className="dvw-quickpick-list">
-        {options.map((name, index) => <button className="dvw-quickpick-item" key={name} data-active={index === active || undefined} onMouseDown={event => event.preventDefault()} onClick={() => choose(name)}>
-          {name === branches.current ? <Icon name="check"/> : <span className="dvw-quickpick-blank" aria-hidden="true"/>}
-          <span className="dvw-quickpick-name">{name}</span>
-          {branches.remote.includes(name) && <span className="dvw-quickpick-meta">远程</span>}
-        </button>)}
-        {options.length === 0 && <div className="dvw-quickpick-empty">{mode === 'create' ? '直接输入名称后回车创建' : '没有匹配的分支'}</div>}
-      </div>
-    </div>
-  </div>
-}
-
 /**
  * 提交信息输入框 + 提交按钮。
  *
@@ -179,17 +125,19 @@ function CommitBox({ busy, branch, onCommit }: { busy: boolean; branch: string; 
 }
 
 /** 提交之后需要重取提交图/分支信息的动作：不重取的话新状态要等下一次文件变更事件。 */
-const RELOG_ACTIONS = new Set(['commit', 'branch.switch', 'branch.create', 'branch.delete', 'commit.checkout', 'commit.branch', 'commit.cherrypick', 'commit.revert', 'pull', 'push', 'sync', 'fetch'])
+const RELOG_ACTIONS = new Set(['commit', 'commit.all', 'commit.undo', 'branch.switch', 'branch.create', 'branch.rename', 'branch.delete', 'commit.checkout', 'commit.branch', 'commit.cherrypick', 'commit.revert', 'pull', 'push', 'sync', 'fetch', 'merge', 'merge.abort', 'rebase', 'clone', 'stash.pop', 'stash.apply'])
 /** 远程动作：成功后给一条短提示，避免「点了没反应」的错觉（失败会走错误条）。 */
-const REMOTE_NOTICES: Record<string, string> = { fetch: '已获取远程更新', pull: '已拉取', push: '已推送', sync: '已同步' }
+const REMOTE_NOTICES: Record<string, string> = { fetch: '已抓取远程更新', pull: '已拉取', push: '已推送', sync: '已同步', clone: '已克隆仓库' }
 
-export function Git(props: { sessionId: string; /** 工作区绝对根（Workbench 传 workspace.cwd）；拿不到时「复制绝对路径」禁用。 */ absoluteRoot?: string; onDiff(key:string, diff:GitDiff, title?:string, sourcePath?:string): void }) {
+export function Git(props: { sessionId: string; /** 工作区绝对根（Workbench 传 workspace.cwd）；拿不到时「复制绝对路径」禁用。 */ absoluteRoot?: string; onDiff(key:string, diff:GitDiff, title?:string, sourcePath?:string): void; onOpenGraph(all: boolean): void; onOpenOutput(): void }) {
   const [status, setStatus] = useState<GitStatus>(); const [commits,setCommits]=useState<GitCommit[]>([]); const [error, setError] = useState<string>(); const [busy,setBusy]=useState(false); const [expanded,setExpanded]=useState({staged:true,changes:true,graph:true});const [expandedCommit,setExpandedCommit]=useState<string>();const [commitFileMap,setCommitFileMap]=useState<Map<string,GitCommitFile[]>>(new Map())
   const [menu,setMenu]=useState<GitMenuState>()
-  // 分支选择器与远程列表：远程列表只在面板挂载时取一次（每次刷新都跑 `git remote` 会多一个进程）。
-  const [remotes,setRemotes]=useState<string[]>([]); const [branches,setBranches]=useState<GitBranchList>(); const [picker,setPicker]=useState<BranchPickerState>()
+  // 远程列表只在面板挂载时取一次（每次刷新都跑 `git remote` 会多一个进程）。
+  const [remotes,setRemotes]=useState<string[]>([])
   // 提交图范围：默认只画当前分支的 100 条，`...` 菜单里可以切到全部分支、分批加载。
   const [allCommits,setAllCommits]=useState(false); const [logLimit,setLogLimit]=useState(100)
+  // 「查看和排序」：按目录分组 / 按名称排序，只影响侧栏改动列表（提交图不受影响）。
+  const [treeView,setTreeView]=useState(false); const [sort,setSort]=useState<'path'|'name'>('path')
   const [notice,setNotice]=useState<string>()
   const loadLog = useCallback(() => api<GitCommit[]>('git.action',{sessionId:props.sessionId,action:allCommits?'log.all':'log',value:String(logLimit)}), [props.sessionId,allCommits,logLimit])
   const refresh = useCallback(() => { void Promise.all([api<GitStatus>('git.status',{sessionId:props.sessionId}),loadLog()]).then(([nextStatus,nextCommits])=>{setStatus(nextStatus);setCommits(nextCommits);setError(undefined)}).catch(error=>{setStatus(undefined);setCommits([]);setError(error instanceof ApiError&&error.code==='not-repository'?undefined:String(error))}) }, [props.sessionId, loadLog])
@@ -200,11 +148,8 @@ export function Git(props: { sessionId: string; /** 工作区绝对根（Workben
   const refreshDebounced = useDebouncedCallback(refresh, 500)
   useEffect(refresh,[refresh]); useEffect(()=>{const fn=()=>refreshDebounced();window.addEventListener('dvw-files-changed',fn);return()=>window.removeEventListener('dvw-files-changed',fn)},[refreshDebounced])
   useEffect(() => { void api<string[]>('git.action',{sessionId:props.sessionId,action:'remotes'}).then(names=>setRemotes(names)).catch(()=>setRemotes([])) }, [props.sessionId])
-  const action = async (name: string, path?: string, value?: string) => { setBusy(true);setNotice(undefined);try { const result = await api<GitStatus | GitDiff>('git.action',{sessionId:props.sessionId,action:name,path,value}); if(name==='diff'&&'diff'in result){const key=path??'';props.onDiff(key,result,key.split('/').at(-1)??key,key)} else {setStatus(result as GitStatus);if(RELOG_ACTIONS.has(name))refreshLog();if(REMOTE_NOTICES[name]!==undefined)setNotice(REMOTE_NOTICES[name])} } catch(error){setError(String(error));refreshQuiet()}finally{setBusy(false)} }
-  /** 打开分支选择器：先把分支清单取回来，再显示 quick pick。 */
-  const openPicker = async (mode: BranchPickerState['mode'], base?: string) => { setBusy(true);try { const list = await api<GitBranchList>('git.action',{sessionId:props.sessionId,action:'branch.list'});setBranches(list);setPicker({mode,base}) } catch(error){setError(String(error))} finally { setBusy(false) } }
-  const pickBranch = (name: string) => { const mode = picker?.mode; setPicker(undefined); if (mode === 'delete') { if (confirm(`删除分支 ${name}？未合并的分支会被 git 拒绝。`)) void action('branch.delete', undefined, name); return } void action('branch.switch', undefined, name) }
-  const createBranch = (name: string) => { const base = picker?.base; setPicker(undefined); if (base === undefined) void action('branch.create', undefined, name); else void action('commit.branch', name, base) }
+  useEffect(() => { if (notice === undefined) return; const timer = setTimeout(() => setNotice(undefined), 4000); return () => clearTimeout(timer) }, [notice])
+  const action = async (name: string, path?: string, value?: string) => { setBusy(true);setNotice(undefined);try { const result = await api<GitStatus | GitDiff>('git.action',{sessionId:props.sessionId,action:name,path,value});recordGitCommand({action:name,path,value,ok:true}); if(name==='diff'&&'diff'in result){const key=path??'';props.onDiff(key,result,key.split('/').at(-1)??key,key)} else {setStatus(result as GitStatus);if(RELOG_ACTIONS.has(name))refreshLog();if(name==='remote.add'||name==='remote.remove')void api<string[]>('git.action',{sessionId:props.sessionId,action:'remotes'}).then(setRemotes).catch(()=>undefined);if(REMOTE_NOTICES[name]!==undefined)setNotice(REMOTE_NOTICES[name])} } catch(error){recordGitCommand({action:name,path,value,ok:false,message:String(error)});setError(String(error));refreshQuiet()}finally{setBusy(false)} }
   // 两个被提交图用到的动作都要有稳定标识，否则 memo(CommitGraph) 等于没做：
   // 依赖写全（expandedCommit / commitFileMap 都是它真正读到的状态），不会读到过期闭包。
   // onDiff 用 ref 持有：它是 Workbench 每次渲染新建的箭头函数，放进依赖会让本面板每次跟着重渲染，
@@ -217,29 +162,34 @@ export function Git(props: { sessionId: string; /** 工作区绝对根（Workben
   const graphOnOpenFile=useCallback((commit:GitCommit,file:GitCommitFile)=>{void openCommitFile(commit,file)},[openCommitFile])
   const graphOnMenu=useCallback((commit:GitCommit,position:{x:number;y:number})=>setMenu({kind:'commit',x:position.x,y:position.y,commit}),[])
   const graphOnFileMenu=useCallback((commit:GitCommit,file:GitCommitFile,position:{x:number;y:number})=>setMenu({kind:'commit-file',x:position.x,y:position.y,commit,file}),[])
-  const staged=status?.changes.filter(change=>change.index!=='.'&&change.index!=='?')??[]
-  const changed=status?.changes.filter(change=>change.worktree!=='.'||change.untracked)??[]
-  const confirmDiscardAll = () => { if (confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。')) void action('discard.all') }
-  const groupActions = {
-    stageAll: () => void action('stage.all'), unstageAll: () => void action('unstage.all'), discardAll: confirmDiscardAll,
-    refreshGraph: () => void refreshLog(), toggleAllCommits: () => setAllCommits(value => !value),
-    loadMore: () => setLogLimit(value => Math.min(1000, value + 100)), collapseCommit: () => setExpandedCommit(undefined),
-  }
-  // 菜单内容由 gitMenus.ts 的纯函数生成，这里只把「点了做什么」接到面板已有动作上：
-  // 复制走 clipboard.copyText，其余复用 action / toggleCommit / openCommitFile，避免出现第二套行为。
+  const sortRows = (rows: GitChange[]) => sort === 'name'
+    ? [...rows].sort((a, b) => (a.path.split('/').at(-1) ?? a.path).localeCompare(b.path.split('/').at(-1) ?? b.path))
+    : rows
+  const staged=sortRows(status?.changes.filter(change=>change.index!=='.'&&change.index!=='?')??[])
+  const changed=sortRows(status?.changes.filter(change=>change.worktree!=='.'||change.untracked)??[])
+  const commands = useGitCommands({
+    sessionId: props.sessionId, busy, status, remotes,
+    run: (name, path, value) => action(name, path, value),
+    refresh: () => void refresh(),
+    openGraph: all => props.onOpenGraph(all),
+    openOutput: () => props.onOpenOutput(),
+    onError: message => setError(message),
+    onCopy: text => { void copyText(text) },
+    tree: treeView, sort,
+    toggleTree: () => setTreeView(value => !value),
+    sortBy: mode => setSort(mode),
+    loadMore: () => setLogLimit(value => Math.min(1000, value + 100)),
+  })
   const menuEntries = (): MenuEntry[] => {
     if (menu === undefined) return []
-    if (menu.kind === 'scm') {
-      return scmMenuItems({ busy, remote: remotes.length > 0, stagedCount: staged.length, changeCount: changed.length, actions: {
-        refresh: () => void refresh(),
-        fetch: () => void action('fetch'), pull: () => void action('pull'), push: () => void action('push'), sync: () => void action('sync'),
-        stageAll: () => void action('stage.all'), unstageAll: () => void action('unstage.all'), discardAll: confirmDiscardAll,
-        checkout: () => void openPicker('switch'), createBranch: () => void openPicker('create'), deleteBranch: () => void openPicker('delete'),
-      } })
-    }
+    if (menu.kind === 'scm') return commands.scmMenu({ staged: staged.length, changes: changed.length })
     if (menu.kind === 'group') {
       const count = menu.group === 'staged' ? staged.length : menu.group === 'changes' ? changed.length : commits.length
-      return groupMenuItems({ group: menu.group, busy, count, allCommits, canLoadMore: logLimit < 1000, expandedCommit: expandedCommit !== undefined, actions: groupActions })
+      return groupMenuItems({ group: menu.group, busy, count, allCommits, canLoadMore: logLimit < 1000, expandedCommit: expandedCommit !== undefined, actions: {
+        stageAll: () => void action('stage.all'), unstageAll: () => void action('unstage.all'), discardAll: () => { if (confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。')) void action('discard.all') },
+        refreshGraph: () => void refreshLog(), toggleAllCommits: () => setAllCommits(value => !value),
+        loadMore: () => setLogLimit(value => Math.min(1000, value + 100)), collapseCommit: () => setExpandedCommit(undefined),
+      } })
     }
     if (menu.kind === 'change') {
       const { change, group } = menu
@@ -254,16 +204,11 @@ export function Git(props: { sessionId: string; /** 工作区绝对根（Workben
       } })
     }
     if (menu.kind === 'commit') {
-      const commit = menu.commit
-      return commitMenuItems({ commit, expanded: expandedCommit === commit.hash, actions: {
-        copyHash: () => void copyText(commit.hash),
-        toggleFiles: () => void toggleCommit(commit),
-        copyMessage: () => void copyText(commit.subject),
-        checkout: () => void action('commit.checkout', undefined, commit.hash),
-        createBranch: () => void openPicker('create', commit.hash),
-        cherryPick: () => void action('commit.cherrypick', undefined, commit.hash),
-        revert: () => { if (confirm(`还原提交 ${shortHash(commit.hash)}？这会新增一个反向提交。`)) void action('commit.revert', undefined, commit.hash) },
-      } })
+      return commands.commitMenu(menu.commit, expandedCommit === menu.commit.hash, {
+        copyHash: () => void copyText(menu.commit.hash),
+        copyMessage: () => void copyText(menu.commit.subject),
+        toggleFiles: () => void toggleCommit(menu.commit),
+      })
     }
     const { commit, file } = menu
     return commitFileMenuItems({ path: file.path, actions: {
@@ -273,5 +218,12 @@ export function Git(props: { sessionId: string; /** 工作区绝对根（Workben
   }
   const menuLabel = menu===undefined?'':menu.kind==='change'?'更改操作':menu.kind==='commit'?'提交操作':menu.kind==='commit-file'?'提交文件操作':menu.kind==='scm'?'源代码管理操作':'分组操作'
   const renderChange=(change:GitStatus['changes'][number],group:'staged'|'worktree')=><div className="dvw-change" key={`${group}:${change.path}`} onClick={()=>void action('diff',change.path,change.untracked?'untracked':group)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setMenu({kind:'change',x:event.clientX,y:event.clientY,change,group})}}><Icon name={change.untracked?'new-file':'diff'} className="dvw-file-icon"/><span className="dvw-change-path">{change.path}</span><span className="dvw-badge">{change.untracked?'U':group==='staged'?change.index:change.worktree}</span><button className="dvw-icon" title={group==='staged'?'取消暂存':'暂存更改'} onClick={event=>{event.stopPropagation();void action(group==='staged'?'unstage':'stage',change.path)}}><Icon name={group==='staged'?'remove':'add'}/></button>{group==='worktree'&&<button className="dvw-icon" title="放弃更改" onClick={event=>{event.stopPropagation();if(confirm(`放弃 ${change.path} 的更改？此操作无法撤销。`))void action('discard',change.path,change.untracked?'untracked':undefined)}}><Icon name="discard"/></button>}</div>
-  return <><div className="dvw-side-head">源代码管理<div className="dvw-toolbar"><button className="dvw-icon" title="刷新" aria-label="刷新" disabled={busy} onClick={refresh}><Icon name="refresh"/></button><button className="dvw-icon" title="更多操作" aria-label="更多操作" aria-haspopup="menu" onClick={event=>setMenu({kind:'scm',x:event.clientX,y:event.clientY})}><Icon name="ellipsis"/></button></div></div>{error&&<div className="dvw-error">{error}</div>}{notice!==undefined&&<div className="dvw-git-notice" role="status">{notice}</div>}{status&&<><div className="dvw-git-head"><button className="dvw-branch" title="检出到…" onClick={()=>void openPicker('switch')}><Icon name="git-branch"/> {status.branch}</button><span>↑{status.ahead} ↓{status.behind}</span></div><CommitBox busy={busy} branch={status.branch} onCommit={message=>action('commit',undefined,message)}/><div className="dvw-git">{staged.length>0&&<section><GitGroupHeader title="暂存的更改" count={staged.length} expanded={expanded.staged} onToggle={()=>setExpanded(value=>({...value,staged:!value.staged}))} onMenu={event=>setMenu({kind:'group',group:'staged',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="取消暂存所有更改" onClick={()=>void action('unstage.all')}><Icon name="remove"/></button></GitGroupHeader>{expanded.staged&&staged.map(change=>renderChange(change,'staged'))}</section>}<section><GitGroupHeader title="更改" count={changed.length} expanded={expanded.changes} onToggle={()=>setExpanded(value=>({...value,changes:!value.changes}))} onMenu={event=>setMenu({kind:'group',group:'changes',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="放弃所有更改" onClick={confirmDiscardAll}><Icon name="discard"/></button><button className="dvw-icon" title="暂存所有更改" onClick={()=>void action('stage.all')}><Icon name="add"/></button></GitGroupHeader>{expanded.changes&&changed.map(change=>renderChange(change,'worktree'))}</section><section className="dvw-graph"><GitGroupHeader title="图表" count={commits.length} expanded={expanded.graph} onToggle={()=>setExpanded(value=>({...value,graph:!value.graph}))} onMenu={event=>setMenu({kind:'group',group:'graph',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="刷新提交图表" onClick={refreshLog}><Icon name="refresh"/></button></GitGroupHeader>{expanded.graph&&(commits.length===0?<div className="dvw-graph-empty">还没有提交</div>:<CommitGraph commits={commits} expanded={expandedCommit} files={commitFileMap} remotes={remotes} onToggle={graphOnToggle} onOpenFile={graphOnOpenFile} onMenu={graphOnMenu} onFileMenu={graphOnFileMenu}/>)}</section></div></>}{menu!==undefined&&<ContextMenu position={{x:menu.x,y:menu.y}} label={menuLabel} entries={menuEntries()} onClose={()=>setMenu(undefined)}/>}{picker!==undefined&&branches!==undefined&&<BranchPicker mode={picker.mode} base={picker.base} branches={branches} onClose={()=>setPicker(undefined)} onPick={pickBranch} onCreate={createBranch}/>}</>
+  /** 树结构查看：按目录分组显示改动行（目录名做成小标题）；关闭时保持 git 的原始顺序。 */
+  const renderChanges=(rows:GitChange[],group:'staged'|'worktree')=>{
+    if(!treeView)return rows.map(change=>renderChange(change,group))
+    const groups=new Map<string,GitChange[]>()
+    for(const change of rows){const dir=change.path.includes('/')?change.path.slice(0,change.path.lastIndexOf('/')):'';const list=groups.get(dir)??[];list.push(change);groups.set(dir,list)}
+    return [...groups].map(([dir,list])=><div className="dvw-git-dirgroup" key={`${group}:${dir}`}><div className="dvw-git-dir" title={dir}>{dir===''?'.':dir}</div>{list.map(change=>renderChange(change,group))}</div>)
+  }
+  return <><div className="dvw-side-head">源代码管理<div className="dvw-toolbar"><button className="dvw-icon" title="打开提交图" aria-label="打开提交图" onClick={()=>props.onOpenGraph(false)}><Icon name="graph"/></button><button className="dvw-icon" title="刷新" aria-label="刷新" disabled={busy} onClick={refresh}><Icon name="refresh"/></button><button className="dvw-icon" title="更多操作" aria-label="更多操作" aria-haspopup="menu" onClick={event=>setMenu({kind:'scm',x:event.clientX,y:event.clientY})}><Icon name="ellipsis"/></button></div></div>{error&&<div className="dvw-error">{error}</div>}{notice!==undefined&&<div className="dvw-git-notice" role="status">{notice}</div>}{status&&<><div className="dvw-git-head"><button className="dvw-branch" title="签出到…" onClick={()=>commands.actions.checkout()}><Icon name="git-branch"/> {status.branch}</button><span>↑{status.ahead} ↓{status.behind}</span></div><CommitBox busy={busy} branch={status.branch} onCommit={message=>action('commit',undefined,message)}/><div className="dvw-git">{staged.length>0&&<section><GitGroupHeader title="暂存的更改" count={staged.length} expanded={expanded.staged} onToggle={()=>setExpanded(value=>({...value,staged:!value.staged}))} onMenu={event=>setMenu({kind:'group',group:'staged',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="取消暂存所有更改" onClick={()=>void action('unstage.all')}><Icon name="remove"/></button></GitGroupHeader>{expanded.staged&&renderChanges(staged,'staged')}</section>}<section><GitGroupHeader title="更改" count={changed.length} expanded={expanded.changes} onToggle={()=>setExpanded(value=>({...value,changes:!value.changes}))} onMenu={event=>setMenu({kind:'group',group:'changes',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="放弃所有更改" onClick={()=>{if(confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。'))void action('discard.all')}}><Icon name="discard"/></button><button className="dvw-icon" title="暂存所有更改" onClick={()=>void action('stage.all')}><Icon name="add"/></button></GitGroupHeader>{expanded.changes&&renderChanges(changed,'worktree')}</section><section className="dvw-graph"><GitGroupHeader title="图表" count={commits.length} expanded={expanded.graph} onToggle={()=>setExpanded(value=>({...value,graph:!value.graph}))} onMenu={event=>setMenu({kind:'group',group:'graph',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="刷新提交图表" onClick={refreshLog}><Icon name="refresh"/></button></GitGroupHeader>{expanded.graph&&(commits.length===0?<div className="dvw-graph-empty">还没有提交</div>:<CommitGraph commits={commits} expanded={expandedCommit} files={commitFileMap} remotes={remotes} onToggle={graphOnToggle} onOpenFile={graphOnOpenFile} onMenu={graphOnMenu} onFileMenu={graphOnFileMenu}/>)}</section></div></>}{menu!==undefined&&<ContextMenu position={{x:menu.x,y:menu.y}} label={menuLabel} entries={menuEntries()} onClose={()=>setMenu(undefined)}/>}{commands.pickerElement}</>
 }

@@ -6,6 +6,8 @@ const CSS = String.raw`
 .codicon-layout-sidebar-right:before{content:"\ebf4"}.codicon-layout-sidebar-right-off:before{content:"\ec00"}.codicon-settings:before{content:"\eb51"}.codicon-split-horizontal:before{content:"\eb56"}.codicon-terminal:before{content:"\ea85"}
 /* 搜索面板用的字形：Aa / ab / .* / 保留大小写 / 单条替换 / 全部替换 / 更多选项 / 全部折叠 / 全部展开。 */
 .codicon-case-sensitive:before{content:"\eab1"}.codicon-whole-word:before{content:"\eb7e"}.codicon-regex:before{content:"\eb38"}.codicon-preserve-case:before{content:"\eb2e"}.codicon-replace:before{content:"\eb3d"}.codicon-replace-all:before{content:"\eb3c"}.codicon-ellipsis:before{content:"\ea7c"}.codicon-collapse-all:before{content:"\eac5"}.codicon-expand-all:before{content:"\eb95"}
+/* 提交图 / 存储 / 标记相关字形（Git 面板与 Git 输出标签页）。 */
+.codicon-graph:before{content:"\eb03"}.codicon-git-commit:before{content:"\eafc"}.codicon-git-merge:before{content:"\eafe"}.codicon-tag:before{content:"\ea66"}.codicon-archive:before{content:"\ea98"}.codicon-history:before{content:"\ea82"}
 /* 工作台显示期间，把 DSH 侧栏底部那个账户/设置入口整行收起来。
    那一行在 (10, 948)–(270, 990)，伸进工作台活动栏（x 0–48）；被 overlay 盖住后既收不到点击
    （命中测试落在活动栏上），里面的图标又会从接缝里透出来，看起来就是「两个图标重叠」。
@@ -232,6 +234,24 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-quickpick-meta{flex:none;font-size:11px;color:var(--dvw-text-3)}
 .dvw-quickpick-empty{padding:8px;font-size:12px;color:var(--dvw-text-3);text-align:center}
 .dvw-quickpick-create{color:var(--dvw-accent)}
+
+
+/* ---- 提交图标签页 / Git 输出标签页 / 按目录分组 ---- */
+.dvw-gittab{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--dvw-base)}
+.dvw-gittab-toolbar{flex:none;height:36px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--dvw-border-soft)}
+.dvw-gittab-branch{font-weight:600}
+.dvw-gittab-meta{font-size:12px;color:var(--dvw-text-3)}
+.dvw-gittab-actions{margin-left:auto;display:flex;align-items:center;gap:2px}
+.dvw-gittab-body{flex:1;min-height:0;overflow:auto;padding:4px 0}
+.dvw-gittab-empty{padding:28px;text-align:center;color:var(--dvw-text-3)}
+.dvw-gitout{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--dvw-base)}
+.dvw-gitout-toolbar{flex:none;height:34px;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid var(--dvw-border-soft);font-size:12px;color:var(--dvw-text-2)}
+.dvw-gitout-count{margin-left:auto;color:var(--dvw-text-3)}
+.dvw-gitout-list{flex:1;min-height:0;overflow:auto;padding:6px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.dvw-gitout-row{padding:2px 12px;white-space:pre-wrap;word-break:break-all;color:var(--dvw-text-2)}
+.dvw-gitout-row[data-error=true]{color:var(--dvw-error)}
+.dvw-gitout-empty{padding:20px;text-align:center;color:var(--dvw-text-3);font-family:inherit}
+.dvw-git-dir{padding:3px 8px 1px;font-size:11px;color:var(--dvw-text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 `
 

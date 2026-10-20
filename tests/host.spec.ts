@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { codiconAsset, compileSearchPattern, createEntry, gitAction, gitStatus, listFiles, matchCase, pdfWorkerAsset, readDocument, renameEntry, replaceInText, replaceInWorkspace, replaceSingleInText, resetGitRootCache, saveDocument, searchWorkspace, uploadFile, workspacePath, workspacePreviewFile, type ProcessRunner } from '../src/host.ts'
+import type { GitBranchList, GitStash, GitStatus, GitTag } from '../src/types.ts'
 
 const roots:string[]=[]
 async function temp(){const value=await mkdtemp(join(tmpdir(),'dvw-'));roots.push(value);return value}
@@ -341,6 +342,170 @@ describe('git panel actions', () => {
     expect(((await gitAction(root, 'log', undefined, '1')) as unknown[]).length).toBe(1)
     expect(((await gitAction(root, 'log.all')) as unknown[]).length).toBe(3)
     await expect(gitAction(root, 'push')).rejects.toMatchObject({ code: 'git-failed' })
+  })
+})
+
+describe('git stash', () => {
+  it('stashes the working tree with a message, lists it and pops it back', async () => {
+    const { root } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await writeFile(join(root, 'untracked.txt'), 'temporary\n')
+    await gitAction(root, 'stash.push', undefined, 'work in progress')
+    expect((await gitStatus(root)).changes).toEqual([])
+    const listed = (await gitAction(root, 'stash.list')) as GitStash[]
+    expect(listed).toHaveLength(1)
+    expect(listed[0]?.index).toBe(0)
+    // message 是 `%gs` 原文（`On <branch>: <说明>`），宿主不改写。
+    expect(listed[0]?.message).toContain('work in progress')
+    expect(listed[0]?.date).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    await gitAction(root, 'stash.pop', undefined, '0')
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('two\n')
+    expect(await readFile(join(root, 'untracked.txt'), 'utf8')).toBe('temporary\n')
+    expect((await gitAction(root, 'stash.list')) as GitStash[]).toEqual([])
+    await expect(gitAction(root, 'stash.apply', undefined, 'x')).rejects.toMatchObject({ code: 'bad-request' })
+  })
+
+  it('stashes only staged changes with the staged path and leaves the worktree dirty', async () => {
+    const { root } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'staged\n')
+    await gitAction(root, 'stage', 'a.txt')
+    await writeFile(join(root, 'b.txt'), 'unstaged\n')
+    await gitAction(root, 'stash.push', 'staged', 'only staged')
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('one\n') // 暂存区被清空
+    expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('unstaged\n') // 工作区仍有改动
+    const status = await gitStatus(root)
+    expect(status.changes).toMatchObject([{ path: 'b.txt', untracked: true }])
+    expect(status.changes.some(change => change.staged)).toBe(false)
+    expect(((await gitAction(root, 'stash.list')) as GitStash[])[0]?.message).toContain('only staged')
+  })
+})
+
+describe('git tags', () => {
+  it('creates, lists and deletes tags and rejects invalid names', async () => {
+    const { root, first } = await gitFixture()
+    await gitAction(root, 'tag.create', undefined, 'v1')
+    const tags = (await gitAction(root, 'tag.list')) as GitTag[]
+    expect(tags.map(tag => tag.name)).toEqual(['v1'])
+    expect(tags[0]?.subject).toBe('first')
+    // 轻量标签指向提交：短哈希就是第一个提交的前缀。
+    expect(first.startsWith(tags[0]!.hash)).toBe(true)
+    await gitAction(root, 'tag.create', first, 'pinned')
+    expect(((await gitAction(root, 'tag.list')) as GitTag[]).map(tag => tag.name).sort()).toEqual(['pinned', 'v1'])
+    await gitAction(root, 'tag.delete', undefined, 'v1')
+    await gitAction(root, 'tag.delete', undefined, 'pinned')
+    expect((await gitAction(root, 'tag.list')) as GitTag[]).toEqual([])
+    await expect(gitAction(root, 'tag.create', undefined, 'bad tag')).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'tag.delete', undefined, '-x')).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'tag.create', undefined, 'a..b')).rejects.toMatchObject({ code: 'bad-request' })
+    // 没有配置远程：推送单个标签或全部标签都必须报 git-failed，而不是假装成功。
+    await expect(gitAction(root, 'tag.push', undefined, 'v1')).rejects.toMatchObject({ code: 'git-failed' })
+    await expect(gitAction(root, 'tag.push', undefined, '')).rejects.toMatchObject({ code: 'git-failed' })
+  })
+})
+
+describe('git branch rename, merge and rebase', () => {
+  it('renames a branch and rejects invalid names', async () => {
+    const { root, original } = await gitFixture()
+    await gitAction(root, 'branch.create', undefined, 'temp')
+    await gitAction(root, 'branch.switch', undefined, original)
+    const status = (await gitAction(root, 'branch.rename', 'temp', 'renamed')) as GitStatus
+    expect(status.branch).toBe(original)
+    const list = (await gitAction(root, 'branch.list')) as GitBranchList
+    expect(list.local).toContain('renamed')
+    expect(list.local).not.toContain('temp')
+    await expect(gitAction(root, 'branch.rename', 'renamed', 'bad name')).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'branch.rename', '-x', 'fine')).rejects.toMatchObject({ code: 'bad-request' })
+  })
+
+  it('merges a branch into the current one and aborts a conflicted merge', async () => {
+    const { root, original } = await gitFixture()
+    await gitAction(root, 'branch.create', undefined, 'side')
+    await writeFile(join(root, 'side.txt'), 'side\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'side commit')
+    await gitAction(root, 'branch.switch', undefined, original)
+    const status = (await gitAction(root, 'merge', undefined, 'side')) as GitStatus
+    expect(status.changes).toEqual([])
+    expect(await readFile(join(root, 'side.txt'), 'utf8')).toBe('side\n')
+    expect(((await gitAction(root, 'log')) as Array<{ subject: string }>).map(commit => commit.subject)).toContain('side commit')
+    await expect(gitAction(root, 'merge', undefined, 'missing-branch')).rejects.toMatchObject({ code: 'git-failed' })
+    // 双方各改同一个文件 → 冲突：merge 报 git-failed，merge.abort 把工作区恢复干净。
+    await gitAction(root, 'branch.create', undefined, 'conflict')
+    await writeFile(join(root, 'side.txt'), 'branch side\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'conflict commit')
+    await gitAction(root, 'branch.switch', undefined, original)
+    await writeFile(join(root, 'side.txt'), 'main side\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'main side commit')
+    await expect(gitAction(root, 'merge', undefined, 'conflict')).rejects.toMatchObject({ code: 'git-failed' })
+    expect(((await gitAction(root, 'merge.abort')) as GitStatus).changes).toEqual([])
+    expect(await readFile(join(root, 'side.txt'), 'utf8')).toBe('main side\n')
+  })
+
+  it('rebases a branch onto another one', async () => {
+    const { root, original } = await gitFixture()
+    await gitAction(root, 'branch.create', undefined, 'side')
+    await writeFile(join(root, 'side.txt'), 'side\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'side commit')
+    await gitAction(root, 'branch.switch', undefined, original)
+    await writeFile(join(root, 'a.txt'), 'main change\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'main only')
+    await gitAction(root, 'branch.switch', undefined, 'side')
+    const status = (await gitAction(root, 'rebase', undefined, original)) as GitStatus
+    expect(status.branch).toBe('side')
+    expect(((await gitAction(root, 'log')) as Array<{ subject: string }>).map(commit => commit.subject)).toEqual(['side commit', 'main only', 'first'])
+  })
+})
+
+describe('git commit, remote and clone actions', () => {
+  it('commits every change in one action', async () => {
+    const { root } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await writeFile(join(root, 'untracked.txt'), 'new\n')
+    const status = (await gitAction(root, 'commit.all', undefined, 'commit all')) as GitStatus
+    expect(status.changes).toEqual([])
+    expect(((await gitAction(root, 'log')) as Array<{ subject: string }>)[0]?.subject).toBe('commit all')
+  })
+
+  it('undoes the last commit into the staging area', async () => {
+    const { root } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'second')
+    expect(((await gitAction(root, 'log')) as unknown[]).length).toBe(2)
+    const status = (await gitAction(root, 'commit.undo')) as GitStatus
+    expect(status.changes).toMatchObject([{ path: 'a.txt', staged: true }])
+    expect(((await gitAction(root, 'log')) as unknown[]).length).toBe(1)
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('two\n')
+  })
+
+  it('adds and removes remotes', async () => {
+    const { root } = await gitFixture()
+    expect(await gitAction(root, 'remotes')).toEqual([])
+    const added = (await gitAction(root, 'remote.add', 'origin', 'https://example.com/repo.git')) as string[]
+    expect(added).toEqual(['origin'])
+    expect(await gitAction(root, 'remotes')).toEqual(['origin'])
+    const removed = (await gitAction(root, 'remote.remove', undefined, 'origin')) as string[]
+    expect(removed).toEqual([])
+    expect(await gitAction(root, 'remotes')).toEqual([])
+    await expect(gitAction(root, 'remote.remove', undefined, 'origin')).rejects.toMatchObject({ code: 'git-failed' })
+    await expect(gitAction(root, 'remote.add', '', 'https://example.com/x.git')).rejects.toMatchObject({ code: 'bad-request' })
+  })
+
+  it('clones a repository into an empty workspace directory', async () => {
+    const source = await gitFixture()
+    const workspace = await temp()
+    await expect(gitAction(workspace, 'clone', 'cloned', source.root)).resolves.toEqual({ cloned: true })
+    // 克隆出的仓库按它自己的 core.autocrlf 检出，Windows 上可能是 CRLF。
+    expect((await readFile(join(workspace, 'cloned', 'a.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('one\n')
+    expect((await gitStatus(join(workspace, 'cloned'))).changes).toEqual([])
+    // 目标已存在时 git 自己报错，原样变成 git-failed；绝对路径与 `..` 在宿主侧就挡掉。
+    await expect(gitAction(workspace, 'clone', 'cloned', source.root)).rejects.toMatchObject({ code: 'git-failed' })
+    await expect(gitAction(workspace, 'clone', '../escape', source.root)).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(workspace, 'clone', join(workspace, 'absolute'), source.root)).rejects.toMatchObject({ code: 'bad-request' })
   })
 })
 
