@@ -118,6 +118,15 @@ export function truncateSuffix(suffix: string, params: CompletionParams): string
   return byLines.length > params.suffixChars ? byLines.slice(0, params.suffixChars) : byLines
 }
 
+/** 后缀块边界扫描的行数上限；请求裁剪也用它，保证两边看的是同一个后缀窗口。 */
+const SUFFIX_BLOCK_SCAN_LINES = 200
+
+/**
+ * 检索查询会看光标前多少行；必须与 retrieval.buildQuery 的 windowLines 默认值保持一致，
+ * 否则客户端裁剪后宿主检索看到的上下文会与全量文档不同。
+ */
+const RETRIEVAL_QUERY_LINES = 30
+
 /**
  * 从最近的同级代码块边界起截取后缀。
  *
@@ -126,7 +135,7 @@ export function truncateSuffix(suffix: string, params: CompletionParams): string
  */
 export function suffixFromBlockBoundary(suffix: string, currentIndent: number): string {
   const lines = suffix.split('\n')
-  for (let index = 1; index < Math.min(lines.length, 200); index++) {
+  for (let index = 1; index < Math.min(lines.length, SUFFIX_BLOCK_SCAN_LINES); index++) {
     const text = lines[index] ?? ''
     if (text.trim() === '') continue
     const indent = text.length - text.trimStart().length
@@ -163,12 +172,16 @@ export function truncateDocument(document: string, rewriteAt: { line: number; co
   let column = rewriteAt.column
   if (kept.length > params.documentChars) {
     // 字符超限：整行丢掉靠前的部分，行号换算因此仍然精确。
+    // 先算出要丢几行，再 join 一次：原来每丢一行都 join 一遍，长行文档上是 O(行数²) 的复制。
     const keptLines = kept.split('\n')
-    while (keptLines.length > 1 && kept.length > params.documentChars) {
-      keptLines.shift()
+    let startLine = 0
+    let remaining = kept.length
+    while (keptLines.length - startLine > 1 && remaining > params.documentChars) {
+      remaining -= (keptLines[startLine] ?? '').length + 1
+      startLine++
       droppedLines++
-      kept = keptLines.join('\n')
     }
+    kept = keptLines.slice(startLine).join('\n')
     // 极端情况：剩下的单行本身就超上限。此时保留该行尾部，并把列号按丢掉的字符数前移。
     if (kept.length > params.documentChars) {
       const cut = kept.length - params.documentChars
@@ -178,6 +191,118 @@ export function truncateDocument(document: string, rewriteAt: { line: number; co
     }
   }
   return { document: kept, rewriteAt: { line: Math.max(1, rewriteAt.line - droppedLines), column } }
+}
+
+/** 统计 \n 的个数，不构造数组。 */
+function countNewlines(text: string): number {
+  let count = 0
+  for (let index = 0; index < text.length; index++) if (text.charCodeAt(index) === 10) count++
+  return count
+}
+
+/** offset 所在行往前第 back 行的行首（back = 0 表示当前行行首）；越界返回 0。 */
+function lineStartBefore(text: string, offset: number, back: number): number {
+  let position = offset
+  for (let index = 0; index <= back; index++) {
+    if (position <= 0) return 0
+    const newline = text.lastIndexOf('\n', position - 1)
+    if (newline < 0) return 0
+    position = newline
+  }
+  return position + 1
+}
+
+/** 从 from 起完整包含 count 段（以 \n 分段）之后的位置；不足时返回文本末尾。 */
+function endOfLineParts(text: string, from: number, count: number): number {
+  let position = from
+  for (let index = 0; index < count; index++) {
+    const newline = text.indexOf('\n', position)
+    if (newline < 0) return text.length
+    position = newline + 1
+  }
+  return position
+}
+
+/** 客户端裁剪后的请求文档与光标位置。 */
+export interface CroppedRequestDocument {
+  document: string
+  /** 行号 1 起、列 1 起；被丢掉的整行会把行号前移。 */
+  rewriteAt: { line: number; column: number }
+  /** 是否真的裁过；false 表示原样发送（小文件或极端兜底）。 */
+  cropped: boolean
+  /** 为对齐光标而丢掉的前缀行数，便于观测。 */
+  droppedLines: number
+}
+
+/**
+ * 把随请求发送的文档裁成「光标附近窗口」。
+ *
+ * 宿主 `runCompletion` 会先对请求里的 document 做 `truncateDocument`，再交给 `assemblePrompt`
+ * 取前/后缀。这里先复用同一个 `truncateDocument` 得到宿主真正会看到的那段文档，再从里面切一个
+ * 更小的窗口，并同步换算 `rewriteAt`。这样宿主对收到的文档再裁一次是幂等的，
+ * `assemblePrompt` 算出的 prefix / suffix / prompt 与发送全量文档时逐字节相同（等价性由测试钉住）。
+ *
+ * 窗口取法：
+ *   - 前缀：至少覆盖 `prefixChars` 字符、`prefixLines` 行、`RETRIEVAL_QUERY_LINES` 行检索窗口
+ *     与光标所在行行首；行首是为了让 `assemblePrompt` 的 `indentOf(rawPrefix)` 不变。
+ *   - 后缀：覆盖前 `SUFFIX_BLOCK_SCAN_LINES` 段，让宿主的 `suffixFromBlockBoundary` 扫描
+ *     结果与全量文档一致；同时至少覆盖 `suffixChars` 字符。
+ *   - 单行超长文件：没有行可对齐，按字符裁剪并把列号前移。
+ *
+ * 已知残留差异（见报告）：检索查询依赖「光标前 30 行 + 当前行前缀」。当文档超长到宿主
+ * `truncateDocument` 的字符封顶把光标所在行挤出去（超长单行/极长行）时，检索 query 可能与
+ * 全量文档不同；补全 prompt 本身仍逐字节一致。安全扫描只作用于模型输出，不依赖文档。
+ */
+export function cropDocumentForRequest(document: string, rewriteAt: { line: number; column: number }, params: CompletionParams = DEFAULT_COMPLETION_PARAMS): CroppedRequestDocument {
+  // 小文件原样发送：窗口本身就是前后缀预算之和，不为几微秒改变请求形状。
+  if (document.length <= params.prefixChars + params.suffixChars) {
+    return { document, rewriteAt, cropped: false, droppedLines: 0 }
+  }
+
+  const truncated = truncateDocument(document, rewriteAt, params)
+  const offset = offsetAt(truncated.document, truncated.rewriteAt.line, truncated.rewriteAt.column)
+  // 列号从 1 起；列 0 是历史测试里的写法，按 offsetAt 的 max(0, column-1) 语义落回行首。
+  const lineStart = Math.max(0, offset - Math.max(0, truncated.rewriteAt.column - 1))
+  const singleLine = truncated.document.indexOf('\n') === -1
+
+  let start = Math.max(0, offset - params.prefixChars)
+  if (!singleLine) {
+    // 光标行行首：保证 indentOf(rawPrefix) 与全量文档一致（suffixFromBlockBoundary 依赖它）。
+    start = Math.min(start, lineStart)
+    const prefixLineCount = 1 + countNewlines(truncated.document.slice(0, offset))
+    if (prefixLineCount > params.prefixLines) {
+      start = Math.min(start, lineStartBefore(truncated.document, offset, Math.max(0, params.prefixLines - 1)))
+    }
+    start = Math.min(start, lineStartBefore(truncated.document, offset, RETRIEVAL_QUERY_LINES))
+  }
+  start = Math.max(0, start)
+
+  const suffixHasNewline = truncated.document.indexOf('\n', offset) !== -1
+  const wantedEnd = suffixHasNewline
+    ? Math.max(offset + params.suffixChars, endOfLineParts(truncated.document, offset, SUFFIX_BLOCK_SCAN_LINES))
+    : offset + params.suffixChars
+  const end = Math.min(truncated.document.length, Math.max(offset, wantedEnd))
+  let windowDocument = truncated.document.slice(start, end)
+  let windowStart = start
+  if (windowDocument.length === 0 || windowDocument.length > params.documentChars) {
+    // 极端参数/长行：裁掉的头寸有限，退回宿主本来就会看到的整段，保证行为完全一致。
+    windowDocument = truncated.document
+    windowStart = 0
+  }
+  if (windowStart === 0) {
+    return { document: windowDocument, rewriteAt: truncated.rewriteAt, cropped: windowDocument.length !== document.length, droppedLines: 0 }
+  }
+
+  let column = truncated.rewriteAt.column
+  // 只有单行超长的字符裁剪会切进光标所在行；此时列号随丢掉的字符前移，下限是 1。
+  if (windowStart > lineStart) column = Math.max(1, column - (windowStart - lineStart))
+  const droppedLines = countNewlines(truncated.document.slice(0, windowStart))
+  return {
+    document: windowDocument,
+    rewriteAt: { line: Math.max(1, truncated.rewriteAt.line - droppedLines), column },
+    cropped: true,
+    droppedLines,
+  }
 }
 
 /**

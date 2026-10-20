@@ -7,6 +7,7 @@
  */
 import { DEFAULT_COMPLETION_PARAMS, debounceFor, type CompletionParams } from '../completion/params.ts'
 import { parseSse, type CompletionEvent, type CompletionRequest, type EditHistoryEntry } from '../completion/protocol.ts'
+import { cropDocumentForRequest } from '../completion/prompt.ts'
 import {
   DEFAULT_FILTER_OPTIONS,
   filterCandidates,
@@ -141,13 +142,18 @@ export class CompletionClient {
    * 发一次补全请求并把流读完。
    *
    * 取消分两处生效：调用方的信号传给 fetch（连接真的被中止），循环里也不再消费后续增量。
+   *
+   * `params` 是本会话生效的裁剪预算（服务端可能按实验分组覆盖默认值）。请求体里的 document
+   * 只带光标附近的窗口，`rewriteAt` 同步换算；本地过滤/后处理仍用完整的 `input.document`，
+   * 因此候选去重与括号补全这类逻辑不受裁剪影响。
    */
-  async suggest(input: SuggestInput): Promise<CompletionResponse> {
+  async suggest(input: SuggestInput, params: CompletionParams = this.params): Promise<CompletionResponse> {
     const key = contextFingerprint(input)
     const cached = this.cache
     if (cached !== undefined && cached.key === key && this.now() - cached.at <= this.cacheTtlMs) return cached.response
 
     const requestedAt = this.now()
+    const requestDocument = cropDocumentForRequest(input.document, input.rewriteAt, params)
     const body: CompletionRequest = {
       sessionId: this.options.sessionId,
       environment: { ideVersion: 'dsh-workbench', extensionVersion: '0.2.5', region: '', channel: 'desktop', repository: '', ...(this.options.environment ?? {}) },
@@ -156,8 +162,8 @@ export class CompletionClient {
       edits: input.edits ?? [],
       cursor: {
         filePath: input.filePath,
-        rewriteAt: input.rewriteAt,
-        document: input.document,
+        rewriteAt: requestDocument.rewriteAt,
+        document: requestDocument.document,
         // 宿主按它判定「回滚编辑」「刚编辑却建议删除」，并在 prompt 里带上编辑历史。
         ...(input.lastEdit === undefined ? {} : { lastEdit: input.lastEdit }),
       },

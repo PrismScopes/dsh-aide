@@ -308,6 +308,41 @@ describe('accept granularity', () => {
     expect(sent.at(-1)?.lastEdit).toEqual({ before: '3', after: '' })
   })
 
+  it('passes the server params into suggest so the request window uses the same budgets', async () => {
+    // 服务端按实验分组下发 prefixChars/suffixChars；控制器必须把这份 params 交给 suggest，
+    // 否则客户端裁剪会退回本地默认值，与宿主实际使用的预算不一致。
+    const params: CompletionParams = { ...DEFAULT_COMPLETION_PARAMS, prefixChars: 111, suffixChars: 222 }
+    const calls: Array<[unknown, CompletionParams | undefined]> = []
+    const model = {
+      uri: { path: '/a.ts' },
+      getLanguageId: () => 'typescript',
+      getValue: () => 'const value = useSt',
+      getOffsetAt: (position: { column: number }) => position.column - 1,
+    }
+    const controller = new InlineCompletionController({
+      client: {
+        suggest: async (input: unknown, received?: CompletionParams) => {
+          calls.push([input, received])
+          return { candidates: [], finishReason: 'done', masked: false, timing: { requestedAt: 0 } }
+        },
+        recordAccept: () => undefined,
+      } as unknown as CompletionClient,
+      params,
+      controllerId: 'window-params-test',
+      kinds: { automatic: 0 as unknown as monaco.languages.InlineCompletionTriggerKind, explicit: 1 as unknown as monaco.languages.InlineCompletionTriggerKind },
+      emptyRangeAt: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } as unknown as monaco.Range),
+      editor: { getModel: () => model, getPosition: () => ({ lineNumber: 1, column: 1 }), executeEdits: () => undefined } as unknown as monaco.editor.IStandaloneCodeEditor,
+    })
+    await controller.provide(
+      model as unknown as monaco.editor.ITextModel,
+      { lineNumber: 1, column: 3 } as unknown as monaco.Position,
+      { triggerKind: 1 } as unknown as monaco.languages.InlineCompletionContext,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) } as unknown as monaco.CancellationToken,
+    )
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.[1]).toMatchObject({ prefixChars: 111, suffixChars: 222 })
+  })
+
   it('reports shown, accepted and cancelled through the telemetry hook', async () => {
     // 采样点必须真的接上：采纳率的分母是展示次数，取消率来自在途请求被变更作废。
     const reported: Array<{ kind: string; candidateCount?: number; firstByteMs?: number; model?: string; experiment?: string }> = []
@@ -580,5 +615,65 @@ describe('completion client', () => {
     const failing = vi.fn(async () => new Response('nope', { status: 500 }))
     const failingClient = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl: failing })
     await expect(failingClient.suggest(input())).rejects.toThrow('completion request failed: 500')
+  })
+
+  it('sends only a cursor window for a 1MB document while keeping the local document intact', async () => {
+    const line = 'const value_{i} = computeSomething(alpha, beta, gamma) // 普通代码行'
+    const lines: string[] = []
+    let size = 0
+    for (let index = 0; size < 1024 * 1024; index++) {
+      const text = line.replace('{i}', String(index))
+      lines.push(text)
+      size += text.length + 1
+    }
+    const document = lines.join('\n')
+    const rewriteAt = { line: Math.floor(lines.length / 2) + 1, column: 20 }
+    let body: { cursor: { document: string; rewriteAt: { line: number; column: number } } } | undefined
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body))
+      return streamResponse(events({ type: 'output', candidates: [{ index: 0, text: 'ate', finishReason: '', elapsedMs: 1 }] }, { type: 'done' }))
+    })
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
+    const result = await client.suggest(input({ document, rewriteAt }))
+    expect(result.candidates).toEqual(['ate'])
+    expect(body).toBeDefined()
+    expect(body!.cursor.document.length).toBeLessThan(document.length / 10)
+    // 请求里的行列换算后仍指向同一位置：裁剪掉的是前面的行。
+    expect(body!.cursor.rewriteAt.line).toBeLessThan(rewriteAt.line)
+    const cursorLine = body!.cursor.document.split('\n')[body!.cursor.rewriteAt.line - 1] ?? ''
+    expect(cursorLine.slice(0, body!.cursor.rewriteAt.column - 1)).toMatch(/const value_/)
+    // 本地过滤/后处理仍然用完整文档，候选处理结果不受请求裁剪影响。
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a small document request body byte-identical', async () => {
+    let body: { cursor: { document: string; rewriteAt: { line: number; column: number } } } | undefined
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body))
+      return streamResponse(events({ type: 'done' }))
+    })
+    const client = new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl })
+    const small = input()
+    await client.suggest(small)
+    expect(body!.cursor.document).toBe(small.document)
+    expect(body!.cursor.rewriteAt).toEqual(small.rewriteAt)
+  })
+
+  it('honours the params passed to suggest when sizing the request window', async () => {
+    const line = 'const value = computeSomething(alpha, beta, gamma)'
+    const document = Array.from({ length: 2000 }, (_value, index) => `${line} // ${index}`).join('\n')
+    const rewriteAt = { line: 1000, column: 20 }
+    const capture = async (params: CompletionParams): Promise<number> => {
+      let body: { cursor: { document: string } } | undefined
+      const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body))
+        return streamResponse(events({ type: 'done' }))
+      })
+      await new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl }).suggest(input({ document, rewriteAt }), params)
+      return body!.cursor.document.length
+    }
+    const wide = await capture({ ...DEFAULT_COMPLETION_PARAMS, prefixChars: 7000 })
+    const narrow = await capture({ ...DEFAULT_COMPLETION_PARAMS, prefixChars: 200 })
+    expect(narrow).toBeLessThan(wide)
   })
 })

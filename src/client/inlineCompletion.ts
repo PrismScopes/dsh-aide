@@ -73,8 +73,9 @@ const MAX_EDIT_TRACK_CHARS = 400_000
 /**
  * 把 1 起的行号列号换算成字符偏移。
  *
- * 客户端不引用宿主的模块（那会把整个 prompt 组装拉进浏览器包），所以这里是同一约定的小实现：
- * 行列都从 1 起，与 Monaco 位置、与协议一致。
+ * 请求裁剪会复用宿主 `prompt.ts` 里的纯函数（见 completion.ts 的 suggest）：两边对「行列
+ * 从 1 起」的约定必须一致。这个函数留在本地，是因为编辑历史的按键路径只需要最小换算，
+ * 不必再引入其它宿主模块。
  */
 function offsetOfPosition(text: string, line: number, column: number): number {
   const lines = text.split('\n')
@@ -293,7 +294,9 @@ export class InlineCompletionController {
 
     // 请求前预过滤（文档 6.4 的请求前一道）：命中拦截规则就什么都不发，
     // 而不是发出去再让服务端拦 —— 那时代码已经离开本机了。
-    if (evaluateSecurity(model.getValue(), this.securityRules)?.action === 'block') return undefined
+    // 大文档取一次整篇就是一次 O(长度) 复制：安全预过滤与请求裁剪共用同一份。
+    const document = model.getValue()
+    if (evaluateSecurity(document, this.securityRules)?.action === 'block') return undefined
 
     const controller = new AbortController()
     this.inFlight = controller
@@ -303,12 +306,12 @@ export class InlineCompletionController {
       response = await this.options.client.suggest({
         filePath: model.uri.path.replace(/^\//, ''),
         language,
-        document: model.getValue(),
+        document,
         // 原样传 Monaco 的位置：协议约定行列都从 1 起，换算只发生在宿主一侧（见 protocol.ts）。
         rewriteAt: { line: position.lineNumber, column: position.column },
         ...(this.lastEdit === undefined ? {} : { lastEdit: this.lastEdit }),
         signal: controller.signal,
-      })
+      }, params)
     } catch (error) {
       if (controller.signal.aborted) return undefined
       // 上游失败要留痕：否则界面上只表现为「没有补全」，第二天只能靠猜（文档 4.3 的用途是问题定位）。

@@ -4,7 +4,9 @@ import { encodeSseEvent, parseSse, type CompletionEvent } from '../src/completio
 import {
   assembleContext,
   assemblePrompt,
+  cropDocumentForRequest,
   CURSOR_MARKER,
+  DEFAULT_PROMPT_PROFILE,
   FIM_MARKERS,
   INSTRUCTION_PROMPT_PROFILE,
   offsetAt,
@@ -29,6 +31,7 @@ import {
   type FilterState,
 } from '../src/completion/filter.ts'
 import { identifiersStartingWith, localCompletion, trailingIdentifier, unclosedClosers } from '../src/completion/provider.ts'
+import { buildQuery } from '../src/completion/retrieval.ts'
 import { runCompletion } from '../src/completion/service.ts'
 
 describe('prefix overlap', () => {
@@ -159,6 +162,106 @@ describe('prompt assembly', () => {
     expect(lines.length).toBe(100)
     // 换算后的行号必须仍然指向同一行文本。
     expect(lines[truncated.rewriteAt.line - 1]).toBe('line 899')
+  })
+
+  it('drops whole lines at the character cap while keeping the cursor line intact', () => {
+    // 字符封顶（documentChars）按整行从头丢：丢多少行就必须把行号前移多少。
+    const document = Array.from({ length: 700 }, (_value, index) => `line${index} ${'x'.repeat(200)}`).join('\n')
+    const truncated = truncateDocument(document, { line: 680, column: 4 }, { ...DEFAULT_COMPLETION_PARAMS, documentLines: 700, documentChars: 30_000 })
+    expect(truncated.document.length).toBeLessThanOrEqual(30_000)
+    expect(truncated.document.split('\n')[truncated.rewriteAt.line - 1]).toBe(`line679 ${'x'.repeat(200)}`)
+    expect(truncated.rewriteAt.column).toBe(4)
+    expect(truncated.rewriteAt.line).toBeLessThan(680)
+  })
+})
+
+describe('request document cropping', () => {
+  const params = DEFAULT_COMPLETION_PARAMS
+  // 约 1MB 的普通代码文档：每行长度固定，便于把窗口预算写成可断言的公式。
+  const line = 'const value_{i} = computeSomething(alpha, beta, gamma) // 普通代码行'
+  const lines: string[] = []
+  let size = 0
+  for (let index = 0; size < 1024 * 1024; index++) {
+    const text = line.replace('{i}', String(index))
+    lines.push(text)
+    size += text.length + 1
+  }
+  const bigDocument = lines.join('\n')
+  const cursor = { line: Math.floor(lines.length / 2) + 1, column: 20 }
+
+  /** 宿主实际走的链路：先 truncateDocument，再 assemblePrompt。 */
+  const promptThroughHost = (document: string, rewriteAt: { line: number; column: number }, profile: PromptProfile) => {
+    const truncated = truncateDocument(document, rewriteAt, params)
+    return assemblePrompt({ filePath: 'src/a.ts', language: 'typescript', document: truncated.document, rewriteAt: truncated.rewriteAt }, params, profile)
+  }
+
+  it('produces byte-identical prefix, suffix and prompt to sending the full document', () => {
+    const cropped = cropDocumentForRequest(bigDocument, cursor, params)
+    for (const profile of [DEFAULT_PROMPT_PROFILE, INSTRUCTION_PROMPT_PROFILE]) {
+      const full = promptThroughHost(bigDocument, cursor, profile)
+      const after = promptThroughHost(cropped.document, cropped.rewriteAt, profile)
+      expect(after.prefix).toBe(full.prefix)
+      expect(after.suffix).toBe(full.suffix)
+      expect(after.prompt).toBe(full.prompt)
+    }
+    // 请求体从 1MB 降到「前缀预算 + 后缀 200 段扫描余量」量级。
+    const maxLineLength = Math.max(...lines.map(text => text.length))
+    const suffixScanMargin = 200 * (maxLineLength + 1)
+    expect(cropped.cropped).toBe(true)
+    expect(cropped.document.length).toBeLessThanOrEqual(params.prefixChars + suffixScanMargin + maxLineLength)
+    expect(cropped.document.length).toBeLessThan(bigDocument.length / 10)
+  })
+
+  it('keeps the cropped rewriteAt pointing at the same character position', () => {
+    const cropped = cropDocumentForRequest(bigDocument, cursor, params)
+    const fullOffset = offsetAt(bigDocument, cursor.line, cursor.column)
+    const croppedOffset = offsetAt(cropped.document, cropped.rewriteAt.line, cropped.rewriteAt.column)
+    // 光标两侧的字符必须与全量文档一致，否则宿主 prefix/suffix 会错位。
+    expect(cropped.document.slice(croppedOffset - 40, croppedOffset)).toBe(bigDocument.slice(fullOffset - 40, fullOffset))
+    expect(cropped.document.slice(croppedOffset, croppedOffset + 40)).toBe(bigDocument.slice(fullOffset, fullOffset + 40))
+    expect(cropped.droppedLines).toBeGreaterThan(0)
+    expect(cropped.rewriteAt.line).toBeLessThan(cursor.line)
+  })
+
+  it('leaves documents that already fit the window untouched', () => {
+    const document = 'const a = 1\nconst b = 2'
+    const cropped = cropDocumentForRequest(document, { line: 2, column: 8 }, params)
+    expect(cropped.cropped).toBe(false)
+    expect(cropped.document).toBe(document)
+    expect(cropped.rewriteAt).toEqual({ line: 2, column: 8 })
+  })
+
+  it('handles an overlong single line by shifting the column instead of the line', () => {
+    const document = 'x'.repeat(1024 * 1024)
+    const rewriteAt = { line: 1, column: 500_000 }
+    const cropped = cropDocumentForRequest(document, rewriteAt, params)
+    expect(cropped.document.length).toBeLessThanOrEqual(params.prefixChars + params.suffixChars)
+    expect(cropped.rewriteAt.line).toBe(1)
+    const full = promptThroughHost(document, rewriteAt, DEFAULT_PROMPT_PROFILE)
+    const after = promptThroughHost(cropped.document, cropped.rewriteAt, DEFAULT_PROMPT_PROFILE)
+    expect(after.prefix).toBe(full.prefix)
+    expect(after.suffix).toBe(full.suffix)
+    expect(after.prompt).toBe(full.prompt)
+  })
+
+  it('stays equivalent when the character cap has already dropped lines', () => {
+    // documentChars 封顶会丢掉前面若干行；裁剪窗口从宿主实际保留的段落里切，prompt 仍须一致。
+    const document = Array.from({ length: 700 }, (_value, index) => `line${index} ${'x'.repeat(200)}`).join('\n')
+    const rewriteAt = { line: 680, column: 4 }
+    const cropped = cropDocumentForRequest(document, rewriteAt, params)
+    for (const profile of [DEFAULT_PROMPT_PROFILE, INSTRUCTION_PROMPT_PROFILE]) {
+      const full = promptThroughHost(document, rewriteAt, profile)
+      const after = promptThroughHost(cropped.document, cropped.rewriteAt, profile)
+      expect(after.prefix).toBe(full.prefix)
+      expect(after.suffix).toBe(full.suffix)
+      expect(after.prompt).toBe(full.prompt)
+    }
+  })
+
+  it('keeps the retrieval query identical for a normal large document', () => {
+    // 检索只看光标前 30 行 + 当前行前缀；窗口必须完整覆盖它，否则注入的片段会变。
+    const cropped = cropDocumentForRequest(bigDocument, cursor, params)
+    expect(buildQuery(cropped.document, cropped.rewriteAt.line, cropped.rewriteAt.column)).toBe(buildQuery(bigDocument, cursor.line, cursor.column))
   })
 })
 
