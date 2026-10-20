@@ -39,6 +39,13 @@ interface XtermViewProps {
   id: string
   colorScheme: 'dark' | 'light'
   /**
+   * 当前窗格是否显示。
+   *
+   * 不显示的窗格**不销毁**：切标签时把实例留在 DOM 里（hidden），回来时不需要重建 xterm、
+   * 也不需要宿主重放输出。终端的回放按 1000 行/256 KiB 裁剪，重建一次就要重新解析一遍。
+   */
+  hidden: boolean
+  /**
    * 把 xterm 实例交给父组件。
    *
    * 为什么由子组件上报而不是父层自己 new：实例的生命周期绑定在 DOM 挂载上，只有这里知道
@@ -50,7 +57,7 @@ interface XtermViewProps {
   onContextMenu(id: string, position: { x: number; y: number }): void
 }
 
-function XtermView({ workspace, id, colorScheme, onReady, onContextMenu }: XtermViewProps) {
+function XtermView({ workspace, id, colorScheme, hidden, onReady, onContextMenu }: XtermViewProps) {
   const root = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal>()
   // 字号是设置页里的偏好（默认 13）；实例建立后改设置也要立刻生效，所以要留 fit 的引用重新适配。
@@ -110,6 +117,12 @@ function XtermView({ workspace, id, colorScheme, onReady, onContextMenu }: Xterm
     }
   }, [workspace, id, onReady])
   useEffect(() => { if (terminalRef.current !== undefined) terminalRef.current.options.theme = terminalTheme(colorScheme) }, [colorScheme])
+  // 切回来时容器从 display:none 变回有尺寸：ResizeObserver 会触发一次 fit，这里再做一次焦点回收。
+  useEffect(() => {
+    if (hidden) return
+    try { fitRef.current?.fit() } catch { /* 面板还没拿到尺寸，下一次 ResizeObserver 会再试。 */ }
+    try { terminalRef.current?.focus() } catch { /* 终端即将卸载时 focus 可能失败，忽略。 */ }
+  }, [hidden])
   // 字号来自设置页：xterm 实例常驻，改 options 后重新 fit 即可，不必重开终端（重开会丢回放缓冲）。
   useEffect(() => {
     const terminal = terminalRef.current
@@ -120,7 +133,7 @@ function XtermView({ workspace, id, colorScheme, onReady, onContextMenu }: Xterm
   if (error !== undefined) return <div className="dvw-terminal-error">{error}</div>
   // 内容区右键：xterm 自己也会处理 contextmenu（默认弹出浏览器菜单），这里统一 preventDefault，
   // 改由工作台的共享菜单接管。终端专属的复制/粘贴走菜单项，不再依赖浏览器原生菜单。
-  return <div ref={root} className="dvw-terminal-host" onContextMenu={event => { event.preventDefault(); onContextMenu(id, { x: event.clientX, y: event.clientY }) }} />
+  return <div ref={root} className="dvw-terminal-host" hidden={hidden} onContextMenu={event => { event.preventDefault(); onContextMenu(id, { x: event.clientX, y: event.clientY }) }} />
 }
 
 /** Render interactive terminal tabs in the workbench bottom panel. */
@@ -138,13 +151,27 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
   const [actionError, setActionError] = useState<string>()
   /** 已挂载的 xterm 实例，key 是终端 id；未显示的窗格不在里面（它没有被渲染，也就没有实例）。 */
   const terminals = useRef(new Map<string, Terminal>())
+  /**
+   * 已经建过 xterm 实例的终端 id。
+   *
+   * 切标签/收起面板时不销毁实例：回来的那一刻直接显示，不需要重建 xterm，也不需要宿主
+   * 重新回放 scrollback。只在终端被关闭（从 snapshot 里消失）时剔除。
+   */
+  const [opened, setOpened] = useState<readonly string[]>([])
+  /** 已发出、宿主还没返回的新建请求数：先给一个占位窗格，点击后不会看起来毫无反应。 */
+  const [pending, setPending] = useState(0)
 
   const reportError = (error: unknown) => setActionError(error instanceof Error ? error.message : String(error))
 
   /** 建终端（可能来自右键菜单、面板头按钮或队列）。directory/title/profile 原样透传给宿主。 */
   const createTerminal = useCallback((request: TerminalRequest) => {
     setActionError(undefined)
-    void workspace.create(request).then(value => setActive(value.id)).catch(reportError)
+    // 占位窗格在请求发出前就显示：到提示符之间还有 pty 启动与 shell 初始化，不给反馈会像卡住。
+    setPending(value => value + 1)
+    void workspace.create(request)
+      .then(value => setActive(value.id))
+      .catch(reportError)
+      .finally(() => setPending(value => Math.max(0, value - 1)))
   }, [workspace])
 
   /**
@@ -201,6 +228,15 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
   // 兜底不变量：只要还有终端，就必须有一个窗格在渲染 —— 状态一旦错位，面板会整块空白。
   const panes = (split ?? (active === undefined ? [] : [active])).filter(id => snapshot.terminals.some(value => value.id === id))
   const shown = panes.length > 0 || snapshot.terminals.length === 0 ? panes : snapshot.terminals.slice(0, 1).map(value => value.id)
+  // 实例常驻：跨终端/跨显示的并集。显示与否只由 hidden 决定，不触发 xterm 重建。
+  const shownKey = shown.join('\n')
+  useEffect(() => {
+    setOpened(current => {
+      const alive = current.filter(id => snapshot.terminals.some(value => value.id === id))
+      const next = [...alive, ...shown.filter(id => !alive.includes(id))]
+      return next.length === current.length && next.every((id, index) => id === current[index]) ? current : next
+    })
+  }, [shownKey, snapshot.terminals])
   const selectTerminal = (id: string) => { setActive(id); setSplit(current => current?.includes(id) ? current : [id]) }
   const startRename = (id: string, title: string, where: 'tab' | 'list') => setRenaming({ id, value: title, where })
   /** 右键菜单的操作对象：菜单打开时记下的终端 id，动作再回到实例 Map / 列表里取。 */
@@ -250,7 +286,12 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
     {header !== undefined && header !== null && createPortal(tabs, header)}
     <div className="dvw-terminal-main">
       {error !== undefined && <div className="dvw-terminal-error">{error}</div>}
-      <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>{snapshot.terminals.length === 0 ? <div className="dvw-terminal-empty">没有找到终端</div> : shown.map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} onReady={registerTerminal} onContextMenu={openPaneMenu} />)}</div>
+      <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>
+        {snapshot.terminals.length === 0 && pending === 0
+          ? <div className="dvw-terminal-empty">没有找到终端</div>
+          : [...new Set([...opened, ...shown])].map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} hidden={!shown.includes(id)} onReady={registerTerminal} onContextMenu={openPaneMenu} />)}
+        {pending > 0 && <div className="dvw-terminal-pending" role="status">正在启动终端…</div>}
+      </div>
     </div>
     <div className="dvw-terminal-resizer" role="separator" aria-label="终端列表宽度" aria-orientation="vertical" onPointerDown={event => {
       if (event.button !== 0) return

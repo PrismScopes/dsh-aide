@@ -142,9 +142,31 @@ export class TerminalWorkspaceController implements TerminalWorkspace {
     } catch (error) { this.set({ ...this.snapshot, loading: false, error: error instanceof Error ? error.message : String(error) }) }
   }
 
-  async create(options: { title?: string; profile?: string; directory?: string } = {}): Promise<TerminalInfo> { const answer = await request<TerminalInfo>('create', { sessionId: this.sessionId, ...(options.title === undefined ? {} : { title: options.title }), ...(options.profile === undefined ? {} : { profile: options.profile }), ...(options.directory === undefined || options.directory === '' ? {} : { directory: options.directory }) }); this.wsBase = answer.wsBase ?? this.wsBase; await this.refresh(); return answer.value }
-  async close(id: string): Promise<void> { await request('close', { sessionId: this.sessionId, id }); await this.refresh() }
-  async rename(id: string, title: string): Promise<void> { await request('rename', { sessionId: this.sessionId, id, title }); await this.refresh() }
+  /**
+   * 新建终端。
+   *
+   * 宿主已经把新终端的信息随应答带回来了，直接并进本地快照 —— 原先这里再 await 一次
+   * list，于是「点新建」要等两个串行往返才开始渲染窗格；而列表顺序就是宿主的插入顺序，
+   * 追加到末尾与刷新结果一致。
+   */
+  async create(options: { title?: string; profile?: string; directory?: string } = {}): Promise<TerminalInfo> {
+    const answer = await request<TerminalInfo>('create', { sessionId: this.sessionId, ...(options.title === undefined ? {} : { title: options.title }), ...(options.profile === undefined ? {} : { profile: options.profile }), ...(options.directory === undefined || options.directory === '' ? {} : { directory: options.directory }) })
+    this.wsBase = answer.wsBase ?? this.wsBase
+    this.set({ terminals: [...this.snapshot.terminals, answer.value], loading: false })
+    return answer.value
+  }
+  /** 关闭终端。宿主带回了关闭之后的完整列表，直接采用，不再补一次 refresh。 */
+  async close(id: string): Promise<void> {
+    const answer = await request<TerminalInfo[]>('close', { sessionId: this.sessionId, id })
+    this.wsBase = answer.wsBase ?? this.wsBase
+    this.set({ terminals: answer.value, loading: false })
+  }
+  /** 重命名：就地替换快照里的同 id 条目。 */
+  async rename(id: string, title: string): Promise<void> {
+    const answer = await request<TerminalInfo>('rename', { sessionId: this.sessionId, id, title })
+    this.wsBase = answer.wsBase ?? this.wsBase
+    this.set({ terminals: this.snapshot.terminals.map(value => value.id === answer.value.id ? answer.value : value), loading: false })
+  }
   connect(id: string): TerminalConnection { return new SocketConnection(this.sessionId, id, this.wsBase) }
   getSnapshot(): TerminalWorkspaceSnapshot { return this.snapshot }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
