@@ -14,7 +14,11 @@ import { join } from 'node:path'
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib'
 import { round, stats, toErrorRecord } from './util.mjs'
 
-const TARGET_FILES = ['lib/client.js', 'lib/client.js.map', 'lib/index.js', 'lib/index.js.map']
+const TARGET_FILES = [
+  'lib/client.js', 'lib/client.js.map', 'lib/index.js', 'lib/index.js.map',
+  // 冷启动拆分后的按需 chunk：只跟踪体积，不计入首包。
+  'lib/client.pdf.js', 'lib/client.docx.js',
+]
 const TOP_PACKAGES = 15
 
 function sha256(buffer) {
@@ -187,6 +191,9 @@ export async function runBundleSuite({ repoRoot, rounds }) {
   }
 
   const totalBundleBytes = ['lib/client.js', 'lib/index.js'].reduce((sum, file) => sum + (files[file]?.bytes ?? 0), 0)
+  // chunk 只在打开 PDF/DOCX 时下载：单独记账，避免把首包体积算大。
+  const chunkFiles = ['lib/client.pdf.js', 'lib/client.docx.js']
+  const totalChunkBytes = chunkFiles.reduce((sum, file) => sum + (files[file]?.bytes ?? 0), 0)
 
   return {
     suite: 'bundle',
@@ -199,6 +206,7 @@ export async function runBundleSuite({ repoRoot, rounds }) {
     },
     files,
     totalBundleBytes,
+    totalChunkBytes,
     compile,
     sourcemaps,
     errors,

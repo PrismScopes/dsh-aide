@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { loadClientChunk } from './chunk-loader.ts'
 
 export type DocumentPreviewKind = 'pdf' | 'docx' | 'download'
 
@@ -19,6 +20,11 @@ export function documentPreviewKind(path: string): DocumentPreviewKind | undefin
   return undefined
 }
 
+/** docx-preview 的 renderAsync 形状；渲染栈在 `client.docx.js` chunk 里。 */
+interface DocxRenderer {
+  renderAsync(blob: Blob, container: HTMLElement, styleContainer?: HTMLElement, options?: { inWrapper?: boolean; ignoreWidth?: boolean; ignoreHeight?: boolean }): Promise<void>
+}
+
 function DocxPreview({ src }: { src: string }) {
   const root = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string>()
@@ -31,7 +37,7 @@ function DocxPreview({ src }: { src: string }) {
       try {
         const response = await fetch(src, { signal: controller.signal })
         if (!response.ok) throw new Error(`无法读取文档 (${response.status})`)
-        const { renderAsync } = await import('docx-preview')
+        const { renderAsync } = await loadClientChunk<DocxRenderer>('client.docx.js')
         if (controller.signal.aborted) return
         target.replaceChildren()
         await renderAsync(await response.blob(), target, undefined, { inWrapper: false, ignoreWidth: false, ignoreHeight: false })
@@ -50,6 +56,9 @@ type PdfDocument = {
   destroy(): void
 }
 
+/** pdfjs 模块形状；渲染栈在 `client.pdf.js` chunk 里，worker 仍由宿主路由提供。 */
+type PdfJs = typeof import('pdfjs-dist/build/pdf.min.mjs')
+
 function PdfPreview({ src, path }: { src: string; path: string }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const documentRef = useRef<PdfDocument>()
@@ -64,10 +73,10 @@ function PdfPreview({ src, path }: { src: string; path: string }) {
     setPage(1); setPages(0); setError(undefined)
     void (async () => {
       try {
+        // 渲染栈按需从 chunk 加载：PDF 相关代码不再进首包。
         // 用现代压缩版：legacy 是为旧浏览器准备的，而这里跑在 Electron / Chrome 上，
-        // 不需要那层兼容；两者 API 等价，现代压缩版让这份依赖从 783KB 降到 344KB。
-        // 压缩版没有自己的类型声明，借 legacy 那份（同一套 API）。
-        const pdfjs = await import('pdfjs-dist/build/pdf.min.mjs') as typeof import('pdfjs-dist/legacy/build/pdf.mjs')
+        // 不需要那层兼容；两者 API 等价。
+        const { pdfjs } = await loadClientChunk<{ pdfjs: PdfJs }>('client.pdf.js')
         pdfjs.GlobalWorkerOptions.workerSrc = '/dsh-vscode/pdfjs/worker.mjs'
         document = await pdfjs.getDocument(src).promise as PdfDocument
         if (cancelled) { document.destroy(); return }
