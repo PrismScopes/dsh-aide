@@ -52,12 +52,15 @@ const outPath = path.join(projectRoot, 'src', 'client', 'fileIcons.ts')
 // --check：CI 里用来防止「升级 material-icon-theme 后忘了重新生成」。只比较，不写盘。
 if (process.argv.includes('--check')) {
   const current = fs.existsSync(outPath) ? fs.readFileSync(outPath, 'utf8') : ''
-  if (current === banner) {
+  // Windows CI 的 core.autocrlf 会把工作区里的 LF 换成 CRLF：生成物是 LF 文本，
+  // 比较前统一换行符，否则同一个文件在 Linux 上通过、在 Windows 上误报 stale。
+  const normalized = current.replace(/\r\n/g, '\n')
+  if (normalized === banner) {
     console.log(`file icons are up to date (${path.relative(projectRoot, outPath)})`)
     process.exit(0)
   }
   console.error(`file icons are stale: run node scripts/generate-file-icons.mjs`)
-  console.error(`  expected ${banner.length} bytes, found ${current.length} bytes`)
+  console.error(`  expected ${banner.length} bytes, found ${normalized.length} bytes`)
   process.exit(1)
 }
 
