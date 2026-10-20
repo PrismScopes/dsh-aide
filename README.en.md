@@ -38,7 +38,7 @@
 - **Files and editor**: lazy explorer with create, upload, drag-and-drop, rename, delete, and Git markers; Monaco tabs provide dirty state, atomic saves, and conflict notices.
 - **Preview**: Markdown source, outline, relative links, and images; built-in PDF paging and zoom plus DOCX rendering, with DOC/ODT download support.
 - **Search and Git**: `@vscode/ripgrep` supports case, whole-word, regex, and path filters; Git covers stage, unstage, discard, commit, branches, diffs, commit files, and the graph.
-- **Terminal**: `node-pty` and xterm with up to eight sessions, rename, a right-side switcher, splits, ANSI output, and Ctrl+C.
+- **Terminal**: `node-pty` and xterm with up to eight sessions, rename, a right-side switcher, splits, ANSI output, and Ctrl+C. The host pre-warms the default shell when the panel opens, so a new terminal usually already has its prompt in the replay buffer; collapsing the panel or switching tabs keeps the xterm instances instead of rebuilding and replaying them.
 - **Layout and DSH**: the primary view, terminal panel, and DSH conversation sidebar can be shown and resized independently; widths are dragged and double-clicked back to default in place, so they are not duplicated as settings.
 - **Settings page**: the "VS Code Workbench" page under DSH settings is one scrolling page grouped into Editor / AI completion / Terminal / Shortcuts / About and diagnostics, using the same type scale as DSH settings (row title 14/20, hint 12/18, controls 14/32px). Editor: font size, line height, tab size and insert-spaces, word wrap (off/on/bounded), minimap, overview ruler, occurrence highlight, whitespace rendering, cursor style, smooth scrolling, sticky scroll, auto save and delay. AI completion: master switch, trigger delay, model route (**listed from the models DSH already has configured**, free-form allowed), failure fallback, plus the model actually in use and the last failure. Also terminal font size, the shortcut reference, and reset-to-defaults.
 - **Occurrence highlight and overview ruler**: selecting or double-clicking a word highlights every occurrence in the document the way VS Code does, and a three-lane overview ruler appears on the right (selection, occurrences, and find matches are drawn in the scrollbar strip). Ruler markers use the foreground color (white on dark themes, no longer the blue accent), and the scrollbar slider is translucent so it never hides them.
@@ -52,7 +52,25 @@
   Note: host-side code loads at process start, so **restart the app** after changes (a page reload is enough for the client side).
 - **Sync and restore**: workspace file changes stream to the UI, while reload restores views, expanded directories, panels, and layout (file tabs are not restored across sessions).
 
-The workbench mounts through the official `sidebar.footer.action` and `shell.overlay` extension points. It does not replace or disable `ui-layout`.
+The workbench mounts through DSH's `shell.overlay`, `main`, `sidebar.panellist`, and `settings.section` extension points
+(`main` and `sidebar.panellist` are registered as a pair and swap places when the side panel is collapsed). It does not
+replace or disable `ui-layout`.
+
+## Performance
+
+- **Terminal startup**: opening the terminal panel pre-warms the default shell on the host (`TerminalManager.prewarm`, reclaimed
+  after 90 seconds if nobody claims it). Creating a terminal then adopts that shell, whose replay buffer already holds the
+  prompt. On this machine `pwsh` needs about 530 ms from spawn to accepting commands; a pre-warmed create costs about 2 ms on
+  the host. Create/close/rename each issue a single request, and the panel plus every opened xterm instance stay mounted.
+- **Rendering and IO**: file-change pushes only update tab state when something actually changed; resizer drags move CSS
+  variables and persist the layout once on pointer-up; the Markdown outline and the Git commit graph are memoized.
+- **Reproducible baseline**: `pnpm perf` measures terminal startup (spawn / first byte / interactive readiness for three shells),
+  client bundle size and compile cost, and host entry load cost, writing `perf-results/baseline.json` (gitignored). Current
+  numbers: `lib/client.js` 2.63 MB (about 562 KB gzip, about 25 ms V8 compile), host entry import about 29 ms, `pwsh`
+  interactive on Windows about 530 ms.
+- **No native/Rust addon**: the host's hot spots are Windows process creation (about a 44 ms floor per `git.exe` or shell) and
+  protocol overhead, not JavaScript computation. Pure JS optimizations capture most of the win, while a native addon would need
+  to cover both the Electron and Node ABIs with per-platform prebuilds, which is not worth the install size and distribution cost.
 
 ## Demo
 
@@ -123,6 +141,7 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm perf    # performance baseline (terminal startup / client bundle / host entry)
 ```
 
 Requires Node.js `^22.19 || >=24`, pnpm 11.7, system Git, and the native build prerequisites for `node-pty` when no prebuild is available.

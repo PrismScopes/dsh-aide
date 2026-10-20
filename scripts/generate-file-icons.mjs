@@ -48,5 +48,18 @@ const banner = [
 ].join('\n')
 
 const outPath = path.join(projectRoot, 'src', 'client', 'fileIcons.ts')
+
+// --check：CI 里用来防止「升级 material-icon-theme 后忘了重新生成」。只比较，不写盘。
+if (process.argv.includes('--check')) {
+  const current = fs.existsSync(outPath) ? fs.readFileSync(outPath, 'utf8') : ''
+  if (current === banner) {
+    console.log(`file icons are up to date (${path.relative(projectRoot, outPath)})`)
+    process.exit(0)
+  }
+  console.error(`file icons are stale: run node scripts/generate-file-icons.mjs`)
+  console.error(`  expected ${banner.length} bytes, found ${current.length} bytes`)
+  process.exit(1)
+}
+
 fs.writeFileSync(outPath, banner)
 console.log(`generated ${path.relative(projectRoot, outPath)}  extensions=${Object.keys(table.extensions).length} names=${Object.keys(table.names).length} files=${Object.keys(table.files).length} bytes=${banner.length}`)

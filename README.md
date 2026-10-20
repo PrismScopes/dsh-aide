@@ -39,6 +39,8 @@
 - **预览**：Markdown 支持源码、大纲、相对链接和图片；内置 PDF 翻页缩放与 DOCX 渲染，DOC/ODT 可直接下载打开。
 - **搜索与 Git**：`@vscode/ripgrep` 支持大小写、全词、正则和路径筛选；Git 提供暂存、撤销、丢弃、提交、分支、差异、提交文件和提交图表。
 - **终端**：基于 `node-pty` 与 xterm，支持最多 8 个会话、会话重命名、右侧切换、分屏、ANSI 输出和 Ctrl+C。
+  打开终端面板时宿主会先预热默认 shell，点「新建终端」时提示符通常已经在回放缓冲里；面板收起或切标签时
+  不重建 xterm、不重放输出，回来即用。
 - **布局与 DSH**：左侧视图、终端面板和右侧 DSH 对话栏可独立显示和调整；宽度直接拖分隔条改、双击恢复默认，
   这些都在界面里就地完成，不再重复成设置项。
 - **设置页**：DSH 设置里的「VS Code 工作台」一页，单列滚动、按分组（编辑器 / AI 补全 / 终端 / 快捷键 /
@@ -73,7 +75,22 @@
   注意：宿主侧代码只在进程启动时加载，改过之后需要**重启应用**才生效（客户端部分刷新页面即可）。
 - **同步与恢复**：工作区文件变化实时推送；刷新后恢复活动视图、目录展开、面板与布局（文件标签不跨会话恢复）。
 
-工作台通过官方 `sidebar.footer.action` 与 `shell.overlay` 扩展点挂载，不替换或卸载 `ui-layout`。
+工作台通过 DSH 的 `shell.overlay`、`main`、`sidebar.panellist` 与 `settings.section` 扩展点挂载
+（`main` 与 `sidebar.panellist` 成对注册、互相切换，兼容侧栏面板被收起的情况），不替换或卸载 `ui-layout`。
+
+## 性能
+
+- **终端启动**：打开终端面板时宿主先预热默认 shell（`TerminalManager.prewarm`，90 秒没人认领就回收）；
+  点「新建终端」时它直接提上来，回放缓冲里已经有提示符。实测本机 `pwsh` 从 spawn 到可接命令约 530ms，
+  预热后新建的宿主侧只剩约 2ms；新建/关闭/重命名各只发一次请求，面板与已打开的 xterm 实例常驻。
+- **渲染与 IO**：文件变更推送只在真的影响标签状态时更新；拖动分隔条期间只改 CSS 变量，松开才写入布局偏好并持久化；
+  Markdown 大纲与 Git 提交图按内容 memo，不在每次输入时重算。
+- **可复现基准**：`pnpm perf` 覆盖终端启动（三种 shell 的 spawn / 首字节 / 可交互时间）、客户端包体积与解析成本、
+  宿主入口加载成本，结果写到 `perf-results/baseline.json`（已 gitignore）。当前基线：`lib/client.js` 2.63 MB
+  （gzip 约 562 KB，V8 编译约 25 ms），宿主入口 import 约 29 ms，Windows 上 `pwsh` 可交互约 530 ms。
+- **没有引入 native/Rust 扩展**：宿主热点主要是 Windows 进程创建（每次 `git.exe` / shell 约 44ms 的下限）与协议开销，
+  不是 JS 计算；这部分纯 JS 优化即可拿到大部分收益，而 native addon 需要同时覆盖 Electron 与 Node 两套 ABI、
+  每个平台各带预编译产物，安装体积与分发成本不划算。
 
 ## 演示
 
@@ -146,6 +163,7 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm perf    # 性能基线（终端启动 / 客户端包 / 宿主入口）
 ```
 
 需要 Node.js `^22.19 || >=24`、pnpm 11.7、系统 Git，以及 `node-pty` 所需的本机构建环境（预编译产物不可用时）。
