@@ -137,11 +137,15 @@ function XtermView({ workspace, id, colorScheme, hidden, onReady, onContextMenu 
 }
 
 /** Render interactive terminal tabs in the workbench bottom panel. */
-export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelProps) {
+export function TerminalPanel({ sessionId, colorScheme, header, visible }: BottomPanelProps) {
   const workspaceRef = useRef<{ sessionId: string; value: TerminalWorkspaceController }>()
   if (workspaceRef.current?.sessionId !== sessionId) workspaceRef.current = { sessionId, value: new TerminalWorkspaceController(sessionId) }
   const workspace = workspaceRef.current.value
-  const snapshot = useSyncExternalStore(workspace.subscribe.bind(workspace), workspace.getSnapshot.bind(workspace))
+  // subscribe/getSnapshot 的标识必须稳定：每次 render 都 bind 一次会让 useSyncExternalStore
+  // 每帧退订再订阅（首帧还有一次多余的同步检查）。
+  const subscribeWorkspace = useCallback((listener: () => void) => workspace.subscribe(listener), [workspace])
+  const readWorkspace = useCallback(() => workspace.getSnapshot(), [workspace])
+  const snapshot = useSyncExternalStore(subscribeWorkspace, readWorkspace)
   const [active, setActive] = useState<string>()
   // 改名可能从两个地方发起（顶部标签、右侧列表），输入框只在该处出现，所以记下 where。
   const [renaming, setRenaming] = useState<{ id: string; value: string; where: 'tab' | 'list' }>()
@@ -203,6 +207,18 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
   // 打开面板只把已有的终端列出来，不自动新建：启动时不该凭空多出一个 shell。
   // 当前终端由下面那条 effect 按列表挑，这里不需要自己设。
   useEffect(() => { void workspace.refresh() }, [workspace])
+  /**
+   * 预热默认 shell。
+   *
+   * pwsh 这类 shell 自己就要 ~0.5s 才能接命令（profile 加载），点「新建终端」后才开始起的话
+   * 这段时间只能干等。面板已经打开、又没有终端可切时，先把默认 shell 起在宿主那边；用户点新建
+   * 时它已经在回放缓冲里放着提示符了。延迟 150ms 是为了避开「刚打开就关掉」的抖动。
+   */
+  useEffect(() => {
+    if (!visible || snapshot.terminals.length > 0) return
+    const timer = setTimeout(() => { void workspace.prewarm().catch(() => { /* 预热失败不影响正常新建。 */ }) }, 150)
+    return () => clearTimeout(timer)
+  }, [visible, snapshot.terminals.length, workspace])
   useEffect(() => { if (snapshot.terminals.length > 0 && (!active || !snapshot.terminals.some(value => value.id === active))) setActive(snapshot.terminals[0]?.id) }, [snapshot.terminals, active])
   // 挂载时先 drain：从资源管理器「在终端中打开」时面板可能还没挂载，那时事件没人听。
   useEffect(() => { drainRequests() }, [drainRequests])

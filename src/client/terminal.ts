@@ -44,6 +44,14 @@ export interface TerminalWorkspace {
   refresh(): Promise<void>
   /** `directory` 是工作区相对路径：新的 shell 直接在该目录里启动（「在终端中打开」）。 */
   create(options?: { title?: string; profile?: string; directory?: string }): Promise<TerminalInfo>
+  /**
+   * 预热默认 shell。
+   *
+   * 面板打开时先把 shell 起好（宿主侧，见 TerminalManager.prewarm），点「新建终端」时它已经
+   * 在回放缓冲里放着提示符了 —— shell 自身的 0.5s 级启动成本被提前到用户看面板的空档里。
+   * 失败无所谓：下一次 create 会照常现起一个 shell。
+   */
+  prewarm(): Promise<void>
   close(id: string): Promise<void>
   rename(id: string, title: string): Promise<void>
   connect(id: string): TerminalConnection
@@ -155,6 +163,15 @@ export class TerminalWorkspaceController implements TerminalWorkspace {
     this.set({ terminals: [...this.snapshot.terminals, answer.value], loading: false })
     return answer.value
   }
+  /**
+   * 预热默认 shell。宿主起好之后会留在回放缓冲里，下一次默认新建直接认领。
+   * 这里只发请求、不做任何本地状态变更：预热出来的 shell 不属于终端列表。
+   */
+  async prewarm(): Promise<void> {
+    const answer = await request<unknown>('prewarm', { sessionId: this.sessionId })
+    this.wsBase = answer.wsBase ?? this.wsBase
+  }
+
   /** 关闭终端。宿主带回了关闭之后的完整列表，直接采用，不再补一次 refresh。 */
   async close(id: string): Promise<void> {
     const answer = await request<TerminalInfo[]>('close', { sessionId: this.sessionId, id })

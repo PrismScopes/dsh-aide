@@ -21,9 +21,6 @@ export const inject = ['webServer', 'sessions', 'connection', 'workingDirectory'
  *
  * 只做两件事：装终端、注册路由。方法分发在 api.ts，路由与文件监听在 routes.ts ——
  * 原先三者都挤在本文件里（177 行），拆开后入口只剩接线，改路由不必再翻一整个文件。
- */
-/**
- * 插件入口。
  *
  * 第二个参数是插件配置（profile 里那一行的 config，或应用里的插件设置）：补全用哪条模型路由、
  * 模型失败要不要回落本地兜底，都从这里读；环境变量可以覆盖它，便于排查与临时试验。

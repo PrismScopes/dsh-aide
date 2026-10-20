@@ -1,7 +1,11 @@
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { IPty } from 'node-pty'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { TerminalWorkspaceController } from '../src/client/terminal.ts'
+import { TerminalManager } from '../src/terminal.ts'
 import type { TerminalInfo } from '../src/terminal.ts'
 
 /**
@@ -74,6 +78,100 @@ describe('terminal workspace controller', () => {
     expect(calls).toHaveLength(2)
     expect(workspace.getSnapshot().terminals.map(value => value.id)).toEqual(['t-1', 't-2'])
   })
+
+  it('prewarms with one request without touching the terminal list', async () => {
+    const calls = stubFetch({ prewarm: [[]] })
+    const workspace = new TerminalWorkspaceController('session-1')
+    await workspace.prewarm()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.url).toBe('/dsh-vscode-terminal/api/prewarm')
+    expect(workspace.getSnapshot().terminals).toEqual([])
+  })
+})
+
+/** 假 pty：只记录输出订阅者与 kill 次数，用来观察 manager 是否真的认领了预热 shell。 */
+interface FakePty { child: IPty; emit(data: string): void; killed(): number }
+
+function fakePty(): FakePty {
+  const listeners: Array<(data: string) => void> = []
+  let killed = 0
+  const child = {
+    pid: 1,
+    kill: () => { killed++ },
+    onData: (handler: (data: string) => void) => { listeners.push(handler) },
+    onExit: () => { /* 这个假 pty 永不退出，除非测试显式需要。 */ },
+    write: () => {},
+    resize: () => {},
+  } as unknown as IPty
+  return { child, emit: data => { for (const handler of listeners) handler(data) }, killed: () => killed }
+}
+
+describe('terminal prewarm', () => {
+  let root = ''
+  beforeAll(() => { root = mkdtempSync(join(tmpdir(), 'dvw-prewarm-')) })
+  afterAll(() => { rmSync(root, { recursive: true, force: true }) })
+
+  function setup(): { created: FakePty[]; manager: TerminalManager } {
+    const created: FakePty[] = []
+    const manager = new TerminalManager(() => { const pty = fakePty(); created.push(pty); return pty.child })
+    return { created, manager }
+  }
+
+  it('hands the prewarmed shell to the next default terminal instead of spawning twice', () => {
+    const { created, manager } = setup()
+    manager.prewarm(root)
+    expect(created).toHaveLength(1)
+    // 预热期间 shell 已经吐出了提示符：这份输出要进回放缓冲，用户点新建时直接看到。
+    created[0]?.emit('PS H:\\> ')
+    const info = manager.create(root)
+    expect(created).toHaveLength(1)
+    expect(info.id).not.toBe('')
+    expect(info.title).not.toBe('')
+    expect(manager.list(root)).toHaveLength(1)
+    manager.dispose()
+  })
+
+  it('prewarms only once per workspace', () => {
+    const { created, manager } = setup()
+    manager.prewarm(root)
+    manager.prewarm(root)
+    expect(created).toHaveLength(1)
+    manager.dispose()
+  })
+
+  it('opens a directory terminal on a fresh shell, leaving the warm one for the next default', () => {
+    mkdirSync(join(root, 'sub'), { recursive: true })
+    const { created, manager } = setup()
+    manager.prewarm(root)
+    manager.create(root, undefined, undefined, 'sub')
+    expect(created).toHaveLength(2)
+    // 子目录那次不该消耗预热：下一次默认新建仍然认领第一次起的那个 shell。
+    manager.create(root)
+    expect(created).toHaveLength(2)
+    manager.dispose()
+  })
+
+  it('kills the prewarmed shell when nobody claims it in time', () => {
+    vi.useFakeTimers()
+    try {
+      const created: FakePty[] = []
+      const manager = new TerminalManager(() => { const pty = fakePty(); created.push(pty); return pty.child }, 1000)
+      manager.prewarm(root)
+      vi.advanceTimersByTime(1000)
+      expect(created[0]?.killed()).toBe(1)
+      // 定时器到点后预热槽已清空：再新建必须现起一个。
+      manager.create(root)
+      expect(created).toHaveLength(2)
+      manager.dispose()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('kills the prewarmed shell when the plugin is disposed', () => {
+    const { created, manager } = setup()
+    manager.prewarm(root)
+    manager.dispose()
+    expect(created[0]?.killed()).toBe(1)
+  })
 })
 
 describe('terminal startup wiring', () => {
@@ -86,6 +184,9 @@ describe('terminal startup wiring', () => {
     // 新建请求发出后先显示占位，不让点击看起来没反应。
     expect(panel).toContain('setPending(value => value + 1)')
     expect(panel).toContain('正在启动终端…')
+    // 面板可见且没有终端时预热默认 shell；预热失败不影响正常新建。
+    expect(panel).toContain('if (!visible || snapshot.terminals.length > 0) return')
+    expect(panel).toContain('workspace.prewarm()')
   })
 
   it('keeps the bottom panel mounted (display:none) after it is collapsed', () => {

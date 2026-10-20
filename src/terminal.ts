@@ -240,12 +240,57 @@ export function resolveTerminalDirectory(cwd: string, directory?: string): strin
 }
 
 /** Own interactive terminals by their canonical workspace directory. */
+
+/** 交给 pty 的启动参数（抽成类型是为了让测试能注入假的 spawn）。 */
+export interface PtySpawnOptions { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }
+export type SpawnPty = (shell: string, args: string[], options: PtySpawnOptions) => IPty
+
+const defaultSpawn: SpawnPty = (shell, args, options) => pty.spawn(shell, args, options)
+
+/** 预热 shell 最多留多久：没人来认领就杀掉，别让后台多出一个长期 shell。 */
+export const PREWARM_TTL_MS = 90_000
+
+/** 跑起来了、但还没有终端 id 的 shell。 */
+interface WarmShell { key: string; target: string; shell: string; handle: TerminalHandle; timer: ReturnType<typeof setTimeout> }
+
+/**
+ * 按工作区持有交互式终端，并额外维护**一个**预热 shell。
+ *
+ * 为什么要预热：实测 pwsh 从 spawn 到提示符可用平均约 530ms（大头是 profile 加载，不是我们的
+ * 代码）。用户点「新建终端」到看见提示符的这段时间没法再压缩，但可以提前到「面板已经打开、
+ * 用户还在看」的空档里 —— 面板一打开先把默认 shell 起好，点下去时回放缓冲里已经有提示符了。
+ *
+ * 认领规则：只有工作区根目录、且解析出的 shell 与预热时一致的新建请求才会拿走它；其余请求
+ * （「在终端中打开」的子目录、选了别的 shell）照常现起，预热 shell 留着给下一次默认新建。
+ * 90 秒没人用就自己退出（见 PREWARM_TTL_MS）。
+ */
 export class TerminalManager {
   private readonly workspaces = new Map<string, Map<string, TerminalHandle>>()
+  private warm: WarmShell | undefined
+
+  constructor(private readonly spawn: SpawnPty = defaultSpawn, private readonly warmTtlMs = PREWARM_TTL_MS) {}
 
   private workspace(cwd: string): string { return realpathSync(cwd) }
 
   list(cwd: string): TerminalInfo[] { return [...(this.workspaces.get(this.workspace(cwd))?.values() ?? [])].map(handle => ({ ...handle.info })) }
+
+  /**
+   * 起一个预热 shell。
+   *
+   * 同一个工作区只保留一个；换到别的工作区时把旧的丢掉（它已经没机会被认领了）。
+   * 已有终端时也允许预热：用户可能还要再开一个，而列表状态由客户端判断。
+   */
+  prewarm(cwd: string): void {
+    const key = this.workspace(cwd)
+    if (this.warm !== undefined && this.warm.key === key) return
+    this.dropWarm()
+    const { shell, args } = terminalShell()
+    const handle = this.spawnHandle(key, shell, args)
+    const timer = setTimeout(() => { if (this.warm?.handle === handle) this.dropWarm() }, this.warmTtlMs)
+    // 宿主长时间运行；这个定时器不该在关闭时多拖 90 秒。
+    if (typeof (timer as { unref?: () => void }).unref === 'function') (timer as { unref?: () => void }).unref?.()
+    this.warm = { key, target: key, shell, handle, timer }
+  }
 
   /**
    * 新建终端。`directory` 是工作区相对目录（「在终端中打开」），缺省为工作区根。
@@ -260,10 +305,21 @@ export class TerminalManager {
     this.workspaces.set(key, terminals)
     if (terminals.size >= MAX_TERMINALS) throw new Error(`terminal limit reached (${MAX_TERMINALS})`)
     const { shell, args } = terminalShell(profileId)
-    const child = pty.spawn(shell, args, { name: 'xterm-256color', cols: 80, rows: 24, cwd: target, env: sanitizedTerminalEnv(process.env) })
-    const info: TerminalInfo = { id: randomUUID(), title: title || uniqueTerminalTitle(terminalTitleBase(shell), [...terminals.values()].map(handle => handle.info.title)), cwd: target, running: true, sequence: 0 }
-    const handle: TerminalHandle = { info, process: child, replay: new ReplayBuffer(), listeners: new Set() }
+    // 预热 shell 是一份已经跑起来的默认终端：目录与 shell 都对得上才提上来。
+    const handle = this.takeWarm(key, target, shell) ?? this.spawnHandle(target, shell, args)
+    const info = handle.info
+    info.id = randomUUID()
+    info.cwd = target
+    info.title = title || uniqueTerminalTitle(terminalTitleBase(shell), [...terminals.values()].map(value => value.info.title))
     terminals.set(info.id, handle)
+    return { ...info }
+  }
+
+  /** 真正起一个 shell 并接上输出采集；创建路径与预热路径共用这一份。 */
+  private spawnHandle(target: string, shell: string, args: string[]): TerminalHandle {
+    const child = this.spawn(shell, args, { name: 'xterm-256color', cols: 80, rows: 24, cwd: target, env: sanitizedTerminalEnv(process.env) })
+    const info: TerminalInfo = { id: '', title: '', cwd: target, running: true, sequence: 0 }
+    const handle: TerminalHandle = { info, process: child, replay: new ReplayBuffer(), listeners: new Set() }
     child.onData(data => {
       info.sequence++
       handle.replay.push(data)
@@ -276,7 +332,28 @@ export class TerminalManager {
       const data = `\r\n[process exited with code ${exitCode}]\r\n`
       for (const listener of handle.listeners) listener({ sequence: info.sequence, data })
     })
-    return { ...info }
+    return handle
+  }
+
+  /** 认领预热 shell：目录与 shell 都对上、而且它还活着才提上来；不匹配就留着。 */
+  private takeWarm(key: string, target: string, shell: string): TerminalHandle | undefined {
+    const warm = this.warm
+    if (warm === undefined) return undefined
+    if (warm.key !== key || warm.target !== target || warm.shell !== shell) return undefined
+    clearTimeout(warm.timer)
+    this.warm = undefined
+    // 预热的 shell 可能已经自己退出了（用户改了 profile、shell 崩溃等）：那就是没有可认领的。
+    if (warm.handle.info.running) return warm.handle
+    try { warm.handle.process.kill() } catch { /* 已经退出了。 */ }
+    return undefined
+  }
+
+  private dropWarm(): void {
+    const warm = this.warm
+    if (warm === undefined) return
+    this.warm = undefined
+    clearTimeout(warm.timer)
+    try { warm.handle.process.kill() } catch { /* 可能已经退出。 */ }
   }
 
   get(cwd: string, id: string): TerminalHandle | undefined { return this.workspaces.get(this.workspace(cwd))?.get(id) }
@@ -298,7 +375,7 @@ export class TerminalManager {
     return { ...handle.info }
   }
 
-  dispose(): void { for (const [cwd, terminals] of this.workspaces) for (const id of terminals.keys()) this.close(cwd, id) }
+  dispose(): void { this.dropWarm(); for (const [cwd, terminals] of this.workspaces) for (const id of terminals.keys()) this.close(cwd, id) }
 }
 
 function terminalRequestAllowed(req: IncomingMessage): boolean {
@@ -355,6 +432,8 @@ export function installTerminal(ctx: HostContext): void {
       else if (method === 'create') value = manager.create(cwd, typeof body.title === 'string' ? body.title : undefined, typeof body.profile === 'string' ? body.profile : undefined, typeof body.directory === 'string' ? body.directory : undefined)
       else if (method === 'close') { manager.close(cwd, typeof body.id === 'string' ? body.id : ''); value = manager.list(cwd) }
       else if (method === 'rename') value = manager.rename(cwd, typeof body.id === 'string' ? body.id : '', typeof body.title === 'string' ? body.title : '')
+      // 预热：面板打开、还没有终端时先把默认 shell 起好（见 TerminalManager.prewarm）。
+      else if (method === 'prewarm') { manager.prewarm(cwd); value = manager.list(cwd) }
       else throw new Error('unknown terminal method')
       // 把本机地址一并带上，供客户端拼 WebSocket 用（桌面端按 location.host 拼不出可连的地址）。
       send(res, 200, { ok: true, value, wsBase: localBase(req) })
