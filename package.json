@@ -65,7 +65,8 @@
     "build": "node scripts/clean.mjs lib && tsc -p tsconfig.build.json && tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "pack:plugin": "pnpm build && node scripts/clean.mjs dist && pnpm pack --pack-destination dist"
+    "pack:plugin": "pnpm build && node scripts/clean.mjs dist && pnpm pack --pack-destination dist",
+    "perf": "node scripts/perf/index.mjs"
   },
   "dependencies": {
     "@shikijs/langs": "^4.5.0",
