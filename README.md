@@ -141,6 +141,18 @@ pnpm approve-builds --all && pnpm rebuild node-pty
 
 PDF / Word 预览的渲染栈通过 DSH 客户端模块系统的按需 chunk（`require.async`）加载，要求 DSH `0.2.1-rc.2` 及以上（插件 `package.json` 的 `dsh.compatibility` 已声明）。更老的宿主上这两个预览会提示“当前 DSH 版本不支持按需加载”，其余功能不受影响。
 
+## 收录与推广
+
+AIDE 面向 DSH 社区发布，收录状态会持续更新：
+
+- **GitHub**：[PrismScopes/dsh-aide](https://github.com/PrismScopes/dsh-aide) —— 仓库已带 `dsh-plugin` / `deepseek-harness` topics，多个插件目录会自动索引。
+- **npm**：`dsh-aide` —— 发布后进入各索引源；本仓库的 `package.json` 已声明 `dsh.bundle` 清单、精确 SemVer 与 `cordis.patch.yml`。
+- **DSH Plugin Hub**：[dshpluginhub.ai](https://dshpluginhub.ai) —— 按 npm 小时级同步；带 `dsh.bundle` 与 `dsh-plugin` topic 的仓库会先以 source-only 出现，npm 发布后自动升级为完整条目。
+- **dsh.so 插件市场**：[提交入口](https://www.dsh.so/zh/submit/) —— 粘贴仓库或包名，做 schema 校验与安全扫描后进入市场。
+- **awesome-dsh-plugin**：[community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) —— 一个插件一个 `data/plugins/<owner>__<repo>.yml`，满足 `dsh.bundle` + topic 后提交 PR。
+
+> 支持自定义插件索引的客户端，可以直接添加 `https://github.com/PrismScopes/dsh-aide`。
+
 ## 快捷键
 
 | 快捷键 | 操作 |
@@ -174,6 +186,13 @@ pnpm perf    # 性能基线（终端启动 / 客户端包 / 宿主入口）
 ```
 
 需要 Node.js `^22.19 || >=24`、pnpm 11.7、系统 Git，以及 `node-pty` 所需的本机构建环境（预编译产物不可用时）。
+
+## Contributors
+
+- **作者 / 维护者**：[PrismScopes](https://github.com/PrismScopes)
+- **来源**：AIDE 最初基于 [tingfeng347/dsh-vscode-workbench](https://github.com/tingfeng347/dsh-vscode-workbench)（MIT）演进而来，感谢原作者的基础工作；本仓库保留 MIT 许可与完整提交历史。
+
+欢迎提交 Issue / PR 一起把 AIDE 做得更好。
 
 ## 许可证
 

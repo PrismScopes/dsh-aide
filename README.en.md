@@ -126,6 +126,16 @@ PDF and Word previews load their render stacks through DSH client-module on-dema
 `0.2.1-rc.2` or newer (declared in `dsh.compatibility`). On older hosts those two previews report that on-demand loading is not
 supported; every other feature keeps working.
 
+## Listings and promotion
+
+- **GitHub**: [PrismScopes/dsh-aide](https://github.com/PrismScopes/dsh-aide) — the repo carries `dsh-plugin` / `deepseek-harness` topics, so several plugin directories index it automatically.
+- **npm**: `dsh-aide` — indexed once published; `package.json` already declares the `dsh.bundle` manifest, exact SemVer, and `cordis.patch.yml`.
+- **DSH Plugin Hub**: [dshpluginhub.ai](https://dshpluginhub.ai) — hourly npm sync; repos with a `dsh.bundle` manifest and the `dsh-plugin` topic appear as source-only first, then upgrade after the npm release.
+- **dsh.so market**: [submission page](https://www.dsh.so/zh/submit/) — paste the repository or package name for schema validation and a security scan.
+- **awesome-dsh-plugin**: [community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) — one `data/plugins/<owner>__<repo>.yml` per plugin.
+
+> Clients with custom plugin-index support can add `https://github.com/PrismScopes/dsh-aide` directly.
+
 ## Shortcuts
 
 | Shortcut | Action |
@@ -157,6 +167,13 @@ pnpm perf    # performance baseline (terminal startup / client bundle / host ent
 ```
 
 Requires Node.js `^22.19 || >=24`, pnpm 11.7, system Git, and the native build prerequisites for `node-pty` when no prebuild is available.
+
+## Contributors
+
+- **Author / maintainer**: [PrismScopes](https://github.com/PrismScopes)
+- **Origin**: AIDE started from [tingfeng347/dsh-vscode-workbench](https://github.com/tingfeng347/dsh-vscode-workbench) (MIT); thanks to the original author for the foundation. This repository keeps the MIT license and the full commit history.
+
+Issues and pull requests are welcome.
 
 ## License
 
