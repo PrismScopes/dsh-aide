@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile, readFile } from 'node
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { codiconAsset, createEntry, gitAction, gitStatus, listFiles, pdfWorkerAsset, readDocument, renameEntry, saveDocument, uploadFile, workspacePath, workspacePreviewFile } from '../src/host.ts'
+import { codiconAsset, createEntry, gitAction, gitStatus, listFiles, pdfWorkerAsset, readDocument, renameEntry, resetGitRootCache, saveDocument, searchWorkspace, uploadFile, workspacePath, workspacePreviewFile, type ProcessRunner } from '../src/host.ts'
 
 const roots:string[]=[]
 async function temp(){const value=await mkdtemp(join(tmpdir(),'dvw-'));roots.push(value);return value}
@@ -28,6 +28,145 @@ describe('workspace path resolution', () => {
     await expect(workspacePath(root, 'missing/gone.txt', true)).rejects.toMatchObject({ code: 'parent-missing', status: 404 })
     await expect(workspacePath(root, 'src')).resolves.toMatchObject({ absolute: join(await realpath(root), 'src') })
     await expect(workspacePath(root, 'src/new.txt', true)).resolves.toMatchObject({ absolute: join(await realpath(root), 'src', 'new.txt') })
+  })
+})
+
+/**
+ * 造一个假的进程执行器：记录每次 `command args...`，按 args 返回假 stdout。
+ * 用于断言 spawn 次数与上限逻辑，不真的起 git/rg。
+ */
+function fakeProcess(handler: (args: string[]) => { stdout?: string; stderr?: string; code?: number; truncated?: boolean }): { runner: ProcessRunner; calls: string[][] } {
+  const calls: string[][] = []
+  const runner: ProcessRunner = async (command, args) => {
+    calls.push([command, ...args])
+    const reply = handler(args)
+    return { stdout: reply.stdout ?? '', stderr: reply.stderr ?? '', code: reply.code ?? 0, truncated: reply.truncated === true }
+  }
+  return { runner, calls }
+}
+
+const STATUS_OUTPUT = '# branch.head main\0# branch.ab +1 -2\0? untracked.txt\0'
+const LOG_OUTPUT = 'aaaa1111\x1fb000\x1fAuthor\x1f2026-01-01T00:00:00Z\x1fsubject\x1fHEAD -> main\x00'
+const revParseCount = (calls: string[][]): number => calls.filter(call => call[1] === 'rev-parse').length
+
+/** 常规 git 假实现：root 探测 / status / log / 各种写动作。 */
+function gitHandler(root: string) {
+  return (args: string[]) => {
+    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { stdout: `${root}\n` }
+    if (args[0] === 'status') return { stdout: STATUS_OUTPUT }
+    if (args[0] === 'log') return { stdout: LOG_OUTPUT }
+    if (['add', 'commit', 'restore', 'clean', 'switch', 'diff', 'show', 'diff-tree', 'for-each-ref'].includes(args[0] ?? '')) return {}
+    throw new Error(`unexpected git args: ${args.join(' ')}`)
+  }
+}
+
+describe('git process budget', () => {
+  it('cold refresh shares one rev-parse (3 spawns) and a warm refresh is status+log only (2)', async () => {
+    const root = await temp()
+    const fake = fakeProcess(gitHandler(root))
+    const [status, commits] = await Promise.all([
+      gitStatus(root, fake.runner),
+      gitAction(root, 'log', undefined, undefined, fake.runner),
+    ])
+    expect(status).toMatchObject({ repository: root, branch: 'main', ahead: 1, behind: 2 })
+    expect(status.changes).toEqual([{ path: 'untracked.txt', index: '?', worktree: '?', staged: false, untracked: true }])
+    expect(commits).toMatchObject([{ hash: 'aaaa1111', parents: ['b000'], subject: 'subject' }])
+    expect(revParseCount(fake.calls)).toBe(1) // 并发的 status/log 共用同一次 rev-parse
+    expect(fake.calls.length).toBe(3) // rev-parse + status + log（旧实现 5）
+    fake.calls.length = 0
+    await Promise.all([gitStatus(root, fake.runner), gitAction(root, 'log', undefined, undefined, fake.runner)])
+    expect(revParseCount(fake.calls)).toBe(0)
+    expect(fake.calls.length).toBe(2) // 热缓存：status + log
+  })
+
+  it('stage/commit reuse the cached root; action result keeps the old GitStatus shape', async () => {
+    const root = await temp()
+    const fake = fakeProcess(gitHandler(root))
+    // 冷启动 stage：rev-parse + add + status = 3（旧实现 4）
+    await gitAction(root, 'stage', 'a.txt', undefined, fake.runner)
+    expect(fake.calls.map(call => call[1])).toEqual(['rev-parse', 'add', 'status'])
+    expect(revParseCount(fake.calls)).toBe(1)
+    fake.calls.length = 0
+    // 热缓存 stage：add + status = 2
+    const staged = await gitAction(root, 'stage', 'a.txt', undefined, fake.runner) as { repository: string }
+    expect(staged.repository).toBe(root)
+    expect(fake.calls.map(call => call[1])).toEqual(['add', 'status'])
+    fake.calls.length = 0
+    // 冷 commit：rev-parse + commit + status = 3（旧实现 4，客户端 refresh 另计）
+    resetGitRootCache(fake.runner)
+    await gitAction(root, 'commit', undefined, 'msg', fake.runner)
+    expect(fake.calls.map(call => call[1])).toEqual(['rev-parse', 'commit', 'status'])
+    fake.calls.length = 0
+    await gitAction(root, 'commit', undefined, 'msg', fake.runner)
+    expect(fake.calls.map(call => call[1])).toEqual(['commit', 'status'])
+  })
+
+  it('keeps the empty-repository log behaviour while normal repos need no HEAD probe', async () => {
+    const root = await temp()
+    let logCalls = 0
+    const fake = fakeProcess(args => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { stdout: `${root}\n` }
+      if (args[0] === 'log') { logCalls++; return { code: 128, stderr: 'fatal: your current branch does not have any commits yet' } }
+      if (args[0] === 'rev-parse') return { code: 128, stderr: 'fatal: Needed a single revision' }
+      throw new Error(`unexpected: ${args.join(' ')}`)
+    })
+    await expect(gitAction(root, 'log', undefined, undefined, fake.runner)).resolves.toEqual([])
+    expect(logCalls).toBe(1)
+    expect(fake.calls.map(call => call[1])).toEqual(['rev-parse', 'log', 'rev-parse'])
+  })
+})
+
+function rgMatchLine(path: string, line: number, text: string): string {
+  return JSON.stringify({ type: 'match', data: { path: { text: `./${path}` }, lines: { text }, line_number: line, submatches: [{ start: 0, end: 1, match: { text: text.slice(0, 1) } }] } })
+}
+
+describe('search limits', () => {
+  it('stops at the global match cap and reports truncation', async () => {
+    const root = await temp()
+    const stdout = [rgMatchLine('a.ts', 1, 'alpha'), rgMatchLine('b.ts', 2, 'beta'), rgMatchLine('c.ts', 3, 'gamma')].join('\n')
+    const fake = fakeProcess(() => ({ stdout }))
+    const result = await searchWorkspace(root, { query: 'a', maxMatches: 2 }, undefined, fake.runner)
+    expect(result.matches).toHaveLength(2)
+    expect(result.matches.map(match => match.path)).toEqual(['a.ts', 'b.ts'])
+    expect(result).toMatchObject({ limited: true, truncated: true })
+    expect(fake.calls).toHaveLength(1)
+    expect(fake.calls[0]).toContain('--max-filesize')
+    expect(fake.calls[0]).toContain('2097152') // 默认单文件 2 MiB
+  })
+
+  it('reports truncated=false for small results', async () => {
+    const root = await temp()
+    const fake = fakeProcess(() => ({ stdout: rgMatchLine('only.ts', 1, 'needle') }))
+    const result = await searchWorkspace(root, { query: 'needle' }, undefined, fake.runner)
+    expect(result.matches).toHaveLength(1)
+    expect(result).toMatchObject({ limited: false, truncated: false })
+  })
+
+  it('honours the runner stdout cap and ignores a partial trailing line', async () => {
+    const root = await temp()
+    const partial = rgMatchLine('half.ts', 1, 'half').slice(0, 10)
+    const fake = fakeProcess(() => ({ stdout: partial, truncated: true }))
+    const result = await searchWorkspace(root, { query: 'h', maxOutputBytes: 64 }, undefined, fake.runner)
+    expect(result).toMatchObject({ matches: [], limited: true, truncated: true })
+    expect(fake.calls).toHaveLength(1)
+  })
+
+  it('does not spawn for an empty query', async () => {
+    const fake = fakeProcess(() => { throw new Error('should not spawn') })
+    await expect(searchWorkspace('C:/irrelevant', { query: '' }, undefined, fake.runner)).resolves.toEqual({ matches: [], limited: false, truncated: false })
+    expect(fake.calls).toHaveLength(0)
+  })
+
+  it('works end-to-end against the real ripgrep binary and caps at maxMatches', async () => {
+    const root = await temp()
+    await mkdir(join(root, 'src'))
+    for (let index = 0; index < 5; index++) await writeFile(join(root, 'src', `f${index}.ts`), 'const x = 1\nconst y = 2\n')
+    const all = await searchWorkspace(root, { query: 'const' })
+    expect(all.matches).toHaveLength(10)
+    expect(all).toMatchObject({ limited: false, truncated: false })
+    const capped = await searchWorkspace(root, { query: 'const', maxMatches: 3 })
+    expect(capped.matches).toHaveLength(3)
+    expect(capped).toMatchObject({ limited: true, truncated: true })
   })
 })
 

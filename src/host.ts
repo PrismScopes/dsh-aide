@@ -5,7 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, reso
 import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import type { HostContext } from './context.ts'
-import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchRequest } from './types.ts'
+import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchRequest, SearchResult } from './types.ts'
 import { inside, resolveCreatableWorkspacePath, resolveExistingWorkspacePath, type WorkspacePathErrors } from './paths.ts'
 import { WorkbenchError } from './wire.ts'
 
@@ -200,51 +200,124 @@ export function pdfWorkerAsset(): { path: string; type: string } {
   return { path: require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'), type: 'text/javascript; charset=utf-8' }
 }
 
-interface ProcessResult { stdout: string; stderr: string; code: number }
-export function run(command: string, args: string[], cwd: string, timeout = PROCESS_TIMEOUT, signal?: AbortSignal): Promise<ProcessResult> {
+interface ProcessResult { stdout: string; stderr: string; code: number; truncated: boolean }
+
+/**
+ * 可注入的进程执行器：生产环境默认 `run`；测试可传 fake，用假的 git/rg 输出断言 spawn 次数与结果，
+ * 不必真的起进程。
+ */
+export type ProcessRunner = (command: string, args: string[], cwd: string, timeout?: number, signal?: AbortSignal, maxStdoutBytes?: number) => Promise<ProcessResult>
+
+/**
+ * spawn 一个进程并收集输出。
+ *
+ * `maxStdoutBytes` 用于搜索这类可能产生巨量输出的调用：超过上限就 kill 子进程并返回已收到的前缀
+ * （`truncated: true`，前缀末尾可能是半行，调用方自己跳过）。git 调用不传该参数，行为与以前一致。
+ */
+export function run(command: string, args: string[], cwd: string, timeout = PROCESS_TIMEOUT, signal?: AbortSignal, maxStdoutBytes = Number.POSITIVE_INFINITY): Promise<ProcessResult> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, { cwd, shell: false, windowsHide: true })
-    let stdout = ''; let stderr = ''; let settled = false
+    let stdout = ''
+    let stderr = ''
+    let stdoutBytes = 0
+    let truncated = false
+    let settled = false
     const timer = setTimeout(() => { child.kill(); if (!settled) reject(new WorkbenchError('timeout', `${command} timed out`, 504)) }, timeout)
     const abort = () => { child.kill(); if (!settled) { settled = true; clearTimeout(timer); reject(new WorkbenchError('cancelled', `${command} cancelled`, 499)) } }
     signal?.addEventListener('abort', abort, { once: true })
-    child.stdout.on('data', chunk => { stdout += String(chunk) })
+    child.stdout.on('data', chunk => {
+      if (truncated || settled) return
+      const text = String(chunk)
+      const bytes = Buffer.byteLength(text)
+      if (stdoutBytes + bytes > maxStdoutBytes) {
+        const remaining = Math.max(0, maxStdoutBytes - stdoutBytes)
+        stdout += Buffer.from(text).subarray(0, remaining).toString('utf8')
+        stdoutBytes += remaining
+        truncated = true
+        child.kill()
+        return
+      }
+      stdout += text
+      stdoutBytes += bytes
+    })
     child.stderr.on('data', chunk => { stderr += String(chunk) })
     child.on('error', error => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (!settled) { settled = true; reject(error) } })
-    child.on('close', code => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (!settled) { settled = true; resolvePromise({ stdout, stderr, code: code ?? 1 }) } })
+    child.on('close', code => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (!settled) { settled = true; resolvePromise({ stdout, stderr, code: code ?? 1, truncated }) } })
   })
 }
 
-export async function searchWorkspace(cwd: string, request: SearchRequest, signal?: AbortSignal): Promise<{ matches: SearchMatch[]; limited: boolean }> {
-  if (request.query === '') return { matches: [], limited: false }
+/** 全局匹配条数默认上限：与旧实现一致（客户端据此显示「结果已截断到 2000 条」）。 */
+const SEARCH_MAX_MATCHES = 2000
+/** 单次 rg 的 stdout 字节上限：大仓里 `--max-count` 按文件计，不设总量会把上百 MB 拼进内存。 */
+const SEARCH_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+/** 单文件大小上限：跳过压缩产物、大日志这类不该参与搜索的文件。 */
+const SEARCH_MAX_FILE_BYTES = 2 * 1024 * 1024
+
+function positiveLimit(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : fallback
+}
+
+export async function searchWorkspace(cwd: string, request: SearchRequest, signal?: AbortSignal, runner: ProcessRunner = run): Promise<SearchResult> {
+  if (request.query === '') return { matches: [], limited: false, truncated: false }
   const root = await canonicalRoot(cwd)
   const rg = require('@vscode/ripgrep').rgPath as string
-  const args = ['--json', '--line-number', '--column', '--hidden', '--glob', '!.git/**', '--max-count', '2000']
+  const maxMatches = positiveLimit(request.maxMatches, SEARCH_MAX_MATCHES)
+  const maxOutputBytes = positiveLimit(request.maxOutputBytes, SEARCH_MAX_OUTPUT_BYTES)
+  const maxFileSize = positiveLimit(request.maxFileSize, SEARCH_MAX_FILE_BYTES)
+  // --max-count 是「每文件」上限；全局上限由下面的流式读取（maxOutputBytes）+ maxMatches 负责。
+  const args = ['--json', '--line-number', '--column', '--hidden', '--glob', '!.git/**', '--max-count', '2000', '--max-filesize', String(maxFileSize)]
   if (!request.regex) args.push('--fixed-strings')
   if (!request.caseSensitive) args.push('--ignore-case')
   if (request.wholeWord) args.push('--word-regexp')
   if (request.include) args.push('--glob', request.include)
   if (request.exclude) args.push('--glob', `!${request.exclude}`)
   args.push('--', request.query, '.')
-  const result = await run(rg, args, root, PROCESS_TIMEOUT, signal)
-  if (result.code > 1) throw new WorkbenchError('search-failed', result.stderr || 'ripgrep failed', 500)
+  const result = await runner(rg, args, root, PROCESS_TIMEOUT, signal, maxOutputBytes)
+  // 达到字节上限时是我们主动 kill 的，退出码不可信，不能按 rg 失败处理。
+  if (!result.truncated && result.code > 1) throw new WorkbenchError('search-failed', result.stderr || 'ripgrep failed', 500)
   const matches: SearchMatch[] = []
   for (const line of result.stdout.split('\n')) {
     if (line === '') continue
-    const event = JSON.parse(line) as { type: string; data?: { path?: { text?: string }; lines?: { text?: string }; line_number?: number; submatches?: Array<{ start: number; end: number; match?: { text?: string } }> } }
+    let event: { type?: string; data?: { path?: { text?: string }; lines?: { text?: string }; line_number?: number; submatches?: Array<{ start: number; end: number; match?: { text?: string } }> } }
+    try { event = JSON.parse(line) as typeof event } catch { continue } // 字节上限截断时最后一行可能是半行
     if (event.type !== 'match' || event.data?.path?.text === undefined || event.data.lines?.text === undefined) continue
     for (const hit of event.data.submatches ?? []) {
       matches.push({ path: event.data.path.text.replace(/^\.\//, ''), line: event.data.line_number ?? 1, column: hit.start + 1, preview: event.data.lines.text.trimEnd(), match: hit.match?.text ?? '' })
-      if (matches.length >= 2000) return { matches, limited: true }
+      if (matches.length >= maxMatches) return { matches, limited: true, truncated: true }
     }
   }
-  return { matches, limited: false }
+  return { matches, limited: result.truncated, truncated: result.truncated }
 }
 
-async function gitRoot(cwd: string): Promise<string> {
-  const result = await run('git', ['rev-parse', '--show-toplevel'], cwd)
-  if (result.code !== 0) throw new WorkbenchError('not-repository', 'current workspace is not inside a Git repository', 404)
-  return result.stdout.trim()
+/**
+ * 每个 workspace 只跑一次 `rev-parse --show-toplevel`：一次面板 refresh / 一次动作里的
+ * gitStatus、gitAction、gitObject 都复用同一个仓库根。失败不缓存（变为 git 仓库后可以重试）。
+ * 进程生命周期内工作区被移动/删除时缓存会过期 —— 与审计报告一致的已知取舍。
+ */
+const gitRootCaches = new WeakMap<ProcessRunner, Map<string, Promise<string>>>()
+
+function gitRootCacheFor(runner: ProcessRunner): Map<string, Promise<string>> {
+  let cache = gitRootCaches.get(runner)
+  if (cache === undefined) { cache = new Map(); gitRootCaches.set(runner, cache) }
+  return cache
+}
+
+/** 仅供测试：清掉某个 runner 的 workspace→root 缓存。 */
+export function resetGitRootCache(runner: ProcessRunner = run): void { gitRootCaches.get(runner)?.clear() }
+
+async function gitRoot(cwd: string, runner: ProcessRunner = run): Promise<string> {
+  const cache = gitRootCacheFor(runner)
+  const cached = cache.get(cwd)
+  if (cached !== undefined) return cached
+  // 存 Promise 而不是结果：并发的 status/log 两个请求会共用同一次 rev-parse（refresh 冷启动 5→3）。
+  const pending = (async () => {
+    const result = await runner('git', ['rev-parse', '--show-toplevel'], cwd)
+    if (result.code !== 0) throw new WorkbenchError('not-repository', 'current workspace is not inside a Git repository', 404)
+    return result.stdout.trim()
+  })()
+  cache.set(cwd, pending)
+  pending.catch(() => { if (cache.get(cwd) === pending) cache.delete(cwd) })
+  return pending
 }
 
 function validateCommitHash(value?: string): string {
@@ -257,16 +330,22 @@ function validateGitPath(repository: string, path?: string): string {
   return path
 }
 
-async function gitObject(repository: string, spec: string): Promise<string> {
-  const result = await run('git', ['show', '--no-textconv', spec], repository)
+async function gitObject(repository: string, spec: string, runner: ProcessRunner = run): Promise<string> {
+  const result = await runner('git', ['show', '--no-textconv', spec], repository)
   return result.code === 0 ? result.stdout : ''
 }
 
-async function commitFiles(repository: string, hash: string): Promise<GitCommitFile[]> {
-  const parent=await run('git',['rev-parse','--verify',`${hash}^1`],repository)
+/**
+ * 一次提交的文件列表 + 父提交探测结果。
+ *
+ * `commit.files` 只要 files；`commit.file.diff` 还要 parent 来决定用 diff 还是 show、以及拿
+ * `previousPath`/`status`。两处共用同一次 `rev-parse hash^1`，避免 commit.file.diff 里重复探测。
+ */
+async function commitFilesWithParent(repository: string, hash: string, runner: ProcessRunner = run): Promise<{ files: GitCommitFile[]; parent: ProcessResult }> {
+  const parent = await runner('git', ['rev-parse', '--verify', `${hash}^1`], repository)
   const result = parent.code===0
-    ? await run('git',['diff','--name-status','-z','-M',parent.stdout.trim(),hash,'--'],repository)
-    : await run('git', ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', '-M', hash], repository)
+    ? await runner('git',['diff','--name-status','-z','-M',parent.stdout.trim(),hash,'--'],repository)
+    : await runner('git', ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', '-M', hash], repository)
   if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 409)
   const tokens = result.stdout.split('\0').filter(Boolean); const files: GitCommitFile[] = []
   for (let index = 0; index < tokens.length;) {
@@ -274,12 +353,16 @@ async function commitFiles(repository: string, hash: string): Promise<GitCommitF
     if (code === 'R' || code === 'C') { const previousPath=tokens[index++]??'';const path=tokens[index++]??'';files.push({path,previousPath,status:code}) }
     else { const path=tokens[index++]??'';files.push({path,status:code}) }
   }
-  return files
+  return { files, parent }
 }
 
-export async function gitStatus(cwd: string): Promise<GitStatus> {
-  const repository = await gitRoot(cwd)
-  const result = await run('git', ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all'], repository)
+async function commitFiles(repository: string, hash: string, runner: ProcessRunner = run): Promise<GitCommitFile[]> {
+  return (await commitFilesWithParent(repository, hash, runner)).files
+}
+
+export async function gitStatus(cwd: string, runner: ProcessRunner = run): Promise<GitStatus> {
+  const repository = await gitRoot(cwd, runner)
+  const result = await runner('git', ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all'], repository)
   if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr, 500)
   let branch = 'HEAD'; let ahead = 0; let behind = 0
   const changes: GitChange[] = []
@@ -296,8 +379,10 @@ export async function gitStatus(cwd: string): Promise<GitStatus> {
   return { repository, branch, ahead, behind, changes }
 }
 
-export async function gitAction(cwd: string, action: string, path?: string, value?: string): Promise<unknown> {
-  const repository = await gitRoot(cwd)
+export async function gitAction(cwd: string, action: string, path?: string, value?: string, runner: ProcessRunner = run): Promise<unknown> {
+  const repository = await gitRoot(cwd, runner)
+  // 同一个动作里的所有 git 调用共用一个已解析的仓库根：不再每个 run 都重新 rev-parse。
+  const runGit = (gitArgs: string[]): Promise<ProcessResult> => runner('git', gitArgs, repository)
   let args: string[]
   switch (action) {
     case 'stage': args = ['add', '--', path ?? '']; break
@@ -309,28 +394,31 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       break
     }
     case 'discard.all': {
-      const head = await run('git', ['rev-parse', '--verify', 'HEAD'], repository)
+      const head = await runGit(['rev-parse', '--verify', 'HEAD'])
       if (head.code === 0) {
-        const restore = await run('git', ['restore', '--source=HEAD', '--staged', '--worktree', '--', '.'], repository)
+        const restore = await runGit(['restore', '--source=HEAD', '--staged', '--worktree', '--', '.'])
         if (restore.code !== 0) throw new WorkbenchError('git-failed', restore.stderr || restore.stdout, 409)
       }
-      const clean = await run('git', ['clean', '-fd'], repository)
+      const clean = await runGit(['clean', '-fd'])
       if (clean.code !== 0) throw new WorkbenchError('git-failed', clean.stderr || clean.stdout, 409)
-      return gitStatus(cwd)
+      return gitStatus(cwd, runner)
     }
     case 'commit': args = ['commit', '-m', value ?? '']; break
     case 'branch.create': args = ['switch', '-c', value ?? '']; break
     case 'branch.switch': args = ['switch', value ?? '']; break
     case 'branches': {
-      const result = await run('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], repository)
+      const result = await runGit(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])
       if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr, 500)
       return result.stdout.split('\n').filter(Boolean)
     }
     case 'log': {
-      const head = await run('git', ['rev-parse', '--verify', 'HEAD'], repository)
-      if (head.code !== 0) return []
-      const result = await run('git', ['log', '--topo-order', '--date=iso-strict', '--decorate=short', '--pretty=format:%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1f%D%x00', '-n', '100'], repository)
-      if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 500)
+      // 不再先跑 `rev-parse --verify HEAD`：正常仓库直接 log（-1 spawn）；失败时才懒回退判断空仓库。
+      const result = await runGit(['log', '--topo-order', '--date=iso-strict', '--decorate=short', '--pretty=format:%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1f%D%x00', '-n', '100'])
+      if (result.code !== 0) {
+        const head = await runGit(['rev-parse', '--verify', 'HEAD'])
+        if (head.code !== 0) return []
+        throw new WorkbenchError('git-failed', result.stderr || result.stdout, 500)
+      }
       return result.stdout.split('\0').filter(Boolean).map((record): GitCommit => {
         const [rawHash = '', parents = '', author = '', date = '', subject = '', refs = ''] = record.split('\x1f');const hash=rawHash.trim()
         return { hash, parents: parents.split(' ').filter(Boolean), author, date, subject, refs: refs.split(',').map(item => item.trim()).filter(Boolean) }
@@ -338,21 +426,22 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
     }
     case 'commit.show': {
       const hash = validateCommitHash(value)
-      const result = await run('git', ['show', '--no-ext-diff', '--find-renames', '--format=fuller', '--stat', '--patch', '--no-color', hash], repository)
+      const result = await runGit(['show', '--no-ext-diff', '--find-renames', '--format=fuller', '--stat', '--patch', '--no-color', hash])
       if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 409)
       return { diff: result.stdout, original: '', modified: result.stdout } satisfies GitDiff
     }
-    case 'commit.files': return commitFiles(repository, validateCommitHash(value))
+    case 'commit.files': return commitFiles(repository, validateCommitHash(value), runner)
     case 'commit.file.diff': {
-      const hash=validateCommitHash(value);const target=validateGitPath(repository,path);const files=await commitFiles(repository,hash);const file=files.find(item=>item.path===target)
+      const hash=validateCommitHash(value);const target=validateGitPath(repository,path)
+      // 文件列表与父提交由同一次探测得到：不再先 commitFiles 再单独 rev-parse hash^1。
+      const { files, parent } = await commitFilesWithParent(repository, hash, runner);const file=files.find(item=>item.path===target)
       if (file===undefined) throw new WorkbenchError('not-found','file is not part of the commit',404)
-      const parent=await run('git',['rev-parse','--verify',`${hash}^1`],repository)
       const shown=parent.code===0
-        ? await run('git',['diff','--no-ext-diff','--find-renames','--patch','--no-color',parent.stdout.trim(),hash,'--',file.previousPath??target,target],repository)
-        : await run('git',['show','--no-ext-diff','--find-renames','--format=','--patch','--no-color',hash,'--',file.previousPath??target,target],repository)
+        ? await runGit(['diff','--no-ext-diff','--find-renames','--patch','--no-color',parent.stdout.trim(),hash,'--',file.previousPath??target,target])
+        : await runGit(['show','--no-ext-diff','--find-renames','--format=','--patch','--no-color',hash,'--',file.previousPath??target,target])
       if(shown.code!==0)throw new WorkbenchError('git-failed',shown.stderr||shown.stdout,409)
-      const original=file.status==='A'||parent.code!==0?'':await gitObject(repository,`${parent.stdout.trim()}:${file.previousPath??target}`)
-      const modified=file.status==='D'?'':await gitObject(repository,`${hash}:${target}`)
+      const original=file.status==='A'||parent.code!==0?'':await gitObject(repository,`${parent.stdout.trim()}:${file.previousPath??target}`, runner)
+      const modified=file.status==='D'?'':await gitObject(repository,`${hash}:${target}`, runner)
       return {diff:shown.stdout,original,modified} satisfies GitDiff
     }
     case 'diff': {
@@ -366,13 +455,13 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
     default: throw new WorkbenchError('bad-action', `unknown Git action ${action}`)
   }
   if (args.some(arg => arg === '') && action !== 'commit') throw new WorkbenchError('bad-request', 'path or value is required')
-  const result = await run('git', args, repository)
+  const result = await runGit(args)
   const expectedUntrackedDifference = action === 'diff' && value === 'untracked' && result.code === 1
   if (result.code !== 0 && !expectedUntrackedDifference) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 409)
-  if(action!=='diff')return gitStatus(cwd)
+  if(action!=='diff')return gitStatus(cwd, runner)
   const target=validateGitPath(repository,path)
-  const original=value==='untracked'?'':await gitObject(repository,`${value==='staged'?'HEAD:':':'}${target}`)
-  const modified=value==='staged'?await gitObject(repository,`:${target}`):await readFile(resolve(repository,target),'utf8').catch(()=> '')
+  const original=value==='untracked'?'':await gitObject(repository,`${value==='staged'?'HEAD:':':'}${target}`, runner)
+  const modified=value==='staged'?await gitObject(repository,`:${target}`, runner):await readFile(resolve(repository,target),'utf8').catch(()=> '')
   return {diff:result.stdout,original,modified} satisfies GitDiff
 }
 
