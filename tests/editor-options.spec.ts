@@ -1,12 +1,16 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_EDITOR_OPTION_PREFERENCES,
   EDITOR_HIGHLIGHT_COLORS,
+  SCROLLBAR_SLIDER_ALPHA,
   WORKBENCH_SCROLLBAR,
   editorChrome,
   editorModelOptions,
   editorOptions,
   highlightThemeColors,
+  withAlpha,
   type EditorOptionPreferences,
 } from '../src/client/editorOptions.ts'
 
@@ -215,9 +219,51 @@ describe('highlight theme colors', () => {
   it('keeps token names as data so the DSH theme stays the source of truth', () => {
     const withToken = EDITOR_HIGHLIGHT_COLORS.filter(spec => spec.token !== '')
     expect(withToken.map(spec => spec.token)).toEqual(expect.arrayContaining([
-      '--dsw-alias-state-business-primary',
+      '--dsw-alias-label-primary',
       '--dsw-alias-label-tertiary',
       '--dsw-alias-border-l2',
     ]))
+  })
+
+  it('paints overview-ruler markers white (foreground), not DSH blue', () => {
+    // 标尺标记跟随前景色：深色主题 = 白色，浅色主题 = 近黑（白标记在浅灰底上看不见）。
+    // 曾经用 --dsw-alias-state-business-primary（蓝），和选区/强调色糊在一起看不清。
+    expect(EDITOR_HIGHLIGHT_COLORS.filter(spec => spec.id.startsWith('editorOverviewRuler.')) .map(spec => spec.token))
+      .not.toContain('--dsw-alias-state-business-primary')
+    const dark = highlightThemeColors(true)
+    expect(dark['editorOverviewRuler.selectionHighlightForeground']).toBe('#FFFFFFE6')
+    expect(dark['editorOverviewRuler.wordHighlightForeground']).toBe('#FFFFFFE6')
+    expect(dark['editorOverviewRuler.wordHighlightStrongForeground']).toBe('#FFFFFFE6')
+    const light = highlightThemeColors(false)
+    expect(light['editorOverviewRuler.selectionHighlightForeground']).toBe('#1F1F1FCC')
+  })
+})
+
+describe('scrollbar slider transparency', () => {
+  it('makes every slider state translucent so the overview ruler shows through', () => {
+    // 滑块画在标尺之上：不透明色块会把选区/同类词标记整块盖住。三个态都必须带 alpha。
+    for (const value of Object.values(SCROLLBAR_SLIDER_ALPHA)) {
+      expect(Number.parseInt(value, 16)).toBeGreaterThan(0)
+      expect(Number.parseInt(value, 16)).toBeLessThan(255)
+    }
+  })
+
+  it('keeps the DSH color and only adds alpha', () => {
+    expect(withAlpha('#3c3c3d', '66')).toBe('#3c3c3d66')
+    expect(withAlpha('#3C3C3DB8', '99')).toBe('#3C3C3D99')
+    expect(withAlpha('rgb(60, 60, 61)', '66')).toBe('rgba(60, 60, 61, 0.400)')
+    expect(withAlpha('rgba(60, 60, 61, 0.2)', 'B3')).toBe('rgba(60, 60, 61, 0.702)')
+    // 认不出的格式原样返回：宁可保持不透明，也不要把主题写坏（defineTheme 会抛错）。
+    expect(withAlpha('color-mix(in srgb, red 50%, blue)', '66')).toBe('color-mix(in srgb, red 50%, blue)')
+    expect(withAlpha('#3c3c3d', 'zz')).toBe('#3c3c3d')
+  })
+
+  it('wires the transparent slider colors into the Monaco theme', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/client/MonacoEditor.tsx', import.meta.url)), 'utf8')
+    for (const key of ['scrollbarSlider.background', 'scrollbarSlider.hoverBackground', 'scrollbarSlider.activeBackground']) {
+      expect(source).toContain(`'${key}': withAlpha(`)
+    }
+    expect(source).toContain('SCROLLBAR_SLIDER_ALPHA.background')
+    expect(source).toContain('SCROLLBAR_SLIDER_ALPHA.active')
   })
 })

@@ -244,16 +244,50 @@ export const EDITOR_HIGHLIGHT_COLORS: readonly HighlightColorSpec[] = [
   { id: 'editor.wordHighlightBackground', token: '', dark: '#575757B8', light: '#57575740' },
   { id: 'editor.wordHighlightStrongBackground', token: '', dark: '#004972B8', light: '#0E639C40' },
   { id: 'editor.findMatchHighlightBackground', token: '', dark: '#EA5C0055', light: '#EA5C0055' },
-  // 概览标尺上的标记：取 DSH 的强调色/三级文字色，令牌缺失时回落 VS Code 的灰色标记。
-  { id: 'editorOverviewRuler.selectionHighlightForeground', token: '--dsw-alias-state-business-primary', dark: '#A0A0A0CC', light: '#A0A0A0CC' },
-  { id: 'editorOverviewRuler.wordHighlightForeground', token: '--dsw-alias-state-business-primary', dark: '#A0A0A0CC', light: '#A0A0A0CC' },
-  { id: 'editorOverviewRuler.wordHighlightStrongForeground', token: '--dsw-alias-state-business-primary', dark: '#A0A0A0CC', light: '#A0A0A0CC' },
+  // 概览标尺上的标记用**白色**（深色主题）而不是 DSH 的蓝色强调色：标尺与滚动条滑块挤在
+  // 右侧同一条窄带里，蓝色跟选区/强调色糊在一起反而看不清；VS Code 的标尺标记也是中性色。
+  // 接 --dsw-alias-label-primary：深色主题下它本身就是白色，浅色主题下是近黑（白标记在浅色
+  // 灰底上不可见，所以这里跟随前景色而不是硬编码白）。透明度给足，避免和滑块叠成一块。
+  { id: 'editorOverviewRuler.selectionHighlightForeground', token: '--dsw-alias-label-primary', dark: '#FFFFFFE6', light: '#1F1F1FCC' },
+  { id: 'editorOverviewRuler.wordHighlightForeground', token: '--dsw-alias-label-primary', dark: '#FFFFFFE6', light: '#1F1F1FCC' },
+  { id: 'editorOverviewRuler.wordHighlightStrongForeground', token: '--dsw-alias-label-primary', dark: '#FFFFFFE6', light: '#1F1F1FCC' },
   // 行内合并冲突的「当前内容」标尺标记与标尺边框：Monaco 的注册表里都有这两个键，
   // 一并接到 DSH 令牌上，免得冲突视图回落到内置主题的固定色。
   { id: 'editorOverviewRuler.currentContentForeground', token: '--dsw-alias-label-tertiary', dark: '#A0A0A0CC', light: '#A0A0A0CC' },
   // 标尺与编辑区之间的 1px 分隔线；透明会让标尺边界糊在一起，所以接边框令牌。
   { id: 'editorOverviewRuler.border', token: '--dsw-alias-border-l2', dark: '#ffffff1f', light: '#0000001a' },
 ]
+
+/**
+ * 滚动条滑块的不透明度。
+ *
+ * 滑块画在概览标尺**之上**：DSH 的滚动条令牌是不透明色块，滑块一出现就把标尺上的选区/同类词
+ * 标记整块盖住 —— 表现就是「高亮明明算出来了，滑条那片什么也看不到」。这里给同一个颜色追加
+ * alpha（只改透明度、不改 RGB），让底下的标尺透出来。
+ * 三个态沿用 VS Code 的观感：默认最淡、悬停加深、拖动最实。
+ */
+export const SCROLLBAR_SLIDER_ALPHA = { background: '66', hover: '99', active: 'B3' } as const
+
+/**
+ * 给一个合法颜色追加/替换 alpha 通道。
+ *
+ * 只处理 Monaco 主题会遇到的写法（6/8 位 hex、rgb/rgba）；其它格式原样返回 —— 宁可保持不透明，
+ * 也不要因为拼错格式让 `defineTheme` 抛错（那会让整个工作台渲染失败）。
+ */
+export function withAlpha(value: string, alphaHex: string): string {
+  const alpha = alphaHex.replace(/^#/, '').toUpperCase()
+  if (!/^[0-9A-F]{2}$/.test(alpha)) return value
+  const hex6 = /^#([0-9a-f]{6})$/i.exec(value)
+  if (hex6 !== null) return `#${hex6[1] ?? ''}${alpha}`
+  const hex8 = /^#([0-9a-f]{8})$/i.exec(value)
+  if (hex8 !== null) return `#${(hex8[1] ?? '').slice(0, 6)}${alpha}`
+  const rgb = /^rgba?\(\s*([^)]+)\)$/i.exec(value)
+  if (rgb !== null) {
+    const parts = (rgb[1] ?? '').split(',').map(part => part.trim())
+    if (parts.length >= 3) return `rgba(${parts[0] ?? '0'}, ${parts[1] ?? '0'}, ${parts[2] ?? '0'}, ${(Number.parseInt(alpha, 16) / 255).toFixed(3)})`
+  }
+  return value
+}
 
 /**
  * 把配色条目解析成 Monaco 主题的 colors 对象。

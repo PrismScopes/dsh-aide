@@ -4,7 +4,7 @@ import lightPlus from '@shikijs/themes/light-plus'
 import { installTextMate } from './textmateHighlight.ts'
 import { attachInlineCompletion } from './inlineCompletion.ts'
 import { getPreferences, usePreferences } from './preferences.ts'
-import { editorChrome, editorModelOptions, editorOptions, highlightThemeColors } from './editorOptions.ts'
+import { editorChrome, editorModelOptions, editorOptions, highlightThemeColors, SCROLLBAR_SLIDER_ALPHA, withAlpha } from './editorOptions.ts'
 import { ContextMenu } from './ContextMenu.tsx'
 import { copyText, readClipboard } from './clipboard.ts'
 import {
@@ -131,8 +131,12 @@ export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string 
         'editorCursor.foreground': color('--dsw-alias-label-primary', dark ? '#f9fafb' : '#0f1115'),
         'editorWidget.background': color('--dsw-alias-bg-layer-2', dark ? '#2c2c2e' : '#ffffff'),
         'editorWidget.border': color('--dsw-alias-border-l2', dark ? '#ffffff1f' : '#0000001a'),
-        'scrollbarSlider.background': color('--dsw-alias-scrollbar-bg-l1', dark ? '#3c3c3d' : '#e5e5e5'),
-        'scrollbarSlider.hoverBackground': color('--dsw-alias-scrollbar-bg-l2', dark ? '#545557' : '#e5e5e5'),
+        // 滑块必须带透明度：它画在概览标尺之上，DSH 的滚动条令牌是不透明色块，会把标尺上的
+        // 选区/同类词标记整块盖住（表现为「高亮算出来了但滑条那里看不见」）。颜色仍是 DSH 令牌
+        // 的原色，只追加 alpha —— 三个态沿用 VS Code 的观感（默认最淡、悬停加深、拖动最实）。
+        'scrollbarSlider.background': withAlpha(color('--dsw-alias-scrollbar-bg-l1', dark ? '#3c3c3d' : '#e5e5e5'), SCROLLBAR_SLIDER_ALPHA.background),
+        'scrollbarSlider.hoverBackground': withAlpha(color('--dsw-alias-scrollbar-bg-l2', dark ? '#545557' : '#e5e5e5'), SCROLLBAR_SLIDER_ALPHA.hover),
+        'scrollbarSlider.activeBackground': withAlpha(color('--dsw-alias-scrollbar-bg-l2', dark ? '#545557' : '#e5e5e5'), SCROLLBAR_SLIDER_ALPHA.active),
         // 划词高亮与概览标尺的标记色。没有这几项时，选中一个词后其余同类词虽然被 Monaco
         // 算出来了却没有可见颜色（等于没高亮），概览标尺上也不会出现选区/同类词的标记。
         // 配色是纯数据（editorOptions.ts 的 EDITOR_HIGHLIGHT_COLORS），单测可断言。
