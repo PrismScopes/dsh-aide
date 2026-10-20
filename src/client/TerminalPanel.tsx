@@ -9,7 +9,7 @@ import { Icon } from './Icon.tsx'
 import { getPreferences, usePreferences } from './preferences.ts'
 import { terminalPaneMenuItems } from './menus.ts'
 import type { BottomPanelProps } from './service.ts'
-import { isTerminalProtocolReply, takeTerminalRequests, TerminalWorkspaceController } from './terminal.ts'
+import { isTerminalProtocolReply, prewarmRequestDue, shouldPrewarm, takeTerminalRequests, TERMINAL_PREWARM_EVENT, TerminalWorkspaceController } from './terminal.ts'
 import type { TerminalRequest } from './terminal.ts'
 
 /** 终端配色接入 DSH 主题令牌（渲染期从 body 读；无 document 时回落到原固定值）。 */
@@ -211,14 +211,32 @@ export function TerminalPanel({ sessionId, colorScheme, header, visible }: Botto
    * 预热默认 shell。
    *
    * pwsh 这类 shell 自己就要 ~0.5s 才能接命令（profile 加载），点「新建终端」后才开始起的话
-   * 这段时间只能干等。面板已经打开、又没有终端可切时，先把默认 shell 起在宿主那边；用户点新建
-   * 时它已经在回放缓冲里放着提示符了。延迟 150ms 是为了避开「刚打开就关掉」的抖动。
+   * 这段时间只能干等。两种时机预热（真值表见 shouldPrewarm）：
+   *   1. 面板可见且一个终端都没有 —— 打开面板就能点「新建」，先把 shell 起在宿主那边；
+   *   2. 面板可见且用户**悬停/聚焦**过「新建终端」按钮 —— 这是「马上要新建」的显式意图，
+   *      已有终端时也预热（最常见的场景：已经开着终端再点「+」）。
+   * 只有打开面板看已有终端、没有任何意图时**不**预热，避免凭空多起一个 shell。
+   * 150ms 防抖避开「刚打开就关掉」的抖动；冷却窗口把连续扫过/反复聚焦合并成一次请求。
    */
+  const [prewarmIntentAt, setPrewarmIntentAt] = useState<number>()
+  const lastPrewarmRequestAt = useRef<number>()
   useEffect(() => {
-    if (!visible || snapshot.terminals.length > 0) return
-    const timer = setTimeout(() => { void workspace.prewarm().catch(() => { /* 预热失败不影响正常新建。 */ }) }, 150)
+    // 指针离开**不**清除意图：用户可能移开又移回来；意图有 TTL（PREWARM_INTENT_TTL_MS）自然过期。
+    const intent = () => setPrewarmIntentAt(Date.now())
+    window.addEventListener(TERMINAL_PREWARM_EVENT, intent)
+    return () => window.removeEventListener(TERMINAL_PREWARM_EVENT, intent)
+  }, [])
+  useEffect(() => {
+    if (!shouldPrewarm({ visible, terminalCount: snapshot.terminals.length, intentAt: prewarmIntentAt, now: Date.now() })) return
+    const timer = setTimeout(() => {
+      const startedAt = Date.now()
+      // 防抖之后再挡一次冷却：隔几百毫秒的两次悬停不该各起一次（宿主会杀掉旧 warm shell 再起新的）。
+      if (!prewarmRequestDue(lastPrewarmRequestAt.current, startedAt)) return
+      lastPrewarmRequestAt.current = startedAt
+      void workspace.prewarm().catch(() => { /* 预热失败不影响正常新建。 */ })
+    }, 150)
     return () => clearTimeout(timer)
-  }, [visible, snapshot.terminals.length, workspace])
+  }, [visible, snapshot.terminals.length, prewarmIntentAt, workspace])
   useEffect(() => { if (snapshot.terminals.length > 0 && (!active || !snapshot.terminals.some(value => value.id === active))) setActive(snapshot.terminals[0]?.id) }, [snapshot.terminals, active])
   // 挂载时先 drain：从资源管理器「在终端中打开」时面板可能还没挂载，那时事件没人听。
   useEffect(() => { drainRequests() }, [drainRequests])

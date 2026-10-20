@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import type { IPty } from 'node-pty'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { TerminalWorkspaceController } from '../src/client/terminal.ts'
+import { prewarmRequestDue, PREWARM_INTENT_TTL_MS, PREWARM_REQUEST_COOLDOWN_MS, shouldPrewarm, TERMINAL_PREWARM_EVENT } from '../src/client/terminal.ts'
 import { TerminalManager, terminalPrewarmEnabled } from '../src/terminal.ts'
 import type { TerminalInfo } from '../src/terminal.ts'
 
@@ -234,6 +235,47 @@ describe.skipIf(process.env.DWV_PREWARM_BENCH !== '1')('terminal prewarm benchma
   }, 30_000)
 })
 
+describe('prewarm intent: hover/focus on the New Terminal button', () => {
+  it('prewarms when the panel is visible and the workspace has no terminal yet', () => {
+    // 原有行为：打开面板、一个终端都没有 → 预热（用户马上就会点「新建」）。
+    expect(shouldPrewarm({ visible: true, terminalCount: 0, now: 1000 })).toBe(true)
+    expect(shouldPrewarm({ visible: true, terminalCount: 0, intentAt: undefined, now: 1000 })).toBe(true)
+  })
+
+  it('does not prewarm just because the panel is visible next to existing terminals', () => {
+    // 打开面板看已有终端：没有意图就不该凭空多起一个 shell。
+    expect(shouldPrewarm({ visible: true, terminalCount: 2, now: 1000 })).toBe(false)
+    expect(shouldPrewarm({ visible: true, terminalCount: 2, intentAt: undefined, now: 1000 })).toBe(false)
+  })
+
+  it('prewarms with existing terminals once the user hovers/focuses the button (intent within TTL)', () => {
+    // 最常见的场景：已经开着终端再点「+」—— 悬停即意图，点击前先把 shell 起好。
+    expect(shouldPrewarm({ visible: true, terminalCount: 3, intentAt: 1000, now: 1000 })).toBe(true)
+    expect(shouldPrewarm({ visible: true, terminalCount: 3, intentAt: 1000, now: 1000 + PREWARM_INTENT_TTL_MS })).toBe(true)
+  })
+
+  it('drops the intent after its TTL so a stale hover does not spawn shells forever', () => {
+    expect(shouldPrewarm({ visible: true, terminalCount: 3, intentAt: 1000, now: 1000 + PREWARM_INTENT_TTL_MS + 1 })).toBe(false)
+  })
+
+  it('never prewarms while the panel is hidden, even with intent', () => {
+    expect(shouldPrewarm({ visible: false, terminalCount: 0, intentAt: 1000, now: 1000 })).toBe(false)
+    expect(shouldPrewarm({ visible: false, terminalCount: 3, intentAt: 1000, now: 1000 })).toBe(false)
+  })
+
+  it('coalesces repeated hover/focus events into one request (cooldown window)', () => {
+    // 第一次意图总是允许发；冷却窗口内的重复意图跳过。
+    expect(prewarmRequestDue(undefined, 1000)).toBe(true)
+    expect(prewarmRequestDue(1000, 1000)).toBe(false)
+    expect(prewarmRequestDue(1000, 1000 + PREWARM_REQUEST_COOLDOWN_MS - 1)).toBe(false)
+    expect(prewarmRequestDue(1000, 1000 + PREWARM_REQUEST_COOLDOWN_MS)).toBe(true)
+  })
+
+  it('exposes the event name the button dispatches and the panel listens for', () => {
+    expect(TERMINAL_PREWARM_EVENT).toBe('dvw-terminal-prewarm')
+  })
+})
+
 describe('terminal startup wiring', () => {
   it('keeps hidden xterm instances mounted so switching back does not rebuild or replay', () => {
     const panel = read('TerminalPanel.tsx')
@@ -244,9 +286,33 @@ describe('terminal startup wiring', () => {
     // 新建请求发出后先显示占位，不让点击看起来没反应。
     expect(panel).toContain('setPending(value => value + 1)')
     expect(panel).toContain('正在启动终端…')
-    // 面板可见且没有终端时预热默认 shell；预热失败不影响正常新建。
-    expect(panel).toContain('if (!visible || snapshot.terminals.length > 0) return')
+    // 预热走真值表（可见 &&（无终端 || 悬停意图）），不再只有「没有终端」一条路。
+    expect(panel).not.toContain('if (!visible || snapshot.terminals.length > 0) return')
+    expect(panel).toContain('shouldPrewarm({ visible, terminalCount: snapshot.terminals.length, intentAt: prewarmIntentAt, now: Date.now() })')
     expect(panel).toContain('workspace.prewarm()')
+    // 150ms 防抖与失败静默仍在。
+    expect(panel).toContain('}, 150)')
+    expect(panel).toContain('.catch(() => { /* 预热失败不影响正常新建。 */ })')
+  })
+
+  it('turns hover/focus on the New Terminal button into a prewarm intent event', () => {
+    const button = read('TerminalNewButton.tsx')
+    // 两半按钮（加号 + shell 下拉）都要触发：左半直接建、右半最终也会建。
+    expect(button.match(/onPointerEnter=\{signalPrewarm\}/g) ?? []).toHaveLength(2)
+    expect(button.match(/onFocus=\{signalPrewarm\}/g) ?? []).toHaveLength(2)
+    expect(button).toContain('const signalPrewarm = () => requestTerminalPrewarm()')
+    // 指针离开不做任何清理：意图靠 TTL 过期（宿主的 90s TTL 负责回收 shell）。
+    expect(button).not.toContain('onPointerLeave')
+  })
+
+  it('listens for the prewarm intent in the panel and dedupes it (150ms debounce + 1s cooldown)', () => {
+    const panel = read('TerminalPanel.tsx')
+    expect(panel).toContain('window.addEventListener(TERMINAL_PREWARM_EVENT, intent)')
+    expect(panel).toContain('const intent = () => setPrewarmIntentAt(Date.now())')
+    expect(panel).toContain("return () => window.removeEventListener(TERMINAL_PREWARM_EVENT, intent)")
+    // 冷却：连续悬停/聚焦不各发一次请求。
+    expect(panel).toContain('if (!prewarmRequestDue(lastPrewarmRequestAt.current, startedAt)) return')
+    expect(panel).toContain('lastPrewarmRequestAt.current = startedAt')
   })
 
   it('keeps the bottom panel mounted (display:none) after it is collapsed', () => {

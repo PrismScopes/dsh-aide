@@ -131,6 +131,62 @@ export function isTerminalProtocolReply(data: string): boolean {
     || /^\x1b\[\??[\d;]*[cR]$/.test(data)
 }
 
+// ---------------------------------------------------------------------------
+// 预热意图（悬停/聚焦「新建终端」）
+// ---------------------------------------------------------------------------
+
+/** 按钮派发、终端面板监听的「预热意图」事件名。 */
+export const TERMINAL_PREWARM_EVENT = 'dvw-terminal-prewarm'
+/**
+ * 意图的有效期。
+ *
+ * 悬停后这么久之内，「新建终端」都算有明确意图（指针离开**不**清除意图：用户可能移开又移回来）。
+ * 超过这个窗口，之后终端数量变化就不再自动预热 —— 避免「很久以前悬停过一次」导致后来每次
+ * 开关终端都凭空多起一个 shell。
+ */
+export const PREWARM_INTENT_TTL_MS = 60_000
+/**
+ * 两次真正发出预热请求的最小间隔。
+ *
+ * 连续 pointerenter/focus（鼠标扫过、Tab 反复聚焦）只发一次 HTTP：宿主虽然会复用同一个预热 shell，
+ * 但每次请求仍然是一次往返 + 一次 `prewarm` 调用（重复调用会杀掉旧 warm shell 再起新的）。1s 足够
+ * 盖住「扫过」的抖动，又不影响「先开一个、过一会儿再开一个」的正常节奏。
+ */
+export const PREWARM_REQUEST_COOLDOWN_MS = 1_000
+
+/** 派发一次「悬停/聚焦 新建终端」的预热意图（按钮调用；抽成函数便于单测/静态断言）。 */
+export function requestTerminalPrewarm(): void {
+  window.dispatchEvent(new CustomEvent(TERMINAL_PREWARM_EVENT))
+}
+
+/** 预热真值表的输入。`intentAt` 与 `now` 显式传入，便于单测覆盖边界。 */
+export interface PrewarmDecision {
+  visible: boolean
+  terminalCount: number
+  /** 最近一次「悬停/聚焦新建终端」的时间；undefined = 从没表达过意图。 */
+  intentAt?: number
+  now: number
+}
+
+/**
+ * 要不要预热当前工作区。
+ *
+ * - 面板不可见：不预热（用户看不见终端，起了也是白起）；
+ * - 可见且**一个终端都没有**：预热（打开面板就能点「新建」，这是原有行为）；
+ * - 可见且**已有终端**：只有用户悬停/聚焦过「新建终端」（意图还在有效期内）才预热 ——
+ *   仅仅打开面板看已有终端不应该多起一个 shell。
+ */
+export function shouldPrewarm(input: PrewarmDecision): boolean {
+  if (!input.visible) return false
+  if (input.terminalCount === 0) return true
+  return input.intentAt !== undefined && input.now - input.intentAt <= PREWARM_INTENT_TTL_MS
+}
+
+/** 这次意图要不要真的发请求：距上次真正发出预热请求不足冷却时间就跳过。 */
+export function prewarmRequestDue(lastRequestAt: number | undefined, now: number): boolean {
+  return lastRequestAt === undefined || now - lastRequestAt >= PREWARM_REQUEST_COOLDOWN_MS
+}
+
 /** Maintain one terminal collection for a DSH session. */
 export class TerminalWorkspaceController implements TerminalWorkspace {
   private snapshot: TerminalWorkspaceSnapshot = { terminals: [], loading: false }
