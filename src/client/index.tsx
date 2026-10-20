@@ -119,7 +119,16 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
   }, [service])
   // 没有会话就不渲染：文件树与文件读写都以会话工作区为根，会话未就绪时取到的内容不可信。
   // 组件以会话与工作目录为 key，会话出现或切换工作区后会重新挂载，自然完成首次取数。
-  if (session === undefined || session.id === '') return null
+  if (session === undefined || session.id === '') {
+    // 没有会话就不进工作台：文件树与文件读写都以会话工作区为根，没有会话就没有根。
+    // DSH 启动时并不默认选中会话，此时打开工作台要给一句明确提示，留白会被当成加载失败。
+    return <div className="dvw-overlay"><div className="dvw-empty" style={{ gridColumn: '1/4' }}>
+      <div>请选择一个会话
+        <div className="dvw-message" style={{ marginTop: 6 }}>先在 DSH 里选择要使用的会话，再打开工作台。</div>
+      </div>
+      <button className="dvw-mode-button" onClick={() => service.hide()}>返回 DSH</button>
+    </div></div>
+  }
   return <Workbench key={`${session.id}:${cwd ?? ''}`} service={service} sessionId={session.id} cwd={cwd}/>
 }
 

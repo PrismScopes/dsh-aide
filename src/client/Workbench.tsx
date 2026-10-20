@@ -96,7 +96,6 @@ function FileGlyph({ name, kind, expanded }: { name: string; kind: 'file' | 'dir
 }
 
 /** Restore tab headers without reading their file contents. */
-export function restoreTabPaths(paths:string[]):Tab[]{return [...new Set(paths)].map(unloadedTab)}
 
 /** Return whether file changes require reloading one visible directory. */
 export function directoryAffected(directory:string,changedPaths:string[]):boolean{return changedPaths.some(changed=>{const normalized=changed.replace(/\\/g,'/');const parent=normalized.includes('/')?normalized.slice(0,normalized.lastIndexOf('/')):'';return normalized===directory||parent===directory})}
@@ -271,8 +270,7 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     }
     setActive(path)
   }
-  useEffect(()=>{if(!snapshot.visible||sessionId===undefined)return;const epoch=workspaceRequests.current.begin();const cleared=resetWorkspaceDocuments<Tab>();loadingTabs.current.clear();setWorkspace(undefined);setTabs(cleared.tabs);tabsRef.current=cleared.tabs;setActive(cleared.active);setError(cleared.error);const controller=new AbortController();void api<{cwd:string;name:string}>('workspace',{sessionId},controller.signal).then(value=>{if(!workspaceRequests.current.isCurrent(epoch))return;setWorkspace(value);const saved=localStorage.getItem(`dvw:${value.cwd}`);if(saved){try{const parsed=JSON.parse(saved) as {view?:WorkbenchView;paths?:string[];active?:string;panelHeight?:number;sideWidth?:number};if(parsed.view)service.show(parsed.view);if(typeof parsed.panelHeight==='number')setPanelHeight(parsed.panelHeight);if(typeof parsed.sideWidth==='number')setSideWidth(Math.max(210,Math.min(640,Math.round(parsed.sideWidth))));const restored=restoreTabPaths(parsed.paths??[]);setTabs(restored);setActive(restored.some(tab=>tab.path===parsed.active)?parsed.active:restored.at(-1)?.path)}catch{}}}).catch(error=>{if(!controller.signal.aborted&&workspaceRequests.current.isCurrent(epoch))setError(String(error))});return()=>{controller.abort();loadingTabs.current.clear();workspaceRequests.current.invalidate(epoch)}},[snapshot.visible,sessionId])
-  useEffect(()=>{if(workspace) localStorage.setItem(`dvw:${workspace.cwd}`,JSON.stringify({view:snapshot.view,paths:tabs.filter(t=>!t.path.startsWith('diff:')).map(t=>t.path),active,panelHeight,sideWidth}))},[workspace,snapshot.view,tabs,active,panelHeight,sideWidth])
+  useEffect(()=>{if(!snapshot.visible||sessionId===undefined)return;const epoch=workspaceRequests.current.begin();const cleared=resetWorkspaceDocuments<Tab>();loadingTabs.current.clear();setWorkspace(undefined);setTabs(cleared.tabs);tabsRef.current=cleared.tabs;setActive(cleared.active);setError(cleared.error);const controller=new AbortController();void api<{cwd:string;name:string}>('workspace',{sessionId},controller.signal).then(value=>{if(!workspaceRequests.current.isCurrent(epoch))return;setWorkspace(value);}).catch(error=>{if(!controller.signal.aborted&&workspaceRequests.current.isCurrent(epoch))setError(String(error))});return()=>{controller.abort();loadingTabs.current.clear();workspaceRequests.current.invalidate(epoch)}},[snapshot.visible,sessionId])
   // 文件变更监听。地址必须用宿主的绝对地址：桌面端页面在 dsh-app://app/ 下，location.host 是
   // "app"，按它拼出来的 ws://app/… 连不上（实测 close 1006）——同一处坑，终端那边也踩过。
   // 宿主地址随 API 响应写进 api.ts 的模块状态，所以这里等它到位再连；拿不到就不连（Web 端会
