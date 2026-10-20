@@ -247,7 +247,7 @@ async function runClipboardAction(instance: MonacoEditorInstance, actionId: stri
     await action.run()
     return true
   } catch (failure) {
-    console.warn(`[dvw] 剪贴板动作 ${actionId} 不可用，改用工作台回退：`, failure)
+    console.warn(`[dvw] 剪贴板动作 ${actionId} 不可用，改用 AIDE 回退：`, failure)
     return false
   }
 }

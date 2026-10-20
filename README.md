@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/assets/dsh-aide-logo.svg" width="220" alt="DSH AIDE Logo">
 </p>
 
-<p align="center"><b>AIDE = AI + IDE</b>：在 DeepSeek Harness 中叠加 VS Code 风格的本地开发工作台。</p>
+<p align="center"><b>AIDE = AI + IDE</b>：在 DeepSeek Harness 中叠加 VS Code 风格的本地开发环境。</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/v/dsh-aide?logo=npm&label=npm" alt="npm 版本"></a>
@@ -14,11 +14,21 @@
   <a href="https://github.com/PrismScopes/dsh-aide/blob/main/LICENSE"><img src="https://img.shields.io/github/license/PrismScopes/dsh-aide?label=license" alt="MIT 许可证"></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/topics/dsh-plugin"><img alt="topic: dsh-plugin" src="https://img.shields.io/badge/topic-dsh--plugin-2ea44f?style=flat-square"></a>
+  <a href="https://github.com/topics/deepseek-harness"><img alt="topic: deepseek-harness" src="https://img.shields.io/badge/topic-deepseek--harness-6f42c1?style=flat-square"></a>
+  <a href="https://github.com/topics/dsh"><img alt="topic: dsh" src="https://img.shields.io/badge/topic-dsh-0969da?style=flat-square"></a>
+  <a href="https://github.com/topics/ai"><img alt="topic: ai" src="https://img.shields.io/badge/topic-ai-8250df?style=flat-square"></a>
+  <a href="https://github.com/topics/ide"><img alt="topic: ide" src="https://img.shields.io/badge/topic-ide-1f883d?style=flat-square"></a>
+  <a href="https://github.com/topics/monaco-editor"><img alt="topic: monaco-editor" src="https://img.shields.io/badge/topic-monaco--editor-f9a825?style=flat-square"></a>
+  <a href="https://github.com/topics/vscode-workbench"><img alt="topic: vscode-workbench" src="https://img.shields.io/badge/topic-vscode--workbench-007acc?style=flat-square"></a>
+</p>
+
 <p align="center"><b>中文</b> · <a href="README.en.md">English</a></p>
 
 ## 亮点
 
-- **一体化本地工作台**：资源管理器、Monaco 编辑器、搜索、Git、终端和 DSH 对话集中在一个 VS Code 风格界面。
+- **一体化 AIDE**：资源管理器、Monaco 编辑器、搜索、Git、终端和 DSH 对话集中在一个 VS Code 风格界面。
 - **完整文件体验**：文本、Markdown、图片、PDF 和 Word 文档均可直接打开；目录支持拖放上传和常用文件操作。
 - **可靠且实时**：原子保存与版本校验避免静默覆盖，WebSocket 会及时标记工作区的外部变更。
 - **可视化 Git 工作流**：覆盖状态、暂存、提交、分支、差异、提交文件与泳道式提交图。
@@ -35,7 +45,7 @@
   不重建 xterm、不重放输出，回来即用。
 - **布局与 DSH**：左侧视图、终端面板和右侧 DSH 对话栏可独立显示和调整；宽度直接拖分隔条改、双击恢复默认，
   这些都在界面里就地完成，不再重复成设置项。
-- **设置页**：DSH 设置里的「AIDE 工作台」一页，单列滚动、按分组（编辑器 / AI 补全 / 终端 / 快捷键 /
+- **设置页**：DSH 设置里的「AIDE」一页，单列滚动、按分组（编辑器 / AI 补全 / 终端 / 快捷键 /
   关于与诊断）分段，字号与 DSH 设置页统一（行标题 14/20、说明 12/18、控件 14/32px）。编辑器：字号、行高、
   制表符宽度与空格缩进、自动换行（关/按宽度/按列）、
   缩略图、概览标尺、选中内容同类词高亮、空白字符、光标样式、平滑滚动、粘性滚动、自动保存与延迟；
@@ -67,7 +77,7 @@
   注意：宿主侧代码只在进程启动时加载，改过之后需要**重启应用**才生效（客户端部分刷新页面即可）。
 - **同步与恢复**：工作区文件变化实时推送；刷新后恢复活动视图、目录展开、面板与布局（文件标签不跨会话恢复）。
 
-工作台通过 DSH 的 `shell.overlay`、`main`、`sidebar.panellist` 与 `settings.section` 扩展点挂载
+AIDE 通过 DSH 的 `shell.overlay`、`main`、`sidebar.panellist` 与 `settings.section` 扩展点挂载
 （`main` 与 `sidebar.panellist` 成对注册、互相切换，兼容侧栏面板被收起的情况），不替换或卸载 `ui-layout`。
 
 ## 性能
@@ -150,6 +160,8 @@ AIDE 面向 DSH 社区发布，收录状态会持续更新：
 - **DSH Plugin Hub**：[dshpluginhub.ai](https://dshpluginhub.ai) —— 按 npm 小时级同步；带 `dsh.bundle` 与 `dsh-plugin` topic 的仓库会先以 source-only 出现，npm 发布后自动升级为完整条目。
 - **dsh.so 插件市场**：[提交入口](https://www.dsh.so/zh/submit/) —— 粘贴仓库或包名，做 schema 校验与安全扫描后进入市场。
 - **awesome-dsh-plugin**：[community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) —— 一个插件一个 `data/plugins/<owner>__<repo>.yml`，满足 `dsh.bundle` + topic 后提交 PR。
+
+已提交的收录（审核 / 同步中）：[awesome-dsh-plugins #145](https://github.com/kejixiaoliang/awesome-dsh-plugins/pull/145) · [dshopen.org #17](https://github.com/polang233/dsh-plugin-index/issues/17) · [dsh-plugin.org #346](https://github.com/dshplugin/dsh-plugin-hub/issues/346)。
 
 > 支持自定义插件索引的客户端，可以直接添加 `https://github.com/PrismScopes/dsh-aide`。
 

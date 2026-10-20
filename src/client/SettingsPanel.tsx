@@ -427,7 +427,7 @@ function AboutGroup({ settingsFile }: { settingsFile?: string }) {
   return <section className="dvw-set-group">
     <h3 className="dvw-set-group-title">关于与诊断</h3>
     <Info label="版本" value={WORKBENCH_VERSION}/>
-    <Info label="DSH 设置文件" value={settingsFile ?? 'DSH 数据目录下的工作台设置文件（读取到宿主设置后显示完整路径）'}/>
+    <Info label="DSH 设置文件" value={settingsFile ?? 'DSH 数据目录下的 AIDE 设置文件（读取到宿主设置后显示完整路径）'}/>
     <Info label="客户端偏好键" value={PREFERENCES_KEY}/>
     <Info label="界面偏好位置" value="本机浏览器 localStorage；换浏览器或清空站点数据会回到默认值"/>
     <div className="dvw-set-row">

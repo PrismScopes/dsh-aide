@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/assets/dsh-aide-logo.svg" width="220" alt="DSH AIDE Logo">
 </p>
 
-<p align="center"><b>AIDE = AI + IDE</b>: a VS Code-style local development workbench for DeepSeek Harness.</p>
+<p align="center"><b>AIDE = AI + IDE</b>: a VS Code-style local development environment for DeepSeek Harness.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/v/dsh-aide?logo=npm&label=npm" alt="npm version"></a>
@@ -14,11 +14,21 @@
   <a href="https://github.com/PrismScopes/dsh-aide/blob/main/LICENSE"><img src="https://img.shields.io/github/license/PrismScopes/dsh-aide?label=license" alt="MIT license"></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/topics/dsh-plugin"><img alt="topic: dsh-plugin" src="https://img.shields.io/badge/topic-dsh--plugin-2ea44f?style=flat-square"></a>
+  <a href="https://github.com/topics/deepseek-harness"><img alt="topic: deepseek-harness" src="https://img.shields.io/badge/topic-deepseek--harness-6f42c1?style=flat-square"></a>
+  <a href="https://github.com/topics/dsh"><img alt="topic: dsh" src="https://img.shields.io/badge/topic-dsh-0969da?style=flat-square"></a>
+  <a href="https://github.com/topics/ai"><img alt="topic: ai" src="https://img.shields.io/badge/topic-ai-8250df?style=flat-square"></a>
+  <a href="https://github.com/topics/ide"><img alt="topic: ide" src="https://img.shields.io/badge/topic-ide-1f883d?style=flat-square"></a>
+  <a href="https://github.com/topics/monaco-editor"><img alt="topic: monaco-editor" src="https://img.shields.io/badge/topic-monaco--editor-f9a825?style=flat-square"></a>
+  <a href="https://github.com/topics/vscode-workbench"><img alt="topic: vscode-workbench" src="https://img.shields.io/badge/topic-vscode--workbench-007acc?style=flat-square"></a>
+</p>
+
 <p align="center"><a href="README.md">中文</a> · <b>English</b></p>
 
 ## Highlights
 
-- **One local workbench**: explorer, Monaco editor, search, Git, terminal, and DSH conversation in one VS Code-style interface.
+- **One integrated AIDE**: explorer, Monaco editor, search, Git, terminal, and DSH conversation in one VS Code-style interface.
 - **Complete file experience**: open text, Markdown, images, PDF, and Word files directly; the tree supports drag-and-drop uploads and common file operations.
 - **Reliable and live**: atomic saves and revision checks prevent silent overwrites, while WebSocket updates flag external workspace changes.
 - **Visual Git workflow**: status, staging, commits, branches, diffs, commit files, and a swimlane commit graph.
@@ -44,7 +54,7 @@
   Note: host-side code loads at process start, so **restart the app** after changes (a page reload is enough for the client side).
 - **Sync and restore**: workspace file changes stream to the UI, while reload restores views, expanded directories, panels, and layout (file tabs are not restored across sessions).
 
-The workbench mounts through DSH's `shell.overlay`, `main`, `sidebar.panellist`, and `settings.section` extension points
+AIDE mounts through DSH's `shell.overlay`, `main`, `sidebar.panellist`, and `settings.section` extension points
 (`main` and `sidebar.panellist` are registered as a pair and swap places when the side panel is collapsed). It does not
 replace or disable `ui-layout`.
 
@@ -133,6 +143,8 @@ supported; every other feature keeps working.
 - **DSH Plugin Hub**: [dshpluginhub.ai](https://dshpluginhub.ai) — hourly npm sync; repos with a `dsh.bundle` manifest and the `dsh-plugin` topic appear as source-only first, then upgrade after the npm release.
 - **dsh.so market**: [submission page](https://www.dsh.so/zh/submit/) — paste the repository or package name for schema validation and a security scan.
 - **awesome-dsh-plugin**: [community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) — one `data/plugins/<owner>__<repo>.yml` per plugin.
+
+Submitted listings (under review / sync): [awesome-dsh-plugins #145](https://github.com/kejixiaoliang/awesome-dsh-plugins/pull/145) · [dshopen.org #17](https://github.com/polang233/dsh-plugin-index/issues/17) · [dsh-plugin.org #346](https://github.com/dshplugin/dsh-plugin-hub/issues/346).
 
 > Clients with custom plugin-index support can add `https://github.com/PrismScopes/dsh-aide` directly.
 

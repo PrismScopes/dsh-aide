@@ -130,7 +130,7 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
     // DSH 启动时并不默认选中会话，此时打开工作台要给一句明确提示，留白会被当成加载失败。
     return <div className="dvw-overlay"><div className="dvw-empty" style={{ gridColumn: '1/4' }}>
       <div>请选择一个会话
-        <div className="dvw-message" style={{ marginTop: 6 }}>先在 DSH 里选择要使用的会话，再打开工作台。</div>
+        <div className="dvw-message" style={{ marginTop: 6 }}>先在 DSH 里选择要使用的会话，再打开 AIDE。</div>
       </div>
       <button className="dvw-mode-button" onClick={() => service.hide()}>返回 DSH</button>
     </div></div>
@@ -164,7 +164,7 @@ const PanelIcon = ({ service }: { service: VscodeWorkbench }) => {
         那样图标不占位，行文字会顶到行首把图标压住。 */}
     <span className="dvw-panel-icon"><Icon name="code"/></span>
     {/* 命中层单独一个绝对定位元素：铺满整行，在冒泡阶段吃掉点击。 */}
-    <span ref={hit} className="dvw-panel-hit" role="button" tabIndex={0} title="AIDE 工作台"
+    <span ref={hit} className="dvw-panel-hit" role="button" tabIndex={0} title="AIDE"
       onClick={open}
       onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') open(event) }}/>
   </>
@@ -271,10 +271,10 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-aide-overlay', inject: () => ({ service }) }, Overlay))
   // 侧栏“全局面板”入口：与下方 main 面板成对注册。
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, inject: () => ({ service, layout }) }, PanelPage))
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: 'AIDE 工作台', inject: () => ({ service }) }, PanelIcon))
+  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: 'AIDE', inject: () => ({ service }) }, PanelIcon))
   // DSH 设置导航里的「AIDE 工作台」页。order 取较大值，排在「插件市场」下面。
   // 设置页自己读写偏好（客户端 localStorage + 宿主的补全设置端点），不需要注入 workbench 服务。
-  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: PANEL_ID, order: 1000, label: 'AIDE 工作台', inject: () => ({}) }, SettingsPanel))
+  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: PANEL_ID, order: 1000, label: 'AIDE', inject: () => ({}) }, SettingsPanel))
   ctx.effect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (handleTerminalShortcut(event, service)) return
