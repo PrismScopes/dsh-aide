@@ -48,7 +48,7 @@ describe('dsh menu entries', () => {
     ])
   })
 
-  it('uses Chinese labels and only existing codicon names', () => {
+  it('uses Chinese labels', () => {
     const entries = dshMenuEntries(context())
     expect(items(entries).map(entry => entry.label)).toEqual([
       '添加至对话',
@@ -64,9 +64,27 @@ describe('dsh menu entries', () => {
     for (const entry of items(entries)) {
       // 菜单全中文：每个 label 都要有汉字（「询问 DSH…」里的 DSH 是服务名，保留原文）。
       expect(entry.label).toMatch(/[\u4e00-\u9fa5]/)
-      // 图标只能取 Icon.tsx 里已有的 CodiconName；这里钉住本菜单实际用到的几个。
-      expect(['sparkle', 'edit', 'check', 'copy']).toContain(entry.icon)
     }
+  })
+
+  it('gives every item a distinct icon that matches the agreed table', () => {
+    const entries = items(dshMenuEntries(context()))
+    // 用户反馈：旧版 sparkle×3 / edit×3 / check×2 看起来像没做完 —— 9 项必须互不重复。
+    const icons = entries.map(entry => entry.icon)
+    expect(new Set(icons).size).toBe(icons.length)
+    expect(Object.fromEntries(entries.map(entry => [entry.id, entry.icon]))).toEqual({
+      'dsh-add': 'comment-discussion',
+      'dsh-ask': 'comment',
+      'dsh-explain': 'book',
+      'dsh-fix': 'wrench',
+      'dsh-refactor': 'tools',
+      'dsh-tests': 'beaker',
+      'dsh-comment': 'note',
+      'dsh-review': 'checklist',
+      'dsh-copy-quote': 'quote',
+    })
+    // 父项仍用 sparkle，不在这 9 项里重复。
+    expect(icons).not.toContain('sparkle')
   })
 
   it('disables every selection action without a selection', () => {
@@ -74,14 +92,14 @@ describe('dsh menu entries', () => {
     expect(entries.every(entry => entry.disabled === true)).toBe(true)
   })
 
-  it('keeps only the clipboard action enabled when the DSH service is unavailable', () => {
+  it('keeps only the clipboard action enabled when the chat column is unavailable', () => {
     const entries = items(dshMenuEntries(context({ available: false })))
     const enabled = entries.filter(entry => entry.disabled !== true).map(entry => entry.id)
-    // 复制引用不碰 DSH：服务不可用时它仍然是用户的退路。
+    // 复制引用不碰对话栏：对话栏不可用时它仍然是用户的退路。
     expect(enabled).toEqual(['dsh-copy-quote'])
   })
 
-  it('enables everything with a selection and an available service', () => {
+  it('enables everything with a selection and an available chat column', () => {
     const entries = items(dshMenuEntries(context()))
     expect(entries.every(entry => entry.disabled !== true)).toBe(true)
   })

@@ -1,20 +1,17 @@
 /**
- * 把编辑器里的选中代码交给 DSH 对话。
+ * 把编辑器里的选中代码交给 DSH 对话栏。
  *
- * 两条链路：
- * - 「添加至对话」：只写 composer（Lexical），不发送 —— 用户能先看到、接着编辑再发；
- * - 「询问 / 解释 / 修复 …」：直接经 DSH 的 conversation 服务发一条 prompt（mode queue）。
+ * 只有一条链路：把文本**插入**右侧对话栏的 composer（Lexical），由用户自己决定何时发送。
+ * 不再直接调用 connection/conversation 服务发送消息 —— 用户明确要求「不要直接发送，
+ * 直接添加到对话栏就可以了」：插入后用户还能补一句自己的问题、改改指令再发。
  *
- * 为什么不能两层都自己造：
- * - 发送必须走 `conversation.sendSession(...)`：它负责本地提交回显、附件登记与 Host 准入，
- *   直接发 RPC 会绕过这些状态，界面上表现为「发出去了但对话流里没有这条消息」。
- * - 写 composer 必须走 DOM 插入（focus + execCommand insertText）：DSH 的草稿由 Lexical 自己
- *   持久化到 localStorage，绕过编辑器写入会和已挂载的编辑器不同步，下一次输入就把内容覆盖掉。
+ * 写 composer 必须走 DOM 插入（focus + execCommand insertText）：DSH 的草稿由 Lexical 自己
+ * 持久化到 localStorage，绕过编辑器写入会和已挂载的编辑器不同步，下一次输入就把内容覆盖掉。
+ * 因此这里也**不写** localStorage 草稿，插入失败时宁可退回剪贴板。
  *
- * 服务可用性用 cordis 的可选注入检测（`ctx.inject(['conversation','sessions'], ...)`）：
- * 旧版/其它组合里没有这两个服务时，菜单项禁用、动作返回可读的失败原因，绝不抛错到 UI。
+ * 平台依赖：插入只在有 `document` 的浏览器环境里成立；`dshChatStatus()` 据此判断可用性。
+ * 找不到 composer 或写入失败时会复制到剪贴板并返回一句可读提示，绝不抛错到 UI。
  */
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { copyText } from './clipboard.ts'
 
 /** 编辑器选区快照：代码正文 + 定位信息（行号从 1 开始）。 */
@@ -72,41 +69,17 @@ const PROMPT_INSTRUCTIONS: Record<Exclude<DshAskKind, 'ask'>, string> = {
   review: '请审查这段代码，指出潜在问题、风险与改进点。',
 }
 
-/** 生成发送给对话的完整 prompt：一句中文指令 + 空行 + 引用代码块。 */
+/** 生成交给对话栏的完整 prompt：一句中文指令 + 空行 + 引用代码块。 */
 export function promptFor(kind: DshAskKind, selection: DshSelection, extra?: string): string {
   const instruction = kind === 'ask' ? customQuestion(extra) : PROMPT_INSTRUCTIONS[kind]
   return `${instruction}\n\n${formatSnippetQuote(selection)}`
 }
 
-/** 自定义提问；没写问题时退回一句通用请求，而不是发一个只有代码块的哑 prompt。 */
+/** 自定义提问；没写问题时退回一句通用请求，而不是给一个只有代码块的哑 prompt。 */
 function customQuestion(extra?: string): string {
   const question = extra === undefined ? '' : extra.trim()
   return question === '' ? '请分析这段代码。' : question
 }
-
-//#region 传输适配（conversation / sessions 的最小结构面；不 import 官方客户端类型）
-
-/** conversation.sendSession 收到的目标会话需要的能力（ISession 的子集）。 */
-export interface DshSessionFace {
-  beginSubmission(input: unknown): { abandon?(): void }
-  prompt(content: Array<{ type: 'text'; text: string }>, mode: 'queue' | 'steer', signal?: AbortSignal, requestId?: unknown): Promise<{ ok: boolean; error?: { code?: string; message?: string } }>
-}
-
-/** sessions.binding(id) 的返回值子集。 */
-export interface DshSessionBinding {
-  sessionId?: string
-  session?: DshSessionFace | null
-}
-
-export interface DshConversationService {
-  sendSession(session: DshSessionFace, text: string, attachmentIds: readonly string[], mode: 'queue' | 'steer', signal?: AbortSignal): Promise<{ kind: 'success' | 'error' }>
-}
-
-export interface DshSessionsService {
-  binding(id: string): DshSessionBinding | undefined
-}
-
-//#endregion
 
 /** DOM / 平台依赖；设置页与测试都只在真正执行动作时传入（生产不传即用全局对象）。 */
 export interface DshChatDeps {
@@ -121,83 +94,18 @@ export interface DshChatDeps {
   requestAnimationFrame?: (callback: () => void) => number
 }
 
-let conversationService: DshConversationService | undefined
-let sessionsService: DshSessionsService | undefined
-let activeSessionId: string | undefined
-let serviceReason: string | undefined = 'DSH 对话服务尚未就绪'
-
-/** 已经声明过可选注入的上下文，避免重复调用 `ctx.inject` 留下多份 fiber。 */
-const attachedContexts = new WeakSet<object>()
-
 /**
- * 在 client 的 apply 里调用一次：绑定 DSH 的 conversation / sessions 服务。
+ * 对话栏是否可用：与 DSH 服务无关，只取决于当前是不是有 DOM 的浏览器环境。
  *
- * 用 `ctx.inject` 而不是把两个服务加进插件的 `inject` 数组：后者会让整个工作台在缺少
- * conversation 服务的部署里拒绝激活；这两个服务对本插件只是增强能力，缺了要能继续用。
+ * composer 是页面上已挂载的 Lexical 编辑器，插入是纯前端行为；找不到输入框或写入失败时，
+ * 动作会退回剪贴板并给提示（见 `insertIntoComposer`）。旧版/缺服务的 DSH 组合因此不再禁用菜单。
  */
-export function attachDshChat(ctx: ClientContext): void {
-  // 每次附加都先清空：上一次附加的服务可能已经随插件卸载消失，状态不能跨代沿用。
-  conversationService = undefined
-  sessionsService = undefined
-  serviceReason = 'DSH 对话服务尚未就绪'
-  try {
-    // 服务可能已经就绪（插件晚于 conversation 加载）：先同步绑一次，状态立即可用。
-    bindServices(ctx as unknown as { get(name: string): unknown })
-    if (typeof ctx?.inject !== 'function') {
-      serviceReason = '当前 DSH 版本不支持可选服务注入'
-      return
-    }
-    if (attachedContexts.has(ctx as unknown as object)) return
-    attachedContexts.add(ctx as unknown as object)
-    ctx.inject(['conversation', 'sessions'], child => {
-      bindServices(child as unknown as { get(name: string): unknown })
-      // 记下这一次注入绑定到的实例：只有仍是它时才清空，避免旧 fiber 卸载时把新附加的绑定一起抹掉。
-      const boundConversation = conversationService
-      const boundSessions = sessionsService
-      return () => {
-        if (conversationService !== boundConversation || sessionsService !== boundSessions) return
-        conversationService = undefined
-        sessionsService = undefined
-        serviceReason = 'DSH 对话服务尚未就绪'
-      }
-    })
-  } catch (error) {
-    serviceReason = `无法检测 DSH 对话服务：${errorMessage(error)}`
-  }
-}
-
-/** 读取并校验两个服务；两个都在才算可用。 */
-function bindServices(source: { get(name: string): unknown } | undefined): boolean {
-  try {
-    const conversation = source?.get('conversation')
-    const sessions = source?.get('sessions')
-    if (!isConversationService(conversation) || !isSessionsService(sessions)) return false
-    conversationService = conversation
-    sessionsService = sessions
-    serviceReason = undefined
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** 服务是否可用（设置页/菜单据此决定禁用态）。 */
 export function dshChatStatus(): { available: boolean; reason?: string } {
-  if (conversationService !== undefined && sessionsService !== undefined) return { available: true }
-  return { available: false, ...(serviceReason === undefined ? {} : { reason: serviceReason }) }
+  if (typeof document !== 'undefined') return { available: true }
+  return { available: false, reason: '当前环境没有可写入的对话输入框' }
 }
 
-/**
- * 当前主视图会话 id。由 Lead 在 Workbench 里随选中会话调用（`setActiveSession(session?.id)`）。
- *
- * 不在本模块自己读 DSH 的会话状态：会话选择属于 UI 层，重复实现一套「谁是主视图」的判断
- * 很容易和宿主行为分叉。
- */
-export function setActiveSession(sessionId: string | undefined): void {
-  activeSessionId = typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId : undefined
-}
-
-//#region addSelectionToConversation：写 composer
+//#region 插入 composer（不发送）
 
 /**
  * 把选区以引用形式插入 DSH 对话的输入框（不发送）。
@@ -206,7 +114,24 @@ export function setActiveSession(sessionId: string | undefined): void {
  * 复制到剪贴板（返回可读提示，由调用方提示用户）。
  */
 export async function addSelectionToConversation(selection: DshSelection, deps?: DshChatDeps): Promise<DshActionResult> {
-  const text = formatSnippetQuote(selection)
+  return insertIntoComposer(formatSnippetQuote(selection), deps)
+}
+
+/**
+ * 按类型生成「指令 + 引用」文本并插入对话栏（不发送）。
+ *
+ * 先展开对话栏再插入：否则用户只看到代码被选中，却找不到文本写到了哪里。
+ */
+export async function askDsh(kind: DshAskKind, selection: DshSelection, extra?: string, deps?: DshChatDeps): Promise<DshActionResult> {
+  return insertIntoComposer(promptFor(kind, selection, extra), deps)
+}
+
+/**
+ * 把文本插入 DSH 对话输入框；插入不了就复制到剪贴板并返回可读提示。
+ *
+ * 只插入、不发送：发送时机交给用户。失败路径全部返回 `{ok:false, message}`，不抛错。
+ */
+async function insertIntoComposer(text: string, deps?: DshChatDeps): Promise<DshActionResult> {
   revealChat(deps)
   // 等一帧：让 Lead 的 reveal 监听先把对话栏显示/定位好，composer 才能在可见状态下接收文本。
   await afterReveal(deps)
@@ -290,7 +215,7 @@ async function insertWithPaste(element: Element, text: string, deps?: DshChatDep
   }
 }
 
-/** 最后兜底：复制引用到剪贴板，并返回一句明确的操作提示（ok 仍是 false，界面据此提示用户）。 */
+/** 最后兜底：复制文本到剪贴板，并返回一句明确的操作提示（ok 仍是 false，界面据此提示用户）。 */
 async function copyFallback(text: string, deps: DshChatDeps | undefined, reason: string): Promise<DshActionResult> {
   const copy = deps?.copyText ?? copyText
   let copied = false
@@ -306,39 +231,6 @@ async function copyFallback(text: string, deps: DshChatDeps | undefined, reason:
 
 //#endregion
 
-//#region askDsh：直接发送
-
-/**
- * 用 DSH 的 conversation 服务把「指令 + 引用」发到当前会话。
- *
- * 先展开对话栏再发送：否则用户只看到代码被选中、对话已经跑起来，却找不到回答在哪。
- */
-export async function askDsh(kind: DshAskKind, selection: DshSelection, extra?: string, deps?: DshChatDeps): Promise<DshActionResult> {
-  const text = promptFor(kind, selection, extra)
-  revealChat(deps)
-  await afterReveal(deps)
-  const conversation = conversationService
-  const sessions = sessionsService
-  if (conversation === undefined || sessions === undefined) return { ok: false, message: serviceReason ?? 'DSH 对话服务不可用' }
-  const sessionId = activeSessionId
-  if (sessionId === undefined) return { ok: false, message: '还没有可用的 DSH 会话，请先在 DSH 里打开一个会话。' }
-  try {
-    const binding = sessions.binding(sessionId)
-    const session = binding?.session
-    if (session === undefined || session === null || typeof session.beginSubmission !== 'function' || typeof session.prompt !== 'function') {
-      return { ok: false, message: '当前 DSH 会话尚未就绪，请稍后重试。' }
-    }
-    const outcome = await conversation.sendSession(session, text, [], 'queue')
-    return outcome?.kind === 'success'
-      ? { ok: true }
-      : { ok: false, message: 'DSH 没有接受这条消息，请稍后重试。' }
-  } catch (error) {
-    return { ok: false, message: `发送到 DSH 对话失败：${errorMessage(error)}` }
-  }
-}
-
-//#endregion
-
 //#region 平台小工具
 
 /** 派发展开对话栏事件（Workbench 监听后把右侧对话栏显示出来）。失败不影响后续动作。 */
@@ -348,7 +240,7 @@ function revealChat(deps?: DshChatDeps): void {
     if (win === undefined) return
     const event = typeof CustomEvent === 'function' ? new CustomEvent(REVEAL_CHAT_EVENT) : new Event(REVEAL_CHAT_EVENT)
     win.dispatchEvent(event)
-  } catch { /* 展开对话栏只是体验增强：失败时照常插入/发送。 */ }
+  } catch { /* 展开对话栏只是体验增强：失败时照常插入。 */ }
 }
 
 /** 等一帧让 UI 落位；没有 rAF 的环境（node 测试）直接返回。 */
@@ -371,22 +263,6 @@ function currentWindow(deps?: DshChatDeps): Window | undefined {
 function textOf(element: Element): string {
   const value = (element as Element & { textContent?: string | null }).textContent
   return typeof value === 'string' ? value : ''
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (typeof value === 'object' && value !== null) || typeof value === 'function'
-}
-
-function isConversationService(value: unknown): value is DshConversationService {
-  return isRecord(value) && typeof value.sendSession === 'function'
-}
-
-function isSessionsService(value: unknown): value is DshSessionsService {
-  return isRecord(value) && typeof value.binding === 'function'
 }
 
 //#endregion

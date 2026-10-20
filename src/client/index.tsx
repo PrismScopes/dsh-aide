@@ -19,7 +19,7 @@ import { mainViewSession } from './session.ts'
 import type { MenuEntry } from './ContextMenu.tsx'
 import type { EditorMenuTarget } from './editorMenuRegistry.ts'
 import type { DshAskKind, DshActionResult, DshSelection } from './dshChat.ts'
-import { addSelectionToConversation, askDsh, attachDshChat, dshChatStatus, formatSnippetQuote, setActiveSession } from './dshChat.ts'
+import { addSelectionToConversation, askDsh, dshChatStatus, formatSnippetQuote } from './dshChat.ts'
 import { dshMenuEntries } from './dshMenus.ts'
 import { copyText } from './clipboard.ts'
 
@@ -115,9 +115,6 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
   const session = useSessions(mainViewSession)
   // 工作目录以 workingDirectory 投影为准（会话可切换工作区），旧字段 cwd 作为回退。
   const cwd = session?.projectionValues?.workingDirectory ?? session?.cwd
-  // 告诉「和 DSH 对话」适配器当前主视图会话：编辑器右键里的「询问/解释/修复…」要往它发消息。
-  // 必须放在下面的 early return 之前，否则切换会话时会违反 hooks 顺序。
-  useEffect(() => { setActiveSession(session === undefined || session.id === '' ? undefined : session.id) }, [session?.id])
   const [visible, setVisible] = useState(() => service.getSnapshot().visible)
   useEffect(() => service.subscribe(() => setVisible(service.getSnapshot().visible)), [service])
   // 侧栏入口的收起由 CSS 负责（body:has(.dvw-overlay) [class*=_triggerRow]），不在这里动 DOM ——
@@ -218,14 +215,14 @@ function toDshSelection(target: EditorMenuTarget): DshSelection {
  * 用户要求：**选中文本时它在编辑区菜单最顶上**。所以注册成 `place:'top'` 的菜单贡献，
  * 且没有选区时返回空数组 —— 菜单里不会留一条孤零零的分隔线。
  *
- * 「添加至对话」走 DOM 插入 composer（用户能先改再发）；「询问/解释/修复…」走 DSH 的
- * conversation 服务直接发送；「复制为引用」只是本地剪贴板，不需要 DSH 服务。
+ * 所有动作都只**把文本插入 DSH 对话输入框**（不直接发送，用户可以再补一句再自己发）：
+ * 「添加至对话」插入引用，「询问/解释/修复…」插入对应指令 + 引用；「复制为引用」只走剪贴板。
  */
 function dshHarnessEntry(target: EditorMenuTarget): MenuEntry {
   const selection = toDshSelection(target)
   const ask = (kind: DshAskKind) => {
     // 「询问 DSH…」让用户当场输入问题；取消（null）就什么都不做。
-    // 其余几项是一键动作，直接按预置指令发送。
+    // 其余几项是一键动作，按预置指令生成要插入对话栏的文本。
     if (kind !== 'ask') { void askDsh(kind, selection).then(reportDshResult); return }
     const question = window.prompt('向 DSH 询问这段代码（留空则按默认指令分析）：')
     if (question === null) return
@@ -262,11 +259,10 @@ export function apply(ctx: ClientContext): void {
   shortcutsService = (ctx as unknown as { shortcuts?: unknown }).shortcuts
   ctx.effect(() => installStyles(), 'dsh-vscode-workbench: styles')
   ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-vscode-workbench: service')
-  // 把「和 DSH 对话」的适配器接到宿主客户端服务上（conversation / sessions 可选注入，
-  // 服务缺失时整体降级为不可用，不影响工作台其它功能）。
-  attachDshChat(ctx)
   // 编辑器右键菜单的「DeepSeek Harness」子菜单：注册成置顶贡献。
-  // 其它插件也能通过 ctx.get('vscodeWorkbench').registerEditorMenuContribution(...) 使用同一扩展点。
+  // 它的动作只把引用/指令插入 DSH 对话输入框（不直接发送），因此不需要注入任何 DSH 客户端服务；
+  // 找不到输入框时会回退到剪贴板并提示。其它插件也能通过
+  // ctx.get('vscodeWorkbench').registerEditorMenuContribution(...) 使用同一扩展点。
   ctx.effect(() => service.registerEditorMenuContribution({
     id: 'dsh-harness', place: 'top', order: -100,
     entries: target => target.hasSelection ? [dshHarnessEntry(target)] : [],

@@ -5,7 +5,7 @@
  * 顶部是「添加至对话」，中间是按问题类型分好的询问动作，最后是把选区复制成 Markdown 引用。
  *
  * 这里只依赖调用方传进来的 actions 接口：菜单项「有哪些、何时禁用、点了调谁」可以单测，
- * 真正的插入/发送由 dshChat.ts 实现，由 MonacoEditor / Workbench 接线后注入。
+ * 真正的插入由 dshChat.ts 实现，由 MonacoEditor / Workbench 接线后注入。
  */
 import type { MenuEntry, MenuItem, MenuSeparator } from './ContextMenu.tsx'
 import type { DshAskKind } from './dshChat.ts'
@@ -25,7 +25,7 @@ export interface DshMenuActions {
 export interface DshMenuContext {
   /** 编辑器里当前有没有选中文本；没有选区时所有使用选区的项都禁用。 */
   hasSelection: boolean
-  /** DSH 对话服务是否可用；不可用时只留「复制为引用」。 */
+  /** 对话栏是否可用（浏览器里有 `document`；插入失败会退回剪贴板）。不可用时只留「复制为引用」。 */
   available: boolean
   actions: DshMenuActions
 }
@@ -33,24 +33,27 @@ export interface DshMenuContext {
 /**
  * 「DeepSeek Harness」子菜单的内容，按展示顺序返回。
  *
+ * 图标按语义各配一枚、互不重复（旧版是 sparkle×3 / edit×3 / check×2，看起来像没做完）；
+ * 父项「DeepSeek Harness」仍用 sparkle，不在这里。
+ *
  * 禁用规则：
- * - 所有需要把选区交给对话的项（添加 / 询问 / 解释…审查）都要「有选区 + 服务可用」；
- * - 「复制为引用」只依赖选区，服务不可用时仍可用（它不碰 DSH）。
+ * - 所有需要把选区交给对话栏的项（添加 / 询问 / 解释…审查）都要「有选区 + 对话栏可用」；
+ * - 「复制为引用」只依赖选区，对话栏不可用时仍可用（它不碰 DSH）。
  */
 export function dshMenuEntries(context: DshMenuContext): readonly MenuEntry[] {
   const { hasSelection, available, actions } = context
   const canAsk = hasSelection && available
   return [
-    item({ id: 'dsh-add', label: '添加至对话', icon: 'sparkle', disabled: !canAsk, onSelect: actions.addToConversation }),
+    item({ id: 'dsh-add', label: '添加至对话', icon: 'comment-discussion', disabled: !canAsk, onSelect: actions.addToConversation }),
     line(),
-    item({ id: 'dsh-ask', label: '询问 DSH…', icon: 'sparkle', disabled: !canAsk, onSelect: () => actions.ask('ask') }),
-    item({ id: 'dsh-explain', label: '解释这段代码', icon: 'sparkle', disabled: !canAsk, onSelect: () => actions.ask('explain') }),
-    item({ id: 'dsh-fix', label: '修复这段代码', icon: 'edit', disabled: !canAsk, onSelect: () => actions.ask('fix') }),
-    item({ id: 'dsh-refactor', label: '重构这段代码', icon: 'edit', disabled: !canAsk, onSelect: () => actions.ask('refactor') }),
-    item({ id: 'dsh-tests', label: '生成单元测试', icon: 'check', disabled: !canAsk, onSelect: () => actions.ask('tests') }),
-    item({ id: 'dsh-comment', label: '添加注释', icon: 'edit', disabled: !canAsk, onSelect: () => actions.ask('comment') }),
-    item({ id: 'dsh-review', label: '审查这段代码', icon: 'check', disabled: !canAsk, onSelect: () => actions.ask('review') }),
+    item({ id: 'dsh-ask', label: '询问 DSH…', icon: 'comment', disabled: !canAsk, onSelect: () => actions.ask('ask') }),
+    item({ id: 'dsh-explain', label: '解释这段代码', icon: 'book', disabled: !canAsk, onSelect: () => actions.ask('explain') }),
+    item({ id: 'dsh-fix', label: '修复这段代码', icon: 'wrench', disabled: !canAsk, onSelect: () => actions.ask('fix') }),
+    item({ id: 'dsh-refactor', label: '重构这段代码', icon: 'tools', disabled: !canAsk, onSelect: () => actions.ask('refactor') }),
+    item({ id: 'dsh-tests', label: '生成单元测试', icon: 'beaker', disabled: !canAsk, onSelect: () => actions.ask('tests') }),
+    item({ id: 'dsh-comment', label: '添加注释', icon: 'note', disabled: !canAsk, onSelect: () => actions.ask('comment') }),
+    item({ id: 'dsh-review', label: '审查这段代码', icon: 'checklist', disabled: !canAsk, onSelect: () => actions.ask('review') }),
     line(),
-    item({ id: 'dsh-copy-quote', label: '复制为引用', icon: 'copy', disabled: !hasSelection, onSelect: actions.copyQuote }),
+    item({ id: 'dsh-copy-quote', label: '复制为引用', icon: 'quote', disabled: !hasSelection, onSelect: actions.copyQuote }),
   ]
 }

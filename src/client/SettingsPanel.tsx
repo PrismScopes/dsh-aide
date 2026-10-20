@@ -34,7 +34,7 @@ import {
 
 /** 版本号写常量：客户端不能直接 import package.json（tsconfig 没开 resolveJsonModule），
  *  这个值随发布更新，与 package.json 的版本保持一致。 */
-const WORKBENCH_VERSION = '0.2.3'
+const WORKBENCH_VERSION = '0.2.4'
 
 /** 一行设置：左侧标题与说明，右侧控件。 */
 function Row({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {

@@ -1,19 +1,15 @@
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   addSelectionToConversation,
   askDsh,
-  attachDshChat,
   dshChatStatus,
   formatSnippetQuote,
   promptFor,
   REVEAL_CHAT_EVENT,
-  setActiveSession,
-  type DshConversationService,
+  type DshChatDeps,
   type DshSelection,
-  type DshSessionBinding,
-  type DshSessionFace,
-  type DshSessionsService,
 } from '../src/client/dshChat.ts'
 
 const SELECTION: DshSelection = {
@@ -24,6 +20,9 @@ const SELECTION: DshSelection = {
   lineEnd: 5,
 }
 const QUOTE = '引用自 `src/a.ts:3-5`：\n\n```ts\nconst a = 1\nconst b = 2\n```'
+
+/** 与动作实现同源的源码：用来钉住「发送路径已经彻底删掉」。 */
+const SOURCE = readFileSync(fileURLToPath(new URL('../src/client/dshChat.ts', import.meta.url)), 'utf8')
 
 describe('snippet quote', () => {
   it('renders path, line range, language and code as a markdown quote', () => {
@@ -78,49 +77,7 @@ describe('prompt for each ask kind', () => {
   })
 })
 
-//#region 假 ctx / 假服务 / 假 DOM
-
-type ServiceMap = Record<string, unknown>
-
-/** 假 cordis ctx：`inject` 立即把子 ctx 交给回调（等价于服务已就绪）。 */
-function fakeContext(services: ServiceMap, deliverInject = true): ClientContext {
-  const child = { get: (name: string) => services[name] }
-  const ctx = {
-    get: (name: string) => services[name],
-    inject: (_deps: string[], callback: (ctx: unknown) => unknown) => {
-      if (deliverInject) callback(child)
-      return undefined
-    },
-  }
-  return ctx as unknown as ClientContext
-}
-
-interface SendCall { session: unknown; text: string; attachmentIds: readonly string[]; mode: string }
-
-function fakeConversation(outcome: 'success' | 'error' | Error = 'success'): { calls: SendCall[]; service: DshConversationService } {
-  const calls: SendCall[] = []
-  const service: DshConversationService = {
-    async sendSession(session, text, attachmentIds, mode) {
-      calls.push({ session, text, attachmentIds, mode })
-      if (outcome instanceof Error) throw outcome
-      return { kind: outcome }
-    },
-  }
-  return { calls, service }
-}
-
-function fakeSession(): DshSessionFace {
-  return {
-    beginSubmission: () => ({}),
-    prompt: async () => ({ ok: true }),
-  }
-}
-
-function fakeSessions(binding: DshSessionBinding | undefined): { asked: string[]; service: DshSessionsService } {
-  const asked: string[] = []
-  const service: DshSessionsService = { binding: id => { asked.push(id); return binding } }
-  return { asked, service }
-}
+//#region 假 DOM
 
 /** 收到事件（含 Lexical 粘贴）的假 composer 根节点。 */
 interface FakeComposer {
@@ -184,43 +141,61 @@ class FakeClipboardEvent {
   }
 }
 
-/** 每个用例先附加一次假服务（同时把模块单例状态重置掉）。 */
-function attachChat(services: ServiceMap): void {
-  attachDshChat(fakeContext(services))
-}
-
-function attachAvailable(): { conversation: ReturnType<typeof fakeConversation>; sessions: ReturnType<typeof fakeSessions>; session: DshSessionFace } {
-  const session = fakeSession()
-  const conversation = fakeConversation('success')
-  const sessions = fakeSessions({ sessionId: 's1', session })
-  attachChat({ conversation: conversation.service, sessions: sessions.service })
-  return { conversation, sessions, session }
+/** 一次「成功插入」的接线：假 document + 记录 execCommand 收到的文本。 */
+function insertFixture(): {
+  deps: DshChatDeps
+  composer: FakeComposer
+  inserted: Array<{ command: string; value?: string }>
+  events: Event[]
+} {
+  const composer = fakeComposer()
+  const { document } = fakeDocument([composer])
+  const inserted: Array<{ command: string; value?: string }> = []
+  const win = fakeWindow()
+  return {
+    composer,
+    inserted,
+    events: win.events,
+    deps: {
+      document,
+      window: win.window,
+      execCommand: (command, _showUI, value) => { inserted.push({ command, value }); return true },
+    },
+  }
 }
 
 //#endregion
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('chat status', () => {
+  it('is available as soon as the browser has a document', () => {
+    vi.stubGlobal('document', {})
+    expect(dshChatStatus()).toEqual({ available: true })
+  })
+
+  it('reports an unreadable reason when there is no document at all', () => {
+    // 插入是纯前端行为，不依赖 DSH 服务；这里只缺浏览器环境。
+    expect(dshChatStatus().available).toBe(false)
+    expect(dshChatStatus().reason).toContain('对话输入框')
+  })
+})
+
 describe('add selection to conversation', () => {
   it('inserts the quote into the visible composer and reveals the chat column', async () => {
-    attachChat({})
-    const composer = fakeComposer()
-    const { document } = fakeDocument([composer])
-    const win = fakeWindow()
-    const inserted: Array<{ command: string; value?: string }> = []
+    const { composer, inserted, events, deps } = insertFixture()
 
-    const result = await addSelectionToConversation(SELECTION, {
-      document,
-      window: win.window,
-      execCommand: (command, _showUI, value) => { inserted.push({ command, value }); return true },
-    })
+    const result = await addSelectionToConversation(SELECTION, deps)
 
     expect(result).toEqual({ ok: true })
     expect(composer.focused).toBe(1)
     expect(inserted).toEqual([{ command: 'insertText', value: QUOTE }])
-    expect(win.events.map(event => event.type)).toEqual([REVEAL_CHAT_EVENT])
+    expect(events.map(event => event.type)).toEqual([REVEAL_CHAT_EVENT])
   })
 
   it('prefers a visible composer and falls back to the first one', async () => {
-    attachChat({})
     const hidden = fakeComposer({ visible: false })
     const visible = fakeComposer()
     const { document } = fakeDocument([hidden, visible])
@@ -236,7 +211,6 @@ describe('add selection to conversation', () => {
   })
 
   it('dispatches a paste event with the quote when execCommand fails', async () => {
-    attachChat({})
     const composer = fakeComposer({ dispatchResult: false })
     const { document } = fakeDocument([composer])
     let copied = false
@@ -257,7 +231,6 @@ describe('add selection to conversation', () => {
   })
 
   it('copies the quote to the clipboard and explains it when insertion fails completely', async () => {
-    attachChat({})
     const { document } = fakeDocument([fakeComposer()])
     const copied: string[] = []
 
@@ -274,7 +247,6 @@ describe('add selection to conversation', () => {
   })
 
   it('explains how to recover when there is no composer at all', async () => {
-    attachChat({})
     const { document } = fakeDocument([])
 
     const result = await addSelectionToConversation(SELECTION, {
@@ -288,7 +260,6 @@ describe('add selection to conversation', () => {
   })
 
   it('tells the user to copy manually when the clipboard also fails', async () => {
-    attachChat({})
     const { document } = fakeDocument([])
 
     const result = await addSelectionToConversation(SELECTION, {
@@ -300,99 +271,114 @@ describe('add selection to conversation', () => {
     expect(result.message).toContain('请手动复制引用')
   })
 
-  it('keeps working when the DSH conversation service is missing', async () => {
-    // 「添加至对话」只写 composer：服务不可用时它仍是可用路径（菜单禁用由菜单层决定）。
-    attachChat({})
-    const composer = fakeComposer()
-    const { document } = fakeDocument([composer])
+  it('turns a throwing execCommand into a clipboard fallback instead of an error', async () => {
+    const { document } = fakeDocument([fakeComposer()])
+    const copied: string[] = []
 
-    const result = await addSelectionToConversation(SELECTION, { document, execCommand: () => true })
+    const result = await addSelectionToConversation(SELECTION, {
+      document,
+      execCommand: () => { throw new Error('execCommand blocked') },
+      copyText: async text => { copied.push(text); return true },
+    })
 
-    expect(result.ok).toBe(true)
-    expect(composer.focused).toBe(1)
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('已复制到剪贴板')
+    expect(copied).toEqual([QUOTE])
   })
 })
 
 describe('ask dsh', () => {
-  it('reports unavailable and refuses to send when the services are missing', async () => {
-    attachChat({})
-    setActiveSession('s1')
+  it('only inserts the prompt and never sends a message', async () => {
+    const { composer, inserted, events, deps } = insertFixture()
 
-    expect(dshChatStatus().available).toBe(false)
-    const result = await askDsh('explain', SELECTION)
-    expect(result.ok).toBe(false)
-    expect(result.message).toContain('对话服务')
-  })
-
-  it('becomes available once both services are injected', () => {
-    attachAvailable()
-    expect(dshChatStatus()).toEqual({ available: true })
-  })
-
-  it('sends the prompt through conversation.sendSession and reveals the chat column', async () => {
-    const { conversation, sessions, session } = attachAvailable()
-    setActiveSession('s1')
-    const win = fakeWindow()
-
-    const result = await askDsh('fix', SELECTION, undefined, { window: win.window })
+    const result = await askDsh('fix', SELECTION, undefined, deps)
 
     expect(result).toEqual({ ok: true })
-    expect(sessions.asked).toEqual(['s1'])
-    expect(conversation.calls).toEqual([{
-      session,
-      text: expect.stringContaining('请找出这段代码里的问题'),
-      attachmentIds: [],
-      mode: 'queue',
-    }])
-    expect((conversation.calls[0]?.text ?? '').endsWith(QUOTE)).toBe(true)
-    expect(win.events.map(event => event.type)).toEqual([REVEAL_CHAT_EVENT])
+    // 插入内容就是 promptFor 的完整输出：没有额外的发送动作、没有截断或改写。
+    expect(inserted).toEqual([{ command: 'insertText', value: promptFor('fix', SELECTION) }])
+    expect(inserted[0]?.value).toContain(QUOTE)
+    expect(composer.focused).toBe(1)
+    expect(events.map(event => event.type)).toEqual([REVEAL_CHAT_EVENT])
   })
 
-  it('passes the custom question for ask', async () => {
-    const { conversation } = attachAvailable()
-    setActiveSession('s1')
+  it('inserts the custom question for ask', async () => {
+    const { inserted, deps } = insertFixture()
 
-    await askDsh('ask', SELECTION, '这段代码的时间复杂度是多少？')
+    await askDsh('ask', SELECTION, '  这段代码的时间复杂度是多少？ ', deps)
 
-    expect(conversation.calls[0]?.text.startsWith('这段代码的时间复杂度是多少？')).toBe(true)
+    expect(inserted).toEqual([{ command: 'insertText', value: promptFor('ask', SELECTION, '这段代码的时间复杂度是多少？') }])
+    expect(inserted[0]?.value?.startsWith('这段代码的时间复杂度是多少？\n\n')).toBe(true)
   })
 
-  it('reports the host error outcome instead of throwing', async () => {
-    const conversation = fakeConversation('error')
-    attachChat({ conversation: conversation.service, sessions: fakeSessions({ session: fakeSession() }).service })
-    setActiveSession('s1')
+  it('falls back to the paste event when execCommand refuses the insert', async () => {
+    const composer = fakeComposer({ dispatchResult: false })
+    const { document } = fakeDocument([composer])
 
-    const result = await askDsh('explain', SELECTION)
+    const result = await askDsh('explain', SELECTION, undefined, {
+      document,
+      execCommand: () => false,
+      clipboardEvent: FakeClipboardEvent as unknown as typeof ClipboardEvent,
+      dataTransfer: FakeDataTransfer as unknown as typeof DataTransfer,
+    })
+
+    expect(result).toEqual({ ok: true })
+    const pasted = composer.received[0] as unknown as FakeClipboardEvent
+    expect(pasted.clipboardData?.getData('text/plain')).toBe(promptFor('explain', SELECTION))
+  })
+
+  it('copies the prompt and explains it when insertion fails completely', async () => {
+    const { document } = fakeDocument([fakeComposer()])
+    const copied: string[] = []
+
+    const result = await askDsh('review', SELECTION, undefined, {
+      document,
+      execCommand: () => false,
+      copyText: async text => { copied.push(text); return true },
+    })
+
     expect(result.ok).toBe(false)
-    expect(result.message).toContain('没有接受')
+    expect(result.message).toContain('已复制到剪贴板')
+    expect(copied).toEqual([promptFor('review', SELECTION)])
   })
 
-  it('turns a thrown transport failure into a readable message', async () => {
-    const conversation = fakeConversation(new Error('offline'))
-    attachChat({ conversation: conversation.service, sessions: fakeSessions({ session: fakeSession() }).service })
-    setActiveSession('s1')
+  it('asks the user to paste manually when there is no composer', async () => {
+    const { document } = fakeDocument([])
+    const copied: string[] = []
 
-    const result = await askDsh('explain', SELECTION)
+    const result = await askDsh('tests', SELECTION, undefined, {
+      document,
+      copyText: async text => { copied.push(text); return true },
+    })
+
     expect(result.ok).toBe(false)
-    expect(result.message).toContain('发送到 DSH 对话失败')
-    expect(result.message).toContain('offline')
+    expect(result.message).toContain('未找到 DSH 对话输入框')
+    expect(copied).toEqual([promptFor('tests', SELECTION)])
   })
 
-  it('asks the user to open a session when none is active', async () => {
-    attachAvailable()
-    setActiveSession(undefined)
+  it('never throws when the environment has no document', async () => {
+    // `currentDocument` 退回全局 document；node 测试环境没有它。
+    const result = await askDsh('explain', SELECTION, undefined, {
+      copyText: async () => false,
+    })
 
-    const result = await askDsh('explain', SELECTION)
     expect(result.ok).toBe(false)
-    expect(result.message).toContain('会话')
+    expect(result.message).toContain('当前环境没有可写入的对话输入框')
+    expect(result.message).toContain('请手动复制引用')
+  })
+})
+
+describe('removed send path', () => {
+  it('does not mention the DSH send adapters anywhere in the module source', () => {
+    // 用户要求「只插入、不发送」：发送相关标识符连注释都不该再出现，避免以后被接回来。
+    for (const token of ['sendSession', 'sessions.binding', 'attachDshChat', 'setActiveSession', 'DshConversationService', 'DshSessionsService', 'DshSessionFace']) {
+      expect(SOURCE, `dshChat.ts 里仍有发送路径残留：${token}`).not.toContain(token)
+    }
   })
 
-  it('reports an unready session when the binding is gone', async () => {
-    attachChat({ conversation: fakeConversation('success').service, sessions: fakeSessions(undefined).service })
-    setActiveSession('s1')
-
-    const result = await askDsh('explain', SELECTION)
-    expect(result.ok).toBe(false)
-    expect(result.message).toContain('尚未就绪')
+  it('keeps only insert-oriented exports', () => {
+    // 回归护栏：模块不再导出 send / attach / session 入口，避免发送路径被悄悄接回来。
+    const exported = [...SOURCE.matchAll(/export (?:async )?function (\w+)/g)].map(match => match[1] ?? '')
+    expect(exported.filter(name => /send|attach|session/i.test(name))).toEqual([])
+    expect(exported).toEqual(expect.arrayContaining(['formatSnippetQuote', 'promptFor', 'dshChatStatus', 'addSelectionToConversation', 'askDsh']))
   })
 })

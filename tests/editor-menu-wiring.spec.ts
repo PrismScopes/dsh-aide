@@ -43,7 +43,6 @@ describe('editor context menu wiring', () => {
   })
 
   it('registers the DeepSeek Harness submenu as a top contribution', () => {
-    expect(index).toContain("attachDshChat(ctx)")
     expect(index).toMatch(/place:\s*'top'/)
     expect(index).toContain("id: 'dsh-harness'")
     expect(index).toContain('submenu: dshMenuEntries(')
@@ -54,14 +53,19 @@ describe('editor context menu wiring', () => {
     expect(index).toContain('formatSnippetQuote')
   })
 
-  it('tells the DSH adapter which session is in the main view', () => {
-    expect(index).toContain('setActiveSession(')
-    // 必须在「没有会话就 return」之前，否则切换会话时 hooks 顺序会变。
-    const overlayStart = index.indexOf('const Overlay =')
-    const sessionEffect = index.indexOf('setActiveSession(', overlayStart)
-    const earlyReturn = index.indexOf('if (session === undefined || session.id === \'\')', overlayStart)
-    expect(sessionEffect).toBeGreaterThan(overlayStart)
-    expect(earlyReturn).toBeGreaterThan(sessionEffect)
+  it('only inserts into the composer — the submenu never sends a prompt by itself', () => {
+    // 用户明确要求：「不要直接发送，直接添加到对话栏就可以了」。实现上不允许再出现发送路径。
+    const dsh = read('dshChat.ts')
+    expect(dsh).not.toContain('sendSession')
+    expect(dsh).not.toContain('sessions.binding')
+    expect(dsh).not.toContain('attachDshChat')
+    expect(dsh).not.toContain('setActiveSession')
+    // 只有 DOM 插入一条路：靠 Lexical composer 与剪贴板兜底。
+    expect(dsh).toContain('data-lexical-editor')
+    expect(dsh).toContain('execCommand')
+    // 入口里也不再有任何 DSH 服务注入/会话同步。
+    expect(index).not.toContain('attachDshChat')
+    expect(index).not.toContain('setActiveSession')
   })
 
   it('reveals the right-hand conversation panel when DSH actions ask for it', () => {

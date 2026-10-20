@@ -180,6 +180,41 @@ describe('source editor top-level structure', () => {
   })
 })
 
+describe('menu icons', () => {
+  /** 六个子菜单父项的图标分配 —— 用户「SVG 太多重复的」反馈的验收表。 */
+  const parentIcons: Array<[string, string]> = [
+    ['editor-select-menu', 'selection'],
+    ['editor-find-menu', 'search'],
+    ['editor-goto-menu', 'go-to-file'],
+    ['editor-lines-menu', 'list-ordered'],
+    ['editor-convert-menu', 'case-sensitive'],
+    ['editor-format-menu', 'wand'],
+  ]
+
+  const submenuParents = (entries: readonly MenuEntry[]): MenuItem[] =>
+    entries.filter(isItem).filter(candidate => candidate.submenu !== undefined)
+
+  it('gives each of the six submenu parents the agreed icon', () => {
+    const parents = submenuParents(editorMenuItems(context()))
+    expect(parents.map(parent => [parent.id, parent.icon])).toEqual(parentIcons)
+  })
+
+  it('never repeats an icon across submenu parents', () => {
+    const icons = submenuParents(editorMenuItems(context())).map(parent => parent.icon)
+    // 六个父项都必须有图标（有漏配时这里先因为 undefined 的数量/去重失败）。
+    expect(icons).toHaveLength(parentIcons.length)
+    for (const icon of icons) expect(icon).toBeDefined()
+    expect(new Set(icons).size).toBe(icons.length)
+  })
+
+  it('gives no leaf an icon, including the top-level singles and 保存', () => {
+    // 递归拍平到叶子：顶层撤销/重做/剪切/复制/粘贴/保存，以及六个子菜单里的全部条目。
+    const allLeaves = leaves(editorMenuItems(context()))
+    expect(allLeaves).toHaveLength(30)
+    expect(allLeaves.filter(candidate => candidate.icon !== undefined).map(candidate => candidate.id)).toEqual([])
+  })
+})
+
 describe('leaf disabled matrix', () => {
   it('disables cut/copy/selection transforms when there is no selected text', () => {
     const entries = editorMenuItems(context({ hasSelection: false }))
