@@ -25,6 +25,7 @@ import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
 import { explorerMenuItems, parentDirectory, tabMenuItems, workspaceAbsolutePath, type ExplorerMenuActions, type FileClipboard } from './menus.ts'
 import { copyText } from './clipboard.ts'
 import { requestTerminal } from './terminal.ts'
+import { REVEAL_CHAT_EVENT } from './dshChat.ts'
 
 // 从 GitPanel 拆出后重新导出，保持既有引用（含单测）不变。
 export { graphRows, graphTrackPath } from './GitPanel.tsx'
@@ -469,6 +470,15 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   // service 统一持久化之后，那几个键已经没有任何读取方，删掉它们（否则每次改宽度都白写一遍）。
   useEffect(()=>localStorage.setItem('dvw:outline',outlineVisible?'open':'closed'),[outlineVisible])
   useEffect(()=>{if(!snapshot.visible)return;const onKey=(event:KeyboardEvent)=>{if(event.isComposing||!event.ctrlKey||!event.altKey||event.shiftKey||event.code!=='KeyB')return;event.preventDefault();setChatVisible(value=>!value)};window.addEventListener('keydown',onKey,true);return()=>window.removeEventListener('keydown',onKey,true)},[snapshot.visible])
+  /**
+   * 「添加至对话 / 询问 DSH」由 dshChat 派发 dvw-reveal-chat：先把右侧 DSH 对话栏展开，
+   * 用户才看得到刚插入的引用或刚发出的提问。直接写 service 的布局状态，不依赖未 memo 的 setter。
+   */
+  useEffect(() => {
+    const reveal = () => service.setLayout({ chatVisible: true })
+    window.addEventListener(REVEAL_CHAT_EVENT, reveal)
+    return () => window.removeEventListener(REVEAL_CHAT_EVENT, reveal)
+  }, [service])
   /**
    * 「在终端中打开」由 requestTerminal 派发 dvw-terminal-show；把底部面板切到终端这件事归工作台，
    * 因为只有它持有 overlay 与底部面板状态。已经停在终端时**不能**再 toggle —— 那会把它关掉，

@@ -15,7 +15,16 @@ import { separator, type MenuEntry, type MenuItem } from './ContextMenu.tsx'
 
 const item = (value: Omit<MenuItem, 'kind'>): MenuItem => ({ kind: 'item', ...value })
 
-/** 源码编辑器菜单里每个动作的落点；具体实现由 MonacoEditor.tsx 用 Monaco 命令/动作提供。 */
+/** 菜单图标；限定为 Icon.tsx 里已有的 CodiconName，不新增字形。 */
+type MenuIcon = NonNullable<MenuItem['icon']>
+
+/**
+ * 源码编辑器菜单里每个动作的落点；具体实现由 MonacoEditor.tsx 提供。
+ *
+ * 为什么既有具名 action 又有 `run`：具名字段是上一版接线（MonacoEditor.tsx）的兼容面，保留它们
+ * 不会让现有调用点报错；新菜单项则统一走 `run(commandId)`，新增一项只要给一个 Monaco 命令 id，
+ * 不必在接口上再加一个方法。`save` 不是 Monaco 命令（走工作台自己的保存回调），继续用具名字段。
+ */
 export interface EditorMenuActions {
   undo(): void
   redo(): void
@@ -31,43 +40,94 @@ export interface EditorMenuActions {
   fold(): void
   unfold(): void
   save(): void
+  /**
+   * 统一执行 Monaco 命令。调用方用 `editor.trigger('dsh-menu', commandId, null)` 或
+   * `editor.getAction(commandId)?.run()`；剪贴板命令（editor.action.clipboard*）仍需在组件里
+   * 走 copyText/readClipboard 回退（见 MonacoEditor.tsx 的 runClipboardAction）。
+   */
+  run(commandId: string): void
 }
 
 export interface EditorMenuContext {
   /** 只读模型上编辑类动作不会生效，菜单里要禁掉，免得点了没反应。 */
   readOnly: boolean
-  /** 没有选中文本时「剪切/复制」无从下手。 */
+  /** 没有选中文本时「剪切/复制/转为大写」之类无从下手。 */
   hasSelection: boolean
   /** 由调用方用 editor.getAction('editor.action.formatDocument')?.isSupported() 判断。 */
   canFormat: boolean
+  /**
+   * `editor.getAction(commandId)?.isSupported?.() === true`；动作不存在时按 false 处理。
+   * 纯文本文件没有语言服务，转到定义/查找引用/重命名符号因此禁用。
+   */
+  isSupported(commandId: string): boolean
   actions: EditorMenuActions
 }
 
 /**
- * 源码编辑器菜单。分组顺序对齐 VS Code 的编辑区右键菜单：
- * 撤销/重做 · 剪切/复制/粘贴 · 全选 · 查找/替换/转到行 · 注释/格式化 · 折叠/展开 · 保存。
+ * 源码编辑器菜单。分组按约定顺序排列（分隔线只在下面注明的位置）：
+ * 撤销/重做/剪切/复制/粘贴 · 全选/选择所有出现 · 查找/替换/转到行 ·
+ * 转到定义/查找引用/重命名符号 · 行操作（移动/复制/删除/缩进/大小写） · 多光标上下 ·
+ * 注释/格式化/折叠 · 保存。
+ *
+ * 每一项都只描述「文案 + 禁用条件 + 要执行的 Monaco 命令」，不碰 editor 实例；
+ * 这样禁用矩阵和 commandId 都能在 node 环境单测（见 tests/editor-menus.spec.ts）。
  */
 export function editorMenuItems(context: EditorMenuContext): MenuEntry[] {
-  const { readOnly, hasSelection, canFormat, actions } = context
+  const { readOnly, hasSelection, canFormat, isSupported, actions } = context
+
+  /** 一条「执行 Monaco 命令」的菜单项：id 稳定，label 中文，shortcut 仅展示。 */
+  const command = (options: {
+    id: string
+    commandId: string
+    label: string
+    shortcut?: string
+    icon?: MenuIcon
+    disabled?: boolean
+  }): MenuItem => item({
+    id: options.id,
+    label: options.label,
+    icon: options.icon,
+    shortcut: options.shortcut,
+    disabled: options.disabled,
+    onSelect: () => actions.run(options.commandId),
+  })
+
   return [
-    item({ id: 'editor-undo', label: '撤销', shortcut: 'Ctrl+Z', disabled: readOnly, onSelect: actions.undo }),
-    item({ id: 'editor-redo', label: '重做', shortcut: 'Ctrl+Shift+Z', disabled: readOnly, onSelect: actions.redo }),
+    command({ id: 'editor-undo', commandId: 'undo', label: '撤销', shortcut: 'Ctrl+Z', disabled: readOnly }),
+    command({ id: 'editor-redo', commandId: 'redo', label: '重做', shortcut: 'Ctrl+Shift+Z', disabled: readOnly }),
+    command({ id: 'editor-cut', commandId: 'editor.action.clipboardCutAction', label: '剪切', shortcut: 'Ctrl+X', disabled: readOnly || !hasSelection }),
+    command({ id: 'editor-copy', commandId: 'editor.action.clipboardCopyAction', label: '复制', icon: 'copy', shortcut: 'Ctrl+C', disabled: !hasSelection }),
+    command({ id: 'editor-paste', commandId: 'editor.action.clipboardPasteAction', label: '粘贴', shortcut: 'Ctrl+V', disabled: readOnly }),
     separator(),
-    item({ id: 'editor-cut', label: '剪切', shortcut: 'Ctrl+X', disabled: readOnly || !hasSelection, onSelect: actions.cut }),
-    item({ id: 'editor-copy', label: '复制', icon: 'copy', shortcut: 'Ctrl+C', disabled: !hasSelection, onSelect: actions.copy }),
-    item({ id: 'editor-paste', label: '粘贴', shortcut: 'Ctrl+V', disabled: readOnly, onSelect: actions.paste }),
+    command({ id: 'editor-select-all', commandId: 'editor.action.selectAll', label: '全选', shortcut: 'Ctrl+A' }),
+    command({ id: 'editor-select-highlights', commandId: 'editor.action.selectHighlights', label: '选择所有出现', shortcut: 'Ctrl+Shift+L', disabled: !hasSelection || !isSupported('editor.action.selectHighlights') }),
     separator(),
-    item({ id: 'editor-select-all', label: '全选', shortcut: 'Ctrl+A', onSelect: actions.selectAll }),
+    command({ id: 'editor-find', commandId: 'actions.find', label: '查找', icon: 'search', shortcut: 'Ctrl+F' }),
+    command({ id: 'editor-replace', commandId: 'editor.action.startFindReplaceAction', label: '替换', shortcut: 'Ctrl+H' }),
+    command({ id: 'editor-goto-line', commandId: 'editor.action.gotoLine', label: '转到行', shortcut: 'Ctrl+G' }),
     separator(),
-    item({ id: 'editor-find', label: '查找', icon: 'search', shortcut: 'Ctrl+F', onSelect: actions.find }),
-    item({ id: 'editor-replace', label: '替换', shortcut: 'Ctrl+H', onSelect: actions.replace }),
-    item({ id: 'editor-goto-line', label: '转到行', shortcut: 'Ctrl+G', onSelect: actions.gotoLine }),
+    command({ id: 'editor-reveal-definition', commandId: 'editor.action.revealDefinition', label: '转到定义', shortcut: 'F12', disabled: !isSupported('editor.action.revealDefinition') }),
+    command({ id: 'editor-find-references', commandId: 'editor.action.referenceSearch.trigger', label: '查找引用', icon: 'search', shortcut: 'Shift+F12', disabled: !isSupported('editor.action.referenceSearch.trigger') }),
+    command({ id: 'editor-rename-symbol', commandId: 'editor.action.rename', label: '重命名符号', icon: 'edit', shortcut: 'F2', disabled: !isSupported('editor.action.rename') }),
     separator(),
-    item({ id: 'editor-comment-line', label: '注释行', shortcut: 'Ctrl+/', disabled: readOnly, onSelect: actions.commentLine }),
-    item({ id: 'editor-format', label: '格式化文档', icon: 'sparkle', shortcut: 'Shift+Alt+F', disabled: readOnly || !canFormat, onSelect: actions.format }),
+    command({ id: 'editor-move-line-up', commandId: 'editor.action.moveLinesUpAction', label: '上移行', shortcut: 'Alt+↑', disabled: readOnly }),
+    command({ id: 'editor-move-line-down', commandId: 'editor.action.moveLinesDownAction', label: '下移行', shortcut: 'Alt+↓', disabled: readOnly }),
+    command({ id: 'editor-copy-line-down', commandId: 'editor.action.copyLinesDownAction', label: '复制行', shortcut: 'Shift+Alt+↓', disabled: readOnly }),
+    command({ id: 'editor-delete-line', commandId: 'editor.action.deleteLines', label: '删除行', shortcut: 'Ctrl+Shift+K', disabled: readOnly }),
+    command({ id: 'editor-indent-lines', commandId: 'editor.action.indentLines', label: '增加缩进', shortcut: 'Ctrl+]', disabled: readOnly }),
+    command({ id: 'editor-outdent-lines', commandId: 'editor.action.outdentLines', label: '减少缩进', shortcut: 'Ctrl+[', disabled: readOnly }),
+    command({ id: 'editor-transform-uppercase', commandId: 'editor.action.transformToUppercase', label: '转为大写', disabled: readOnly || !hasSelection }),
+    command({ id: 'editor-transform-lowercase', commandId: 'editor.action.transformToLowercase', label: '转为小写', disabled: readOnly || !hasSelection }),
     separator(),
-    item({ id: 'editor-fold', label: '折叠', shortcut: 'Ctrl+Shift+[', onSelect: actions.fold }),
-    item({ id: 'editor-unfold', label: '展开', shortcut: 'Ctrl+Shift+]', onSelect: actions.unfold }),
+    command({ id: 'editor-cursor-above', commandId: 'editor.action.insertCursorAbove', label: '在上方添加光标', shortcut: 'Ctrl+Alt+↑' }),
+    command({ id: 'editor-cursor-below', commandId: 'editor.action.insertCursorBelow', label: '在下方添加光标', shortcut: 'Ctrl+Alt+↓' }),
+    separator(),
+    command({ id: 'editor-comment-line', commandId: 'editor.action.commentLine', label: '切换行注释', shortcut: 'Ctrl+/', disabled: readOnly }),
+    command({ id: 'editor-block-comment', commandId: 'editor.action.blockComment', label: '切换块注释', shortcut: 'Shift+Alt+A', disabled: readOnly }),
+    command({ id: 'editor-format', commandId: 'editor.action.formatDocument', label: '格式化文档', icon: 'sparkle', shortcut: 'Shift+Alt+F', disabled: readOnly || !canFormat }),
+    command({ id: 'editor-format-selection', commandId: 'editor.action.formatSelection', label: '格式化选中内容', shortcut: 'Ctrl+K Ctrl+F', disabled: readOnly || !canFormat || !hasSelection }),
+    command({ id: 'editor-fold', commandId: 'editor.fold', label: '折叠', shortcut: 'Ctrl+Shift+[' }),
+    command({ id: 'editor-unfold', commandId: 'editor.unfold', label: '展开', shortcut: 'Ctrl+Shift+]' }),
     separator(),
     item({ id: 'editor-save', label: '保存', shortcut: 'Ctrl+S', onSelect: actions.save }),
   ]

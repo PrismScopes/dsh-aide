@@ -20,6 +20,14 @@ function entry(entries: readonly MenuEntry[], id: string): MenuItem | undefined 
   return entries.find((candidate): candidate is MenuItem => candidate.kind === 'item' && candidate.id === id)
 }
 
+function itemIds(entries: readonly MenuEntry[]): string[] {
+  return entries.flatMap(candidate => candidate.kind === 'item' ? [candidate.id] : [])
+}
+
+function disabledIds(entries: readonly MenuEntry[]): string[] {
+  return entries.flatMap(candidate => candidate.kind === 'item' && candidate.disabled === true ? [candidate.id] : [])
+}
+
 function labelsOf(entries: readonly MenuEntry[]): string[] {
   return entries.flatMap(candidate => candidate.kind === 'item' ? [candidate.label] : [])
 }
@@ -27,16 +35,17 @@ function labelsOf(entries: readonly MenuEntry[]): string[] {
 /** 每个 label 至少含一个 CJK 字符；英文标签（Monaco 内置菜单那种）会立刻失败。 */
 const CJK = /[\u4e00-\u9fff]/
 
-function editorActions(): EditorMenuActions {
+function editorActions() {
   return {
     undo: vi.fn(), redo: vi.fn(), cut: vi.fn(), copy: vi.fn(), paste: vi.fn(),
     selectAll: vi.fn(), find: vi.fn(), replace: vi.fn(), gotoLine: vi.fn(),
     commentLine: vi.fn(), format: vi.fn(), fold: vi.fn(), unfold: vi.fn(), save: vi.fn(),
+    run: vi.fn<(commandId: string) => void>(),
   }
 }
 
-function context(overrides: Partial<Pick<EditorMenuContext, 'readOnly' | 'hasSelection' | 'canFormat'>> = {}): EditorMenuContext {
-  return { readOnly: false, hasSelection: true, canFormat: true, actions: editorActions(), ...overrides }
+function context(overrides: Partial<Pick<EditorMenuContext, 'readOnly' | 'hasSelection' | 'canFormat' | 'isSupported' | 'actions'>> = {}): EditorMenuContext {
+  return { readOnly: false, hasSelection: true, canFormat: true, isSupported: () => true, actions: editorActions(), ...overrides }
 }
 
 function diffActions(): DiffMenuActions {
@@ -44,81 +53,145 @@ function diffActions(): DiffMenuActions {
 }
 
 describe('source editor context menu', () => {
-  it('groups the items in VS Code order', () => {
+  it('groups the items in the order requested for the VS Code-style menu', () => {
     expect(shape(editorMenuItems(context()))).toEqual([
-      'editor-undo', 'editor-redo', '---',
-      'editor-cut', 'editor-copy', 'editor-paste', '---',
-      'editor-select-all', '---',
+      'editor-undo', 'editor-redo', 'editor-cut', 'editor-copy', 'editor-paste', '---',
+      'editor-select-all', 'editor-select-highlights', '---',
       'editor-find', 'editor-replace', 'editor-goto-line', '---',
-      'editor-comment-line', 'editor-format', '---',
+      'editor-reveal-definition', 'editor-find-references', 'editor-rename-symbol', '---',
+      'editor-move-line-up', 'editor-move-line-down', 'editor-copy-line-down', 'editor-delete-line',
+      'editor-indent-lines', 'editor-outdent-lines',
+      'editor-transform-uppercase', 'editor-transform-lowercase', '---',
+      'editor-cursor-above', 'editor-cursor-below', '---',
+      'editor-comment-line', 'editor-block-comment',
+      'editor-format', 'editor-format-selection',
       'editor-fold', 'editor-unfold', '---',
       'editor-save',
     ])
   })
 
-  it('disables cut and copy when there is no selected text', () => {
-    const entries = editorMenuItems(context({ hasSelection: false }))
-    expect(shape(entries)).toContain('editor-cut(禁用)')
-    expect(shape(entries)).toContain('editor-copy(禁用)')
-    // 粘贴不依赖本编辑器的选区，不能被连坐。
-    expect(shape(entries)).toContain('editor-paste')
+  it('keeps ids unique so the menu can be keyed and asserted on', () => {
+    const ids = itemIds(editorMenuItems(context()))
+    expect(new Set(ids).size).toBe(ids.length)
   })
 
-  it('disables editing actions on a read-only model but keeps view/navigation actions usable', () => {
-    const entries = editorMenuItems(context({ readOnly: true }))
-    for (const id of ['editor-undo', 'editor-redo', 'editor-cut', 'editor-paste', 'editor-comment-line', 'editor-format']) {
-      expect(shape(entries)).toContain(`${id}(禁用)`)
-    }
-    // 复制、查找、折叠、保存只读时仍然有意义（VS Code 同样保留）。
-    expect(shape(entries)).toContain('editor-copy')
+  it('disables cut/copy/selection transforms when there is no selected text', () => {
+    const disabled = disabledIds(editorMenuItems(context({ hasSelection: false }))).sort()
+    expect(disabled).toEqual([
+      'editor-copy',
+      'editor-cut',
+      'editor-format-selection',
+      'editor-select-highlights',
+      'editor-transform-lowercase',
+      'editor-transform-uppercase',
+    ].sort())
+    // 粘贴、全选、行操作不依赖本编辑器当前选区，不能被连坐。
+    const entries = editorMenuItems(context({ hasSelection: false }))
+    expect(entry(entries, 'editor-paste')?.disabled).not.toBe(true)
     expect(entry(entries, 'editor-select-all')?.disabled).not.toBe(true)
-    expect(entry(entries, 'editor-save')?.disabled).not.toBe(true)
+  })
+
+  it('disables editing commands on a read-only model but keeps view/navigation commands usable', () => {
+    const entries = editorMenuItems(context({ readOnly: true }))
+    expect(disabledIds(entries).sort()).toEqual([
+      'editor-block-comment',
+      'editor-comment-line',
+      'editor-copy-line-down',
+      'editor-cut',
+      'editor-delete-line',
+      'editor-format',
+      'editor-format-selection',
+      'editor-indent-lines',
+      'editor-move-line-down',
+      'editor-move-line-up',
+      'editor-outdent-lines',
+      'editor-paste',
+      'editor-redo',
+      'editor-transform-lowercase',
+      'editor-transform-uppercase',
+      'editor-undo',
+    ].sort())
+    // 只读时复制、查找、折叠、保存仍然有意义（VS Code 同样保留）。
+    for (const id of ['editor-copy', 'editor-select-all', 'editor-find', 'editor-fold', 'editor-save']) {
+      expect(entry(entries, id)?.disabled).not.toBe(true)
+    }
+  })
+
+  it('asks the language service only about the commands that have a provider', () => {
+    const isSupported = vi.fn((_commandId: string) => true)
+    editorMenuItems(context({ isSupported }))
+    expect(new Set(isSupported.mock.calls.map(([commandId]) => commandId))).toEqual(new Set([
+      'editor.action.selectHighlights',
+      'editor.action.revealDefinition',
+      'editor.action.referenceSearch.trigger',
+      'editor.action.rename',
+    ]))
+  })
+
+  it('disables language-service commands when Monaco reports them unsupported (plain text files)', () => {
+    const entries = editorMenuItems(context({ isSupported: () => false }))
+    expect(disabledIds(entries).sort()).toEqual([
+      'editor-find-references',
+      'editor-rename-symbol',
+      'editor-reveal-definition',
+      'editor-select-highlights',
+    ].sort())
+    // 其余编辑项不参与语言服务判定。
+    expect(entry(entries, 'editor-format')?.disabled).not.toBe(true)
   })
 
   it('disables formatting when Monaco reports no formatter for the document', () => {
-    expect(entry(editorMenuItems(context({ canFormat: false })), 'editor-format')).toMatchObject({ disabled: true })
+    const disabled = disabledIds(editorMenuItems(context({ canFormat: false }))).sort()
+    expect(disabled).toEqual(['editor-format', 'editor-format-selection'])
     expect(entry(editorMenuItems(context({ canFormat: true })), 'editor-format')?.disabled).not.toBe(true)
   })
 
-  it('runs the action bound to each item', () => {
-    const ctx = context()
-    const entries = editorMenuItems(ctx)
-    const actionById: Record<string, keyof EditorMenuActions> = {
-      'editor-undo': 'undo',
-      'editor-redo': 'redo',
-      'editor-cut': 'cut',
-      'editor-copy': 'copy',
-      'editor-paste': 'paste',
-      'editor-select-all': 'selectAll',
-      'editor-find': 'find',
-      'editor-replace': 'replace',
-      'editor-goto-line': 'gotoLine',
-      'editor-comment-line': 'commentLine',
-      'editor-format': 'format',
-      'editor-fold': 'fold',
-      'editor-unfold': 'unfold',
-      'editor-save': 'save',
+  it('runs the expected Monaco command for representative items', () => {
+    const actions = editorActions()
+    const entries = editorMenuItems(context({ actions }))
+    const expected: Array<[string, string]> = [
+      ['editor-undo', 'undo'],
+      ['editor-redo', 'redo'],
+      ['editor-copy', 'editor.action.clipboardCopyAction'],
+      ['editor-select-highlights', 'editor.action.selectHighlights'],
+      ['editor-reveal-definition', 'editor.action.revealDefinition'],
+      ['editor-move-line-up', 'editor.action.moveLinesUpAction'],
+      ['editor-cursor-below', 'editor.action.insertCursorBelow'],
+      ['editor-format-selection', 'editor.action.formatSelection'],
+      ['editor-fold', 'editor.fold'],
+    ]
+    for (const [id, commandId] of expected) {
+      entry(entries, id)?.onSelect()
+      expect(actions.run).toHaveBeenLastCalledWith(commandId)
     }
+    expect(actions.run).toHaveBeenCalledTimes(expected.length)
+  })
+
+  it('routes every command item through actions.run, and saves through the save callback', () => {
+    const actions = editorActions()
+    const entries = editorMenuItems(context({ actions }))
     for (const candidate of entries) {
-      if (candidate.kind !== 'item') continue
-      const action = actionById[candidate.id]
-      expect(action, `菜单项 ${candidate.id} 没有绑定动作`).toBeDefined()
-      if (action === undefined) continue
-      candidate.onSelect()
-      expect(ctx.actions[action]).toHaveBeenCalledTimes(1)
+      if (candidate.kind === 'item') candidate.onSelect()
     }
+    const commands = actions.run.mock.calls.map(([commandId]) => commandId)
+    // 30 个菜单项里只有「保存」不是 Monaco 命令。
+    expect(commands).toHaveLength(29)
+    expect(commands.every(commandId => commandId.length > 0)).toBe(true)
+    expect(new Set(commands).size).toBe(commands.length)
+    expect(actions.save).toHaveBeenCalledTimes(1)
+    expect(actions.run).not.toHaveBeenCalledWith('editor-save')
   })
 
   it('shows display-only shortcuts on the items that have keybindings', () => {
     const entries = editorMenuItems(context())
-    for (const id of ['editor-undo', 'editor-cut', 'editor-copy', 'editor-find', 'editor-format', 'editor-save']) {
+    for (const id of ['editor-undo', 'editor-cut', 'editor-copy', 'editor-find', 'editor-format', 'editor-reveal-definition', 'editor-save']) {
       expect(entry(entries, id)?.shortcut).toBeTruthy()
     }
   })
 
   it('writes every label in Chinese', () => {
     const labels = labelsOf(editorMenuItems(context()))
-    expect(labels.length).toBeGreaterThan(0)
+    expect(labels).toHaveLength(30)
     for (const label of labels) expect(label).toMatch(CJK)
   })
 })

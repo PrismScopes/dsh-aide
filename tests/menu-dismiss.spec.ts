@@ -40,4 +40,16 @@ describe('context menu dismissal policy', () => {
     expect(source).toMatch(/addEventListener\('wheel'/)
     expect(source).toMatch(/MENU_GRACE_MS/)
   })
+
+  it('keeps the submenu inside the same dismissal policy', () => {
+    const source = readFileSync(new URL('../src/client/ContextMenu.tsx', import.meta.url), 'utf8')
+    // 点在子菜单里也不算「点在外面」：父菜单与子菜单两个容器都要参与判定，否则点叶子项会先关菜单、再执行一次空动作。
+    expect(source).toMatch(/submenuRoot\.current\?\.contains\(target as Node\)/)
+    // Esc 逐层关闭：子菜单开着时先收子菜单，不能直接关整张菜单。
+    expect(source).toMatch(/submenuIndexRef\.current !== undefined/)
+    // 展开子菜单没有另起一套关闭逻辑，仍然交给 shouldDismissMenu 的静默期判定。
+    expect(source).toMatch(/shouldDismissMenu\(kind, \{ elapsedMs: performance\.now\(\) - openedAt\.current, insideMenu \}\)/)
+    // 子菜单的展开也不许靠 scroll 事件来收起（同一个「一闪就没」的坑）。
+    expect(source).not.toMatch(/addEventListener\('scroll'/)
+  })
 })

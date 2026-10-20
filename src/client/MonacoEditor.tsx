@@ -5,8 +5,9 @@ import { installTextMate } from './textmateHighlight.ts'
 import { attachInlineCompletion } from './inlineCompletion.ts'
 import { getPreferences, usePreferences } from './preferences.ts'
 import { editorChrome, editorModelOptions, editorOptions, highlightThemeColors, SCROLLBAR_SLIDER_ALPHA, withAlpha } from './editorOptions.ts'
-import { ContextMenu } from './ContextMenu.tsx'
+import { ContextMenu, separator, type MenuEntry } from './ContextMenu.tsx'
 import { copyText, readClipboard } from './clipboard.ts'
+import { contributionEntries, type EditorMenuTarget } from './editorMenuRegistry.ts'
 import {
   copyFallbackText,
   diffMenuItems,
@@ -300,6 +301,13 @@ async function pasteInto(instance: MonacoEditorInstance): Promise<void> {
   instance.pushUndoStop()
 }
 
+/**
+ * Monaco 里有些命令是 Action2（registerAction2）：它们不在 `editor.getAction()` 的注册表里，
+ * 只按 `getAction()?.isSupported()` 判断会永远禁用。这些命令用 `trigger` 能执行，内部
+ * precondition 不满足时安全 no-op，所以这里只要求「有模型」就算可用。
+ */
+const ACTION2_COMMANDS = new Set(['editor.action.revealDefinition', 'editor.action.referenceSearch.trigger'])
+
 /** 把编辑器实例翻译成菜单上下文：菜单数据本身不 import monaco，判定逻辑才好单测。 */
 function editorMenuContext(instance: MonacoEditorInstance, save: () => void): EditorMenuContext {
   return {
@@ -307,6 +315,11 @@ function editorMenuContext(instance: MonacoEditorInstance, save: () => void): Ed
     hasSelection: selectionSnapshot(instance).hasSelection,
     // 有没有可用的格式化器只能问 Monaco：TS worker / 已注册的 DocumentFormattingEditProvider。
     canFormat: instance.getAction('editor.action.formatDocument')?.isSupported() === true,
+    isSupported: (commandId: string): boolean => {
+      const action = instance.getAction(commandId)
+      if (action !== null) return action.isSupported()
+      return ACTION2_COMMANDS.has(commandId) && instance.getModel() !== null
+    },
     actions: {
       undo: () => { runCommand(instance, 'undo') },
       redo: () => { runCommand(instance, 'redo') },
@@ -322,8 +335,52 @@ function editorMenuContext(instance: MonacoEditorInstance, save: () => void): Ed
       fold: () => { runCommand(instance, 'editor.fold') },
       unfold: () => { runCommand(instance, 'editor.unfold') },
       save,
+      /**
+       * 菜单统一执行入口。剪贴板三个动作在不同环境里可能根本没注册（依赖
+       * navigator.clipboard / queryCommandSupported），所以仍然走带回退的实现；
+       * 其余命令 trigger 即可（Action2 与命令型 undo/redo 都覆盖得到）。
+       */
+      run: (commandId: string) => {
+        if (commandId === 'editor.action.clipboardCopyAction') { void copySelection(instance); return }
+        if (commandId === 'editor.action.clipboardCutAction') { void cutSelection(instance); return }
+        if (commandId === 'editor.action.clipboardPasteAction') { void pasteInto(instance); return }
+        runCommand(instance, commandId)
+      },
     },
   }
+}
+
+/** 打开菜单那一刻的编辑器状态：选区文本、文件路径、语言与行区间，贡献者据此决定菜单项。 */
+function editorMenuTarget(instance: MonacoEditorInstance): EditorMenuTarget {
+  const model = instance.getModel()
+  const selection = instance.getSelection()
+  const position = instance.getPosition()
+  const hasSelection = model !== null && selection !== null && !selection.isEmpty()
+  const filePath = model?.uri.path.replace(/^\/+/, '')
+  const currentLine = position?.lineNumber ?? 1
+  return {
+    ...(filePath === undefined || filePath === '' ? {} : { filePath }),
+    language: model?.getLanguageId() ?? 'plaintext',
+    hasSelection,
+    selectionText: hasSelection && model !== null && selection !== null ? model.getValueInRange(selection) : '',
+    lineStart: hasSelection && selection !== null ? selection.startLineNumber : currentLine,
+    lineEnd: hasSelection && selection !== null ? selection.endLineNumber : currentLine,
+  }
+}
+
+/**
+ * 组装右键菜单：**置顶贡献**（DeepSeek Harness 子菜单）→ 标准编辑项 → 追加贡献。
+ * 分隔线只在段与段之间补，避免空贡献也留下一条孤线。
+ */
+function buildEditorMenuEntries(instance: MonacoEditorInstance, save: () => void): MenuEntry[] {
+  const target = editorMenuTarget(instance)
+  const top = contributionEntries(target, 'top')
+  const bottom = contributionEntries(target, 'bottom')
+  const entries: MenuEntry[] = []
+  if (top.length > 0) entries.push(...top, separator())
+  entries.push(...editorMenuItems(editorMenuContext(instance, save)))
+  if (bottom.length > 0) entries.push(separator(), ...bottom)
+  return entries
 }
 
 /** 差异编辑器里右键落在哪一侧；复制/全选只作用于该侧的只读模型。 */
@@ -543,7 +600,7 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
   }, [preferences])
   const entries = menu === undefined || editor.current === undefined
     ? undefined
-    : editorMenuItems(editorMenuContext(editor.current, () => callbacks.current.onSave()))
+    : buildEditorMenuEntries(editor.current, () => callbacks.current.onSave())
   // 键盘打开的菜单关闭后把焦点还给编辑器；鼠标打开的不要抢 —— 用户可能是点在别处关闭的。
   const closeMenu = () => {
     setMenu(undefined)

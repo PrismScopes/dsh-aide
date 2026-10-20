@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { clampMenuPosition, enabledIndexes, type MenuEntry } from '../src/client/ContextMenu.tsx'
+import { clampMenuPosition, clampSubmenuPosition, enabledIndexes, separator, SUBMENU_HOVER_MS, type MenuEntry } from '../src/client/ContextMenu.tsx'
 import { explorerMenuItems, parentDirectory, tabMenuItems, terminalPaneMenuItems, workspaceAbsolutePath } from '../src/client/menus.ts'
 import type { FileEntry } from '../src/types.ts'
 
@@ -213,5 +214,99 @@ describe('tab menu wiring', () => {
     expect(bound.copyPath).toHaveBeenNthCalledWith(1, false)
     expect(bound.copyPath).toHaveBeenNthCalledWith(2, true)
     expect(bound.openTerminal).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * 子菜单（第二级）的落点。
+ *
+ * 这段逻辑必须是纯函数：node 环境不渲染 React，靠它把「右侧优先 / 放不下翻左 / 垂直夹取」
+ * 钉死；组件的键盘与悬停行为再用下方的源码静态断言兜住。
+ */
+describe('submenu placement', () => {
+  const anchor = { left: 100, top: 100, width: 200, height: 28 }
+  const viewport = { width: 1000, height: 800 }
+
+  it('opens to the right of its parent when there is room', () => {
+    expect(clampSubmenuPosition(anchor, { width: 200, height: 300 }, viewport)).toEqual({ left: 300, top: 100, flippedX: false })
+  })
+
+  it('flips to the left of the parent instead of being squeezed at the right edge', () => {
+    // 父项右边放不下：子菜单翻到父项左侧，左边缘与父项右边缘的关系保持可读。
+    expect(clampSubmenuPosition({ ...anchor, left: 800 }, { width: 200, height: 300 }, viewport)).toEqual({ left: 600, top: 100, flippedX: true })
+    // 自定义 margin 也参与翻转判定与夹取。
+    expect(clampSubmenuPosition({ ...anchor, left: 950 }, { width: 200, height: 100 }, viewport, 20)).toEqual({ left: 750, top: 100, flippedX: true })
+  })
+
+  it('clamps the submenu inside the viewport vertically', () => {
+    // 靠近底部：整体上移到还放得下的位置，而不是从底部溢出。
+    expect(clampSubmenuPosition({ ...anchor, top: 780 }, { width: 200, height: 300 }, viewport).top).toBe(492)
+    // 顶部越界：夹回 margin。
+    expect(clampSubmenuPosition({ ...anchor, top: 2 }, { width: 200, height: 300 }, viewport).top).toBe(8)
+    // 比视口还高：贴上边，靠子菜单自己的 max-height 滚动。
+    expect(clampSubmenuPosition({ ...anchor, top: 0 }, { width: 200, height: 2000 }, { width: 1000, height: 600 }, 8).top).toBe(8)
+  })
+})
+
+describe('submenu menu structure', () => {
+  it('keeps a submenu parent focusable and allows separators inside the second level', () => {
+    const entries: MenuEntry[] = [
+      { kind: 'item', id: 'parent', label: '父项', submenu: [separator(), { kind: 'item', id: 'child', label: '子项', onSelect: vi.fn() }], onSelect: vi.fn() },
+      separator(),
+    ]
+    // 父项与普通项一样参与键盘漫游；子菜单里的分隔线不算可聚焦项。
+    expect(enabledIndexes(entries)).toEqual([0])
+    const parent = entries[0]
+    expect(parent?.kind === 'item' ? shape(parent.submenu ?? []) : undefined).toEqual(['---', 'child'])
+  })
+
+  it('uses a short hover delay so sweeping the pointer does not pop every submenu', () => {
+    expect(SUBMENU_HOVER_MS).toBe(120)
+  })
+})
+
+/**
+ * 渲染契约的静态断言。
+ *
+ * 不引入 jsdom：组件里「父子两级菜单」的接线（ARIA、箭头、展开/收起、定位函数调用）只靠
+ * 源码文本断言钉住，配合上面的纯函数测试，避免以后重构时无声地删掉可访问性或键盘入口。
+ */
+describe('submenu rendering contract', () => {
+  const source = () => readFileSync(new URL('../src/client/ContextMenu.tsx', import.meta.url), 'utf8')
+
+  it('marks the parent item as a menu opener and renders the second level as .dvw-submenu', () => {
+    const text = source()
+    expect(text).toContain('aria-haspopup')
+    expect(text).toContain("? 'menu' : undefined")
+    expect(text).toContain('aria-expanded')
+    expect(text).toContain('dvw-submenu')
+    expect(text).toContain('<Icon name="chevron-right"/>')
+    // 子菜单的无障碍名称由父项 label 拼出来，屏幕阅读器才知道它属于哪一项。
+    expect(text).toContain('`${parentItem.label} 子菜单`')
+  })
+
+  it('opens the second level from hover, click and the keyboard', () => {
+    const text = source()
+    // 悬停：120ms 延迟后展开。
+    expect(text).toMatch(/setTimeout\(\(\) => \{ hoverTimer\.current = undefined; openSubmenu\(index\) \}, SUBMENU_HOVER_MS\)/)
+    // 点击父项：展开而不是执行 onSelect。
+    expect(text).toContain("if (context === 'root' && entry.submenu !== undefined) { openSubmenu(index); return }")
+    // 键盘：ArrowRight 展开；Enter 在父项上同样展开。
+    expect(text).toContain("if (event.key === 'ArrowRight')")
+    expect(text).toContain('if (entry.submenu !== undefined) { openSubmenu(active); return }')
+  })
+
+  it('closes the second level layer by layer and keeps keyboard navigation inside it', () => {
+    const text = source()
+    // ArrowLeft 只收子菜单并交还高亮；Esc 在 window 捕获阶段先收子菜单。
+    expect(text).toContain('if (event.key === \'ArrowLeft\') { event.preventDefault(); closeSubmenu(); root.current?.focus(); return }')
+    expect(text).toContain('if (submenuIndexRef.current !== undefined) { closeSubmenu(); return }')
+    // 子菜单开着时方向键在第二级里移动，Enter 执行叶子项并关闭全部（run 里先 onClose）。
+    expect(text).toContain('if (submenuEntries !== undefined) {')
+    expect(text).toContain('moveSubmenu(1)')
+  })
+
+  it('positions the second level with the exported pure function', () => {
+    expect(source()).toMatch(/clampSubmenuPosition\(\{ left: rect\.left, top: rect\.top, width: rect\.width, height: rect\.height \}/)
   })
 })

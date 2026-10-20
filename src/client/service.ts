@@ -1,4 +1,6 @@
 import type { ComponentType } from 'react'
+import type { EditorMenuContribution } from './editorMenuRegistry.ts'
+import { registerEditorMenuContribution } from './editorMenuRegistry.ts'
 
 export type WorkbenchView = 'explorer' | 'search' | 'git'
 /**
@@ -60,6 +62,13 @@ export interface VscodeWorkbench {
   runCommand(id: string): void
   getSnapshot(): WorkbenchSnapshot
   getPanels(): readonly BottomPanelContribution[]
+  /**
+   * 往编辑器右键菜单追加一段内容（见 editorMenuRegistry.ts）。
+   *
+   * 这是给「其它插件/适配器」的扩展点：DSH 子菜单、补全、调试这些能力各自往菜单里加自己的项，
+   * 不必改 MonacoEditor.tsx，也不会因为别人改组件而冲突。返回注销函数。
+   */
+  registerEditorMenuContribution(contribution: EditorMenuContribution): () => void
   /** 当前布局偏好。设置面板与工作台都从这里读，改动经 subscribe 广播给两边。 */
   getLayout(): WorkbenchLayout
   setLayout(patch: Partial<WorkbenchLayout>): void
@@ -103,6 +112,9 @@ export class WorkbenchController implements VscodeWorkbench {
   getPanels(): readonly BottomPanelContribution[] { return this.panelSnapshot }
   getLayout(): WorkbenchLayout { return this.layout }
   openDshSettings(): void { this.settingsOpener() }
+  registerEditorMenuContribution(contribution: EditorMenuContribution): () => void {
+    return registerEditorMenuContribution(contribution)
+  }
   /** 由持有 layout 服务的插件入口注入；未注入时保持 no-op，点了不会抛错。 */
   setSettingsOpener(opener: () => void): void { this.settingsOpener = opener }
   setLayout(patch: Partial<WorkbenchLayout>): void {
