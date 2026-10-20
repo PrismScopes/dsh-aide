@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
-import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, win32 } from 'node:path'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import * as pty from 'node-pty'
@@ -263,21 +263,25 @@ function resolvedTerminalProfiles(platform: NodeJS.Platform, env: NodeJS.Process
     return [{ id: 'default', label: basename(shell), shell, args: ['-l'] }]
   }
   const profiles: ResolvedProfile[] = []
+  // 这里按「目标平台」而不是宿主平台做路径运算：测试会显式传 platform='win32'，
+  // 在 macOS/Linux 上跑时 node:path 的 dirname/join 是 POSIX 语义，会把反斜杠路径
+  //（H:\AppData\Git\cmd\git.exe）拆错，导致 git-bash 被漏掉。用 win32 变体按 Win 语义解析。
+  const windows = win32
   const pwsh = probe.which('pwsh.exe')
   if (pwsh !== undefined) profiles.push({ id: 'pwsh', label: 'PowerShell', shell: pwsh, args: [] })
   const powershell = probe.which('powershell.exe')
   if (powershell !== undefined) profiles.push({ id: 'windows-powershell', label: 'Windows PowerShell', shell: powershell, args: [] })
   const git = probe.which('git.exe')
   if (git !== undefined) {
-    const root = dirname(dirname(git))
-    const bash = [join(root, 'bin', 'bash.exe'), join(root, 'usr', 'bin', 'bash.exe')].find(candidate => probe.exists(candidate))
+    const root = windows.dirname(windows.dirname(git))
+    const bash = [windows.join(root, 'bin', 'bash.exe'), windows.join(root, 'usr', 'bin', 'bash.exe')].find(candidate => probe.exists(candidate))
     if (bash !== undefined) profiles.push({ id: 'git-bash', label: 'Git Bash', shell: bash, args: ['--login', '-i'] })
   }
   const comspec = env.COMSPEC?.trim()
   if (comspec !== undefined && comspec !== '') profiles.push({ id: 'cmd', label: 'Command Prompt', shell: comspec, args: [] })
   const systemRoot = env.SystemRoot?.trim() || env.windir?.trim()
   if (systemRoot !== undefined && systemRoot !== '') {
-    const wsl = join(systemRoot, 'System32', 'bash.exe')
+    const wsl = windows.join(systemRoot, 'System32', 'bash.exe')
     if (probe.exists(wsl)) profiles.push({ id: 'wsl', label: 'WSL', shell: wsl, args: [] })
   }
   return profiles
