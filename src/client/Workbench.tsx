@@ -3,7 +3,7 @@ import type { CSSProperties, DragEvent, MouseEvent } from 'react'
 import type { FileDocument, FileEntry, GitChange, GitDiff, GitStatus, SearchMatch, SearchResult } from '../types.ts'
 import { api, currentHostBase, hostWebSocketUrl } from './api.ts'
 import type { VscodeWorkbench, WorkbenchView } from './service.ts'
-import { BOTTOM_HEIGHT, bottomHeightLimit } from './service.ts'
+import { BOTTOM_HEIGHT, bottomHeightLimit, reclampBottomHeight } from './service.ts'
 import { fileIcon, fileIconUrl, Icon } from './Icon.tsx'
 import { TerminalNewButton } from './TerminalNewButton.tsx'
 import { MarkdownPreview, markdownHeadings } from './MarkdownPreview.tsx'
@@ -491,6 +491,25 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   // 底部面板高度也在 layout 里（持久化）；拖动期间只写 CSS 变量，松手才走这里落库一次。
   const setBottomHeight = (value: number) => service.setLayout({ bottomHeight: value })
   /**
+   * 窗口在运行中缩小时，持久化的底部高度可能超出新视口。
+   *
+   * 恢复持久化值时已经按视口夹过一次，但之后 resize 不会走 setLayout；这里监听 resize，
+   * 停止 200ms 后用同一个 `reclampBottomHeight` 算一次：只有合法值真的变化才 setLayout
+   * （否则每次 resize 都会写 localStorage + 广播 + 整棵树重渲染）。拖拽语义不变。
+   */
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onResize = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        const next = reclampBottomHeight(service.getLayout())
+        if (next !== undefined) service.setLayout({ bottomHeight: next })
+      }, 200)
+    }
+    window.addEventListener('resize', onResize)
+    return () => { clearTimeout(timer); window.removeEventListener('resize', onResize) }
+  }, [service])
+  /**
    * 拖动分隔条期间的视觉跟随。
    *
    * 每个 pointermove 都 `setLayout` 会走 service.emit + 同步 localStorage.setItem + 整棵树重渲染
@@ -624,8 +643,19 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
       ws = new WebSocket(hostWebSocketUrl('/dsh-vscode/ws/files', { sessionId }))
       ws.onmessage = event => {
         let paths: string[] = []
-        try { paths = (JSON.parse(String(event.data)) as { paths?: string[] }).paths ?? [] } catch { /* 忽略格式不对的消息 */ }
-        window.dispatchEvent(new CustomEvent('dvw-files-changed', { detail: paths }))
+        let reload = false
+        try {
+          const message = JSON.parse(String(event.data)) as { paths?: string[]; reload?: boolean }
+          paths = message.paths ?? []
+          reload = message.reload === true
+        } catch { /* 忽略格式不对的消息 */ }
+        // reload（watcher 溢出，事件可能丢）：detail 必须是 undefined —— Tree 用
+        // `paths === undefined` 判断「整体重扫」。CustomEvent 的 detail 即使显式传 undefined 也会被
+        // WebIDL 转成 null，所以这里先不带 detail 构造，再 defineProperty 覆盖成真正的 undefined。
+        // 普通事件仍传相对路径数组，只刷新受影响的目录。
+        const changed = reload ? new CustomEvent('dvw-files-changed') : new CustomEvent('dvw-files-changed', { detail: paths })
+        if (reload) Object.defineProperty(changed, 'detail', { value: undefined, configurable: true })
+        window.dispatchEvent(changed)
         // 守卫在 markTabsExternal 里：没有需要标记的脏标签时返回原数组，不触发整棵树重渲染。
         setTabs(markTabsExternal)
       }

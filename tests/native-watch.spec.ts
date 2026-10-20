@@ -2,12 +2,38 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createWorkspaceWatcher } from '../src/watch.ts'
+import { createWorkspaceWatcher, createRescanThrottle, isWatcherOverflow, RESCAN_EVENT, RESCAN_THROTTLE_MS } from '../src/watch.ts'
 
 const roots:string[]=[]
 async function temp(){const value=await mkdtemp(join(tmpdir(),'dvw-watch-'));roots.push(value);return value}
 afterEach(async()=>{await Promise.all(roots.splice(0).map(path=>rm(path,{recursive:true,force:true})))})
 const wait=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms))
+
+describe('watcher overflow handling', () => {
+  it('treats an empty filename or a native error event as overflow', () => {
+    expect(RESCAN_EVENT).toBe('rescan')
+    // Windows ReadDirectoryChangesW 缓冲溢出：filename 为 null。
+    expect(isWatcherOverflow('change', null)).toBe(true)
+    expect(isWatcherOverflow('change', undefined)).toBe(true)
+    expect(isWatcherOverflow('change', '')).toBe(true)
+    // error 事件拿不到路径：同样视为可能丢事件。
+    expect(isWatcherOverflow('error', 'src/a.ts')).toBe(true)
+    // 正常事件不能误判成溢出。
+    expect(isWatcherOverflow('change', 'src/a.ts')).toBe(false)
+    expect(isWatcherOverflow('rename', 'a.ts')).toBe(false)
+  })
+
+  it('throttles consecutive overflow signals within the 500ms window', () => {
+    let now = 1_000
+    const allow = createRescanThrottle(RESCAN_THROTTLE_MS, () => now)
+    expect(allow()).toBe(true)
+    expect(allow()).toBe(false)
+    now += RESCAN_THROTTLE_MS - 1
+    expect(allow()).toBe(false)
+    now += 1
+    expect(allow()).toBe(true)
+  })
+})
 
 describe('workspace watcher',()=>{
   it('reports a change inside a nested directory',async()=>{

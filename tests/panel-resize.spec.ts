@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resizedPanelWidth } from '../src/client/Workbench.tsx'
-import { BOTTOM_HEIGHT, bottomHeightLimit, clampBottomHeight, DEFAULT_LAYOUT, WorkbenchController } from '../src/client/service.ts'
+import { BOTTOM_HEIGHT, bottomHeightLimit, clampBottomHeight, DEFAULT_LAYOUT, reclampBottomHeight, WorkbenchController } from '../src/client/service.ts'
 
 const LAYOUT_KEY = 'dvw:workbench:layout:v1'
 
@@ -93,5 +93,33 @@ describe('底部面板高度持久化（底部面板高度纳入 WorkbenchLayout
     service.setLayout({ bottomHeight: 300 })
     service.setLayout({ chatVisible: false })
     expect(service.getLayout().bottomHeight).toBe(300)
+  })
+})
+
+describe('窗口运行时缩小时底部高度自动重夹', () => {
+  const layoutWith = (bottomHeight: number) => ({ ...DEFAULT_LAYOUT, bottomHeight })
+
+  it('reclampBottomHeight 只在越界时返回修正值（已合法时为 undefined，避免多余 setLayout）', () => {
+    // 窗口缩到 600 高：上限 600-160=440，原 500 必须重夹。
+    expect(reclampBottomHeight(layoutWith(500), 600)).toBe(440)
+    // 窗口够高：500 合法，返回 undefined。
+    expect(reclampBottomHeight(layoutWith(500), 1200)).toBeUndefined()
+    // 低于 min 的坏值同样修正。
+    expect(reclampBottomHeight(layoutWith(10), 1200)).toBe(BOTTOM_HEIGHT.min)
+    // 默认 260 在常见窗口下合法。
+    expect(reclampBottomHeight(DEFAULT_LAYOUT, 900)).toBeUndefined()
+    // 拿不到视口高度时走 fallbackMax（2000）兜底。
+    expect(reclampBottomHeight(layoutWith(BOTTOM_HEIGHT.fallbackMax + 500), undefined)).toBe(BOTTOM_HEIGHT.fallbackMax)
+  })
+
+  it('Workbench 监听 resize，防抖后用 getLayout + reclampBottomHeight，且只在值变化时 setLayout，并清理监听', () => {
+    const source = readFileSync(new URL('../src/client/Workbench.tsx', import.meta.url), 'utf8')
+    expect(source).toContain("window.addEventListener('resize', onResize)")
+    expect(source).toContain('reclampBottomHeight(service.getLayout())')
+    expect(source).toContain('if (next !== undefined) service.setLayout({ bottomHeight: next })')
+    expect(source).toContain('}, 200)')
+    expect(source).toContain("window.removeEventListener('resize', onResize)")
+    // 拖拽路径仍然是「松手落库一次」，不被 resize 逻辑替换。
+    expect(source).toContain('const setBottomHeight = (value: number) => service.setLayout({ bottomHeight: value })')
   })
 })

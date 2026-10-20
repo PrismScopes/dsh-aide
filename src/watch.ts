@@ -15,6 +15,37 @@ export interface WatchHandle {
   close(): unknown
 }
 
+/** 「整体重扫」事件的 event 名：路由层看到它就给客户端发 reload。 */
+export const RESCAN_EVENT = 'rescan'
+
+/** 连续溢出的节流窗口：一次缓冲溢出通常伴随一串丢失事件，没必要每个都触发全量重扫。 */
+export const RESCAN_THROTTLE_MS = 500
+
+/**
+ * 原生 fs.watch 的这次回调是不是「事件可能丢了」。
+ *
+ * Windows 的 ReadDirectoryChangesW 缓冲溢出时 `filename` 为 null（Linux/macOS 的某些实现也可能给空串）；
+ * `error` 事件同理 —— 拿不到具体路径，只能认为中间有遗漏。此时必须让上层整体重扫，而不是静默丢弃。
+ */
+export function isWatcherOverflow(event: string, filename: string | null | undefined): boolean {
+  return event === 'error' || typeof filename !== 'string' || filename === ''
+}
+
+/**
+ * 连续溢出节流器：窗口内只放行第一次，其余丢弃。
+ *
+ * `now` 可注入，测试用假时钟断言（不依赖真 sleep）。
+ */
+export function createRescanThrottle(windowMs = RESCAN_THROTTLE_MS, now: () => number = () => Date.now()): () => boolean {
+  let last: number | undefined
+  return () => {
+    const at = now()
+    if (last !== undefined && at - last < windowMs) return false
+    last = at
+    return true
+  }
+}
+
 /**
  * 建工作区监听。
  *
@@ -25,24 +56,39 @@ export interface WatchHandle {
  *
  * 平台不支持递归监听时（老版本 Node 在 Linux 上会抛 ERR_FEATURE_UNAVAILABLE_ON_PLATFORM）
  * 退回 chokidar，行为与以前一致。
+ *
+ * 原生缓冲溢出（filename 为空）或 error 事件不再是「忽略」：向上发一次 `rescan` 信号，
+ * 由路由层转成「客户端整体重扫」。正常事件的忽略规则与相对路径语义保持不变。
  */
 export function createWorkspaceWatcher(workspace: string): WatchHandle {
+  const listeners = new Set<(event: string, changed: string) => void>()
+  const emit = (event: string, changed: string): void => { for (const listener of [...listeners]) listener(event, changed) }
+  const allowRescan = createRescanThrottle()
+  const signalRescan = (): void => { if (allowRescan()) emit(RESCAN_EVENT, '') }
+
   try {
     const native = watch(workspace, { recursive: true, persistent: true })
-    const listeners = new Set<(event: string, changed: string) => void>()
     native.on('change', (event, filename) => {
-      if (typeof filename !== 'string' || filename === '') return
-      const changed = relative(workspace, join(workspace, filename))
+      // 默认（没有 encoding 选项）filename 是 string；类型上仍可能是 Buffer，统一归一化。
+      const name = typeof filename === 'string' ? filename : filename === null ? '' : filename.toString()
+      if (isWatcherOverflow(event, name)) { signalRescan(); return }
+      const changed = relative(workspace, join(workspace, name))
       if (changed === '' || IGNORED.test(changed.split(sep).join('/'))) return
-      for (const listener of [...listeners]) listener(event, join(workspace, filename))
+      emit(event, join(workspace, name))
     })
-    // 目录被删掉之类的瞬态错误：忽略。下一轮事件会把状态补回来，没必要把整条连接打断。
-    native.on('error', () => {})
+    native.on('error', () => { signalRescan() })
     return {
       on: (_event, handler) => { listeners.add(handler) },
       off: (_event, handler) => { listeners.delete(handler) },
       close: () => { listeners.clear(); native.close() },
     }
   } catch { /* 平台不支持递归监听，走下面的 chokidar */ }
-  return chokidar.watch(workspace, { ignoreInitial: true, ignored: IGNORED, awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 25 } }) as unknown as WatchHandle
+  const fallback = chokidar.watch(workspace, { ignoreInitial: true, ignored: IGNORED, awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 25 } })
+  fallback.on('all', (event, changed) => { emit(event, changed) })
+  fallback.on('error', () => { signalRescan() })
+  return {
+    on: (_event, handler) => { listeners.add(handler) },
+    off: (_event, handler) => { listeners.delete(handler) },
+    close: () => { listeners.clear(); void fallback.close() },
+  }
 }

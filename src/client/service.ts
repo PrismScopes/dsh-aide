@@ -57,6 +57,17 @@ export function clampBottomHeight(value: number, limit: number = bottomHeightLim
   return Math.max(BOTTOM_HEIGHT.min, Math.min(limit, Math.round(value)))
 }
 
+/**
+ * 窗口尺寸变化后底部高度需要的修正值；已经合法时返回 undefined。
+ *
+ * 返回 undefined（而不是原值）让调用方**只在真的越界时**才 setLayout —— 否则每次 resize 都会
+ * 写 localStorage 并广播一次布局更新，整棵树跟着重渲染。视口高度可注入，测试用显式值。
+ */
+export function reclampBottomHeight(layout: Pick<WorkbenchLayout, 'bottomHeight'>, viewportHeight: number | undefined = viewportInnerHeight()): number | undefined {
+  const next = clampBottomHeight(layout.bottomHeight, bottomHeightLimit(viewportHeight))
+  return next === layout.bottomHeight ? undefined : next
+}
+
 const SNAPSHOT_KEY='dvw:workbench:snapshot:v1'
 const LAYOUT_KEY='dvw:workbench:layout:v1'
 const DEFAULT_SNAPSHOT:WorkbenchSnapshot={visible:false,view:'explorer'}

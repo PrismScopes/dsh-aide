@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import { isAbsolute, relative, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
-import { createWorkspaceWatcher, type WatchHandle } from './watch.ts'
+import { createWorkspaceWatcher, RESCAN_EVENT, type WatchHandle } from './watch.ts'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { HostContext } from './context.ts'
 import { codiconAsset, cwdFor, fileIconAsset, katexAsset, monacoAsset, onigWasmAsset, pdfWorkerAsset, uploadFile, workspacePreviewFile } from './host.ts'
@@ -141,6 +141,48 @@ function registerImmutableAssetRoute(ctx: HostContext, route: ImmutableAssetRout
   }), route.label)
 }
 
+/** files.changed 的聚合窗口；与拆分前的 150ms 一致。 */
+export const FILES_CHANGED_FLUSH_MS = 150
+
+/** 推给客户端的文件变更消息；`reload` 只在 watcher 溢出（事件可能丢了）时出现。 */
+export interface FilesChangedMessage { type: 'files.changed'; paths: string[]; reload?: true }
+
+export interface FilesChangedBatcher {
+  push(event: string, changed: string): void
+  dispose(): void
+}
+
+/**
+ * 工作区文件事件的 150ms 聚合。
+ *
+ * 普通事件：换算成工作区相对路径（统一 `/`）后同批去重，发送 `{type:'files.changed', paths}`。
+ * watcher 溢出（`RESCAN_EVENT`）：置 reload，flush 时发送 `{type:'files.changed', paths, reload:true}`
+ * —— 客户端据此整体重扫，而不是只刷新受影响的目录。没有事件时不会发消息，与拆分前一致。
+ */
+export function createFilesChangedBatcher(workspace: string, send: (message: FilesChangedMessage) => void, delayMs = FILES_CHANGED_FLUSH_MS): FilesChangedBatcher {
+  let paths = new Set<string>()
+  let reload = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const flush = (): void => {
+    timer = undefined
+    const message: FilesChangedMessage = { type: 'files.changed', paths: [...paths], ...(reload ? { reload: true as const } : {}) }
+    paths = new Set(); reload = false
+    send(message)
+  }
+  const schedule = (): void => { if (timer !== undefined) clearTimeout(timer); timer = setTimeout(flush, delayMs) }
+  return {
+    push(event, changed) {
+      if (event === RESCAN_EVENT) reload = true
+      else {
+        const normalized = isAbsolute(changed) ? relative(workspace, changed) : changed
+        paths.add(normalized.split(sep).join('/'))
+      }
+      schedule()
+    },
+    dispose() { if (timer !== undefined) clearTimeout(timer); timer = undefined },
+  }
+}
+
 export function registerWorkbenchRoutes(ctx: HostContext): void {
   registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: Codicon font', kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', resolve: () => codiconAsset() })
   registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: PDF.js worker', kind: 'exact', path: '/dsh-vscode/pdfjs/worker.mjs', resolve: () => pdfWorkerAsset() })
@@ -238,16 +280,12 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         try { workspace = cwdFor(ctx, sessionId) }
         catch { ws.close(1008, 'session workspace unavailable'); return }
         const watcher = watches.acquire(workspace)
-        let paths = new Set<string>(); let timer: ReturnType<typeof setTimeout> | undefined
-        const onAll = (_event: string, path: string): void => {
-          const changed = isAbsolute(path) ? relative(workspace, path) : path
-          paths.add(changed.split(sep).join('/')); clearTimeout(timer); timer = setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'files.changed', paths: [...paths] }))
-            paths = new Set()
-          }, 150)
-        }
+        const batcher = createFilesChangedBatcher(workspace, message => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message))
+        })
+        const onAll = (event: string, changed: string): void => { batcher.push(event, changed) }
         watcher.on('all', onAll)
-        ws.on('close', () => { clearTimeout(timer); watcher.off('all', onAll); watches.release(workspace) })
+        ws.on('close', () => { batcher.dispose(); watcher.off('all', onAll); watches.release(workspace) })
       })
     },
   }), 'dsh-vscode-workbench: file watcher')
