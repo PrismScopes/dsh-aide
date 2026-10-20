@@ -54,16 +54,18 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-tabs{overflow:hidden}.dvw-tab[data-pinned] .dvw-tab-name{font-style:normal}.dvw-tab:not([data-pinned]) .dvw-tab-name{font-style:italic}.dvw-tab-list{display:flex;min-width:0;flex:1;overflow-x:auto}.dvw-tab-actions{flex:none;display:flex;align-items:center;gap:2px;padding:0 6px;background:var(--dvw-sidebar-fill)}.dvw-close-all{border:1px solid var(--dvw-border);background:transparent}.dvw-chat-action[data-active]{background:var(--dvw-active);color:var(--dvw-text)}.dvw-chat-action .codicon{-webkit-text-stroke:.35px currentColor}
 /* 资源管理器的彩色类型图标（material-icon-theme 的 SVG）。尺寸与 codicon 的 .dvw-file-icon 对齐。 */
 .dvw-file-icon-img{flex:none;width:16px;height:16px;object-fit:contain;pointer-events:none}
-/* 设置页（注册进 DSH 设置里「插件」分区的一个标签）。这里渲染在 DSH 设置面板的内容列内，
-   所以颜色一律取 --dsw-alias-* 令牌，不写死色值，深浅色交给 DSH 自己切换。 */
-.dvw-settings-panel{display:flex;flex-direction:column;gap:22px;padding:4px 2px 20px}
+/* 设置页（DSH 设置导航里的一个 section）。颜色一律取 --dsw-alias-* 令牌，不写死色值。
+   字号与行距照 DSH 设置页的规格统一：行标题 14px/20px、说明 12px/18px（label-secondary）、
+   行 padding 14px、分隔线 .5px；控件里的文字同样 14px —— 早前输入框/步进器比标签大一号，
+   整页看起来「有的字变大了」，这里不再出现两套比例。 */
+.dvw-settings-panel{display:flex;flex-direction:column;gap:24px;padding:4px 2px 20px}
 .dvw-set-group{display:flex;flex-direction:column}
-.dvw-set-group-title{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}
-.dvw-set-row{display:flex;align-items:center;gap:16px;min-height:44px;padding:6px 2px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+.dvw-set-group-title{margin:0 0 2px;font-size:14px;font-weight:600;line-height:20px;color:var(--dsw-alias-label-primary)}
+.dvw-set-row{display:flex;align-items:center;gap:24px;padding:14px 2px;border-bottom:.5px solid var(--dsw-alias-border-l2)}
 .dvw-set-row:last-child{border-bottom:0}
-.dvw-set-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
-.dvw-set-title{color:var(--dsw-alias-label-primary);font-size:13px}
-.dvw-set-desc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}
+.dvw-set-text{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.dvw-set-title{color:var(--dsw-alias-label-primary);font-size:14px;line-height:20px}
+.dvw-set-desc{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
 .dvw-set-control{flex:none;display:flex;align-items:center;gap:8px}
 /* 开关按 DSH 设置页的真实规格：36×20、radius 999px；开启时轨道取前景色、圆钮取底色（反色），
    关闭时轨道为 16% 前景色、圆钮为三级文字色。那些 class 是 CSS Module 哈希，只能照规格重画。 */
@@ -83,12 +85,24 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-set-unit{color:var(--dsw-alias-label-secondary);font-size:14px}
 /* 设置页里的补充控件：整行文本输入、只读信息行、键帽、页脚说明。
    开关与步进器的规格见上；这几样 DSH 设置页里没有直接对应的控件，按同一套令牌与圆角重画。 */
-.dvw-set-row-stack{flex-direction:column;align-items:stretch;gap:8px;padding-top:8px;padding-bottom:10px}
-.dvw-set-input{width:100%;height:36px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;outline:none}
+.dvw-set-row-stack{flex-direction:column;align-items:stretch;gap:8px;padding-top:12px;padding-bottom:12px}
+.dvw-set-input{width:100%;height:32px;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4,#4a4a4d);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;outline:none}
 .dvw-set-input::placeholder{color:var(--dsw-alias-label-tertiary)}
 .dvw-set-input:focus{border-color:var(--dsw-alias-state-business-primary)}
 .dvw-set-input:disabled{opacity:.5;cursor:not-allowed}
 .dvw-set-switch:disabled{opacity:.45;cursor:not-allowed}
+/* 下拉与按钮：与输入框同一套规格（32px 高、14px 字号、DSH 的 .5px 边框与 bg-layer-1 底色）。
+   它们原先只在左侧子菜单那版样式里定义，去掉子菜单时一并挪到这里，页面不再有两套控件比例。 */
+.dvw-set-select{height:32px;max-width:240px;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4,#4a4a4d);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;cursor:pointer;outline:none}
+.dvw-set-select:focus{border-color:var(--dsw-alias-state-business-primary)}
+.dvw-set-select:disabled{opacity:.5;cursor:not-allowed}
+.dvw-set-button{height:32px;padding:0 14px;border:.5px solid var(--dsw-alias-border-l4,#4a4a4d);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;white-space:nowrap;cursor:pointer}
+.dvw-set-button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dvw-set-button:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary,#3b82f6);outline-offset:1px}
+.dvw-set-button-secondary{background:transparent;color:var(--dsw-alias-label-secondary)}
+.dvw-set-button-danger{border-color:var(--dsw-alias-state-error-primary,#f48771);background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f48771) 16%,transparent);color:var(--dsw-alias-state-error-primary,#f48771)}
+.dvw-set-button-danger:hover{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f48771) 26%,transparent)}
+.dvw-set-stepper[data-disabled=true]{opacity:.5}
 .dvw-set-info{display:flex;gap:10px;padding:4px 2px;font-size:12px;line-height:1.5}
 .dvw-set-info-label{flex:none;color:var(--dsw-alias-label-tertiary)}
 .dvw-set-info-value{min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
@@ -96,49 +110,6 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-set-info[data-tone=error] .dvw-set-info-value{color:var(--dsw-alias-state-error-primary,#f48771)}
 .dvw-set-keycap{display:inline-block;min-width:22px;padding:1px 6px;border:1px solid var(--dsw-alias-border-l2);border-bottom-width:2px;border-radius:6px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:center}
 .dvw-set-footnote{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6}
-/* ===== 设置页 v2：页面内左侧分类子菜单 + 右侧分组 =====
-   用容器查询而不是媒体查询来决定「窄」：这一页渲染在 DSH 设置面板的内容列里，
-   视口很宽时内容列也可能只有 400px 出头。窄于 520px 时导航从左侧竖列退化成顶部横向标签。
-   （末尾另有一条按视口宽度的兜底，给不支持容器查询的宿主用。） */
-.dvw-settings-panel{display:flex;flex-direction:column;gap:18px;padding:4px 2px 20px;container-type:inline-size}
-.dvw-set-layout{display:flex;align-items:flex-start;gap:20px;min-width:0}
-.dvw-set-nav{position:sticky;top:8px;flex:none;width:152px;display:flex;flex-direction:column;gap:2px;padding:4px;border:1px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
-.dvw-set-tab{height:34px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;text-align:left;white-space:nowrap;cursor:pointer}
-.dvw-set-tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-/* 选中态只用 DSH 令牌：主色做 14% 底色 + 左侧 2px 内阴影竖条，深浅色都由宿主切换。 */
-.dvw-set-tab[aria-selected=true]{background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 14%,transparent);box-shadow:inset 2px 0 0 var(--dsw-alias-state-business-primary,#3b82f6);color:var(--dsw-alias-label-primary);font-weight:600}
-.dvw-set-tab:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary,#3b82f6);outline-offset:-1px}
-.dvw-set-content{flex:1;min-width:0;display:flex;flex-direction:column}
-.dvw-set-content:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary,#3b82f6);outline-offset:2px;border-radius:8px}
-/* 下拉选择：与输入框同一套令牌；宽度随内容，最长 240px。 */
-.dvw-set-select{height:36px;max-width:240px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;outline:none}
-.dvw-set-select:focus{border-color:var(--dsw-alias-state-business-primary)}
-.dvw-set-select:disabled{opacity:.5;cursor:not-allowed}
-/* 设置页里的按钮：恢复默认设置及其二次确认。 */
-.dvw-set-button{height:32px;padding:0 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;white-space:nowrap;cursor:pointer}
-.dvw-set-button:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.dvw-set-button:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary,#3b82f6);outline-offset:1px}
-.dvw-set-button-secondary{background:transparent;color:var(--dsw-alias-label-secondary)}
-.dvw-set-button-danger{border-color:var(--dsw-alias-state-error-primary,#f48771);background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f48771) 16%,transparent);color:var(--dsw-alias-state-error-primary,#f48771)}
-.dvw-set-button-danger:hover{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f48771) 26%,transparent)}
-/* 模式不匹配时被禁用的步进器（换行列宽、自动保存延迟）。 */
-.dvw-set-stepper[data-disabled=true]{opacity:.5}
-/* 窄容器：导航变顶部横向标签、内容单列。 */
-@container (max-width:520px){
-  .dvw-set-layout{flex-direction:column;gap:12px}
-  .dvw-set-nav{position:static;width:100%;flex-direction:row;gap:2px;overflow-x:auto;scrollbar-width:none}
-  .dvw-set-nav::-webkit-scrollbar{display:none}
-  .dvw-set-tab{flex:none;text-align:center}
-  .dvw-set-tab[aria-selected=true]{box-shadow:inset 0 -2px 0 var(--dsw-alias-state-business-primary,#3b82f6)}
-  .dvw-set-content{width:100%}
-}
-/* 不支持容器查询的宿主按视口宽度兜底。 */
-@media(max-width:640px){
-  .dvw-set-layout{flex-direction:column;gap:12px}
-  .dvw-set-nav{position:static;width:100%;flex-direction:row;gap:2px;overflow-x:auto;scrollbar-width:none}
-  .dvw-set-tab{flex:none;text-align:center}
-  .dvw-set-content{width:100%}
-}
 /* 侧栏面板行：图标占一个正常 flex 位，命中层另用绝对定位铺满整行并在冒泡阶段吃掉点击，
    避免 DSH 把主区域切到空面板（那会卸载整个会话视图，是打开工作台时整屏卡顿的来源）。 */
 .dvw-panel-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px}

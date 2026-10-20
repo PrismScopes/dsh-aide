@@ -18,9 +18,10 @@ import {
  * 注册进 DSH 设置导航（settings.section），渲染在设置面板的内容列里，所以必须贴合 DSH 的观感 ——
  * 颜色一律取 --dsw-alias-* 令牌，不写死色值，深浅色由 DSH 自己切换。
  *
- * 布局是「页面内左侧分类子菜单 + 右侧分组」：设置项多了以后全部平铺成一长列，找一项要滚很久，
- * 也看不出哪些项属于同一类。分类导航是真正的 tablist（方向键切换、Home/End 跳到首尾、aria-current
- * 标出当前项），容器窄于 520px 时由 CSS 容器查询退化成顶部横向标签，不靠 JS 猜宽度。
+ * 布局是**单列滚动 + 分组标题**（编辑器 / AI 补全 / 终端 / 快捷键 / 关于与诊断）。曾经做过一版
+ * 页面内左侧分类子菜单 + 右侧面板，但那一栏在 DSH 设置的内容列里既挤又难看，而且 DSH 自己的设置页
+ * 就是单列滚动、靠分组标题分段；字号也统一成 DSH 设置页的规格（行标题 14px/20px、说明 12px/18px、
+ * 控件文字 14px），不再出现「输入框比标签大一号」的不一致。
  *
  * 落点分两类，别混淆：
  *   1. 界面偏好（localStorage，见 preferences.ts）—— 编辑器排版、补全开关与触发节奏、终端字号；
@@ -30,17 +31,6 @@ import {
  * 早前那五项布局设置（左右栏与状态栏显隐、两个栏宽）不再出现：它们在工作台里本来就有就地控件
  * （活动栏图标、标签栏按钮、拖拽分隔条），把可拖动的东西再抄一份成数字设置只会让同一个状态有两个入口。
  */
-
-/** 分类 id。既是 tab 的键，也是 aria-controls / aria-labelledby 的拼接片段。 */
-export type SettingsCategory = 'editor' | 'completion' | 'terminal' | 'shortcuts' | 'about'
-
-const CATEGORIES: ReadonlyArray<{ id: SettingsCategory; label: string }> = [
-  { id: 'editor', label: '编辑器' },
-  { id: 'completion', label: 'AI 补全' },
-  { id: 'terminal', label: '终端' },
-  { id: 'shortcuts', label: '快捷键' },
-  { id: 'about', label: '关于与诊断' },
-]
 
 /** 版本号写常量：客户端不能直接 import package.json（tsconfig 没开 resolveJsonModule），
  *  这个值随发布更新，与 package.json 的版本保持一致。 */
@@ -458,56 +448,25 @@ function AboutGroup({ settingsFile }: { settingsFile?: string }) {
   </section>
 }
 
-export function SettingsPanel({ initialCategory = 'editor' }: { initialCategory?: SettingsCategory } = {}) {
+/**
+ * 设置页。
+ *
+ * 一列滚动、按分组标题分段，**不做页内左侧分类导航**：之前那版左栏（152px 卡片 + 竖排 tab）
+ * 在 DSH 设置的内容列里太挤也难看，而 DSH 自己的设置页本来就是单列滚动、靠分组标题区分。
+ * 分组标题与行字号也按 DSH 设置页的规格来：行标题 14px/20px、说明 12px/18px、行距与分隔线一致，
+ * 不再让某些控件（输入框、步进器）比标签大一号。
+ */
+export function SettingsPanel() {
   const preferences = usePreferences()
-  const [category, setCategory] = useState<SettingsCategory>(initialCategory)
-  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
   // 宿主设置只有一个 owner：AI 补全分组负责改，关于分组负责展示其中的设置文件路径。
   const settings = useWorkbenchSettings()
 
-  const activateAt = (target: number) => {
-    const next = CATEGORIES[target]
-    if (next === undefined) return
-    setCategory(next.id)
-    tabRefs.current[target]?.focus()
-  }
-  const moveCategory = (delta: number) => {
-    const index = CATEGORIES.findIndex(entry => entry.id === category)
-    activateAt((index + delta + CATEGORIES.length) % CATEGORIES.length)
-  }
-
   return <div className="dvw-settings-panel">
-    <div className="dvw-set-layout">
-      <nav className="dvw-set-nav" role="tablist" aria-orientation="vertical" aria-label="设置分类">
-        {CATEGORIES.map((entry, index) => {
-          const active = entry.id === category
-          return <button key={entry.id} type="button" role="tab" ref={node => { tabRefs.current[index] = node }}
-            id={`dvw-set-tab-${entry.id}`}
-            // 只给当前 tab 挂 aria-controls：其余分组按需挂载，指向不存在的面板比不写更糟。
-            aria-controls={active ? `dvw-set-panel-${entry.id}` : undefined}
-            aria-selected={active} aria-current={active ? 'page' : undefined} tabIndex={active ? 0 : -1}
-            className="dvw-set-tab" data-active={active}
-            onClick={() => setCategory(entry.id)}
-            onKeyDown={event => {
-              if (event.key === 'ArrowDown' || event.key === 'ArrowRight') { event.preventDefault(); moveCategory(1); return }
-              if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') { event.preventDefault(); moveCategory(-1); return }
-              if (event.key === 'Home') { event.preventDefault(); activateAt(0); return }
-              if (event.key === 'End') { event.preventDefault(); activateAt(CATEGORIES.length - 1); return }
-              if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setCategory(entry.id) }
-            }}>
-            {entry.label}
-          </button>
-        })}
-      </nav>
-      <div className="dvw-set-content" role="tabpanel" tabIndex={0}
-        id={`dvw-set-panel-${category}`} aria-labelledby={`dvw-set-tab-${category}`} data-category={category}>
-        {category === 'editor' && <EditorGroup preferences={preferences}/>}
-        {category === 'completion' && <CompletionGroup preferences={preferences} settings={settings}/>}
-        {category === 'terminal' && <TerminalGroup preferences={preferences}/>}
-        {category === 'shortcuts' && <ShortcutGroup/>}
-        {category === 'about' && <AboutGroup settingsFile={settings.view?.completion.file}/>}
-      </div>
-    </div>
+    <EditorGroup preferences={preferences}/>
+    <CompletionGroup preferences={preferences} settings={settings}/>
+    <TerminalGroup preferences={preferences}/>
+    <ShortcutGroup/>
+    <AboutGroup settingsFile={settings.view?.completion.file}/>
     <p className="dvw-set-footnote">界面偏好保存在本机浏览器里；补全的模型路由与兜底写入 DSH 数据目录，重启后仍然有效。</p>
   </div>
 }
