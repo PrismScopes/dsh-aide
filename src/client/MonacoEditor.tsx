@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import darkPlus from '@shikijs/themes/dark-plus'
 import lightPlus from '@shikijs/themes/light-plus'
-import { installTextMate } from './textmateHighlight.ts'
+import { installTextMate, textMateSize } from './textmateHighlight.ts'
 import { attachInlineCompletion } from './inlineCompletion.ts'
 import { getPreferences, usePreferences } from './preferences.ts'
 import { editorChrome, editorModelOptions, editorOptions, highlightThemeColors, SCROLLBAR_SLIDER_ALPHA, withAlpha } from './editorOptions.ts'
@@ -445,7 +445,9 @@ export function MonacoDiffEditor(props: { uri: string; original: string; modifie
       const original = monaco.editor.createModel(props.original, undefined, monaco.Uri.parse(`dvw-diff-original:///${safe}`))
       const modified = monaco.editor.createModel(props.modified, undefined, monaco.Uri.parse(`dvw-diff-modified:///${safe}`))
       models.current = { original, modified }
-      await installTextMate(monaco, [original.getLanguageId()]).catch(() => undefined)
+      // 换成 TextMate 分词器，让高亮与 VS Code 同源；失败则继续用 Monaco 内置分词。
+      // 带上模型规模：超过阈值的文件不注入（否则从头分词可达数百 ms），回退内置分词。
+      await installTextMate(monaco, [original.getLanguageId()], textMateSize(original)).catch(() => undefined)
       if (disposed || root.current === null) return
       // 偏好取当前值而不是本次渲染的闭包值：这个 effect 只依赖 uri，不随偏好重跑（重跑会重建编辑器）。
       // 差异编辑器的创建选项不接受 tabSize/insertSpaces（它们属于模型），所以先拆出来。
@@ -540,7 +542,8 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(props.value, undefined, uri)
       if (model.getValue() !== props.value) model.setValue(props.value)
       // 换成 TextMate 分词器，让高亮与 VS Code 同源；失败则继续用 Monaco 内置分词。
-      await installTextMate(monaco, [model.getLanguageId()]).catch((failure) => {
+      // 带上模型规模：超过阈值的文件不注入（否则从头分词可达数百 ms），回退内置分词。
+      await installTextMate(monaco, [model.getLanguageId()], textMateSize(model)).catch((failure) => {
         console.warn('[dvw] TextMate 分词器装载失败，该文件回退 Monaco 内置分词：', failure)
       })
       if (disposed || root.current === null) return

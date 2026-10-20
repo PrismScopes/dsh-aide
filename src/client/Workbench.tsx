@@ -32,6 +32,27 @@ export { graphRows, graphTrackPath } from './GitPanel.tsx'
 export type { GraphRow, GraphTrack } from './GitPanel.tsx'
 
 interface Tab extends FileDocument { dirty: boolean; draft: string; loaded?: boolean; line?: number; column?: number; external?: boolean; preview?: boolean; title?: string; diff?: GitDiff; diffMode?: 'inline' | 'split'; diffSourcePath?:string; imageUrl?:string; documentPreview?:DocumentPreviewKind; documentUrl?:string; pinned?: boolean }
+
+/**
+ * 把「磁盘上已变化」标到脏标签上。
+ *
+ * 为什么需要守卫：files.changed 在每次保存文件、每次构建、每次外部改动后都会来一条，而原来的写法是
+ * 无条件 `current.map(...)` —— 即使没有任何标签需要变，也会产出一个新数组，于是整个工作台
+ * （资源管理器、Git 面板的提交图、编辑器外壳、终端面板）跟着重渲染一次。
+ *
+ * 这里只改动 `external` 一个字段，所以「需不需要变」就等价于「有没有 dirty 且尚未标记的标签」；
+ * 没有的话返回**原数组**，React 会直接 bail out。返回值的逐项字段（path/dirty/revision/external…）
+ * 与输入相同，因此行为与无条件 map 完全一致。
+ */
+export function markTabsExternal<T extends { dirty?: boolean; external?: boolean }>(tabs: T[]): T[] {
+  let changed = false
+  const next = tabs.map(tab => {
+    if (tab.dirty !== true || tab.external === true) return tab
+    changed = true
+    return { ...tab, external: true }
+  })
+  return changed ? next : tabs
+}
 /** 一次待确认的关闭：要关哪些标签、其中哪些真的脏，以及决定之后是关标签还是返回 DSH。 */
 interface PendingClose { action: 'close' | 'hide'; paths: string[]; dirtyPaths: string[] }
 // 工作台不提供配色选项，配色始终由 DSH 主题决定（见 useDshDarkTheme）。
@@ -75,7 +96,14 @@ export function resizedPanelWidth(startWidth: number, startX: number, nextX: num
   return Math.max(min, Math.min(max, Math.round(startWidth + (nextX - startX) * direction)))
 }
 
-function PanelResizer({ className, label, width, min, max, defaultWidth, direction, onWidth }: { className: string; label: string; width: number; min: number; max: number; defaultWidth: number; direction: ResizeDirection; onWidth(width: number): void }) {
+/**
+ * 分隔条。
+ *
+ * `onPreview` 是「拖动过程中的视觉跟随」：有它的时候，pointermove 只调 onPreview（只写 CSS 变量，
+ * 不碰 store/state），pointerup/pointercancel/窗口失焦时统一用 onWidth 提交一次。没有它时退回
+ * 旧行为（每次 pointermove 直接 onWidth）。键盘与双击恢复默认值永远走 onWidth（一次提交）。
+ */
+function PanelResizer({ className, label, width, min, max, defaultWidth, direction, onWidth, onPreview }: { className: string; label: string; width: number; min: number; max: number; defaultWidth: number; direction: ResizeDirection; onWidth(width: number): void; onPreview?(width: number): void }) {
   const [dragging, setDragging] = useState(false)
   const stopDragging = useRef<() => void>(() => {})
   useEffect(() => () => stopDragging.current(), [])
@@ -99,8 +127,12 @@ function PanelResizer({ className, label, width, min, max, defaultWidth, directi
     document.body.style.cursor = 'ew-resize'
     document.body.style.userSelect = 'none'
     setDragging(true)
-    const move = (next: PointerEvent) => onWidth(resizedPanelWidth(startWidth, startX, next.clientX, direction, min, max))
-    const cleanup = (commit = false, nextX = startX) => {
+    const widthAt = (nextX: number) => resizedPanelWidth(startWidth, startX, nextX, direction, min, max)
+    // 最近一次的指针位置：pointercancel/失焦时也用它把已经拖到的宽度落库（视觉上已经在那了，
+    // 不落库会让状态与画面不一致）。
+    let lastX = startX
+    const move = (next: PointerEvent) => { lastX = next.clientX; (onPreview ?? onWidth)(widthAt(lastX)) }
+    const cleanup = (commit = false, nextX = lastX) => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', cancel)
@@ -110,10 +142,11 @@ function PanelResizer({ className, label, width, min, max, defaultWidth, directi
       setDragging(false)
       stopDragging.current = () => {}
       if (!commit) return
-      onWidth(Math.max(min, Math.min(max, Math.round(startWidth + (nextX - startX) * direction))))
+      onWidth(widthAt(nextX))
     }
     const up = (next: PointerEvent) => cleanup(true, next.clientX)
-    const cancel = () => cleanup()
+    // pointercancel / 窗口失焦：拖动中断但宽度已经视觉生效，按最后位置提交（没有移动则等于原值）。
+    const cancel = () => cleanup(true)
     stopDragging.current = cancel
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -452,6 +485,57 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const setChatVisible = (value: boolean | ((current: boolean) => boolean)) => service.setLayout({ chatVisible: typeof value === 'function' ? value(service.getLayout().chatVisible) : value })
   const setSideWidth = (value: number) => service.setLayout({ sideWidth: value })
   const setChatWidth = (value: number) => service.setLayout({ chatWidth: value })
+  /**
+   * 拖动分隔条期间的视觉跟随。
+   *
+   * 每个 pointermove 都 `setLayout` 会走 service.emit + 同步 localStorage.setItem + 整棵树重渲染
+   * （实测拖一次侧边栏就是 60–120 次），而拖动只影响两列的宽度。这里改为只写 overlay 上的
+   * `--dvw-side-width` / `--dvw-chat-width`（样式表里 grid、状态栏 padding 与对话栏缩放条都读它），
+   * 松手时再由 PanelResizer 调一次 onWidth 落库。
+   *
+   * 内嵌的 DSH 对话栏是 `position:fixed`、不在 overlay 子树里，宽度写在它自己的 inline style 上
+   * （DshConversationPanel 通过 [data-dvw-conversation-panel] 写入），所以拖动对话栏时要同步写一次，
+   * 否则对话内容要等松手才跟着变宽。
+   */
+  const overlayRef=useRef<HTMLDivElement>(null)
+  const previewPanelWidth=(name:'sideWidth'|'chatWidth')=>{
+    const cssName=name==='sideWidth'?'--dvw-side-width':'--dvw-chat-width'
+    return (value:number)=>{
+      overlayRef.current?.style.setProperty(cssName,`${value}px`)
+      if(name==='chatWidth')document.querySelector<HTMLElement>('[data-dvw-conversation-panel]')?.style.setProperty(cssName,`${value}px`)
+    }
+  }
+  /**
+   * 拖底部面板的上边缘调高度。
+   *
+   * 与两个横向分隔条同一套路：拖动期间**只写** overlay 上的 `--dvw-bottom-height`（`.dvw-bottom`
+   * 的 height 读这个变量），pointerup / pointercancel / 窗口失焦才 setPanelHeight 一次。
+   * 原先每次 pointermove 都 setPanelHeight：panelHeight 是组件 state，一次拖动 60–120 次
+   * 整棵树重渲染（资源管理器、提交图、编辑器外壳、终端面板都跟着），而实际只变了一行的高度。
+   *
+   * 夹取规则逐字保持原样：120 .. window.innerHeight-160。
+   */
+  const dragBottomPanel=(event:{button:number;clientY:number})=>{
+    if(event.button!==0)return
+    const startY=event.clientY,startHeight=panelHeight
+    const heightAt=(nextY:number)=>Math.max(120,Math.min(window.innerHeight-160,startHeight+startY-nextY))
+    let lastY=startY
+    const move=(next:PointerEvent)=>{lastY=next.clientY;overlayRef.current?.style.setProperty('--dvw-bottom-height',`${heightAt(lastY)}px`)}
+    const cleanup=(commit:boolean)=>{
+      window.removeEventListener('pointermove',move)
+      window.removeEventListener('pointerup',up)
+      window.removeEventListener('pointercancel',cancel)
+      window.removeEventListener('blur',cancel)
+      if(commit)setPanelHeight(heightAt(lastY))
+    }
+    const up=()=>cleanup(true)
+    // 拖动中断（pointercancel / 失焦）时高度已经视觉生效，按最后位置落库。
+    const cancel=()=>cleanup(true)
+    window.addEventListener('pointermove',move)
+    window.addEventListener('pointerup',up)
+    window.addEventListener('pointercancel',cancel)
+    window.addEventListener('blur',cancel)
+  }
   // 会话与工作目录由 Overlay 统一从主视图会话解析后传入（0.2.1 不再提供 state.current）。
   const [workspace,setWorkspace]=useState<{cwd:string;name:string}>(); const [tabs,setTabs]=useState<Tab[]>([]); const [active,setActive]=useState<string>(); const [error,setError]=useState<string>(); const [panelHeight,setPanelHeight]=useState(260);const [outlineVisible,setOutlineVisible]=useState(()=>localStorage.getItem('dvw:outline')!=='closed');const [headerHost,setHeaderHost]=useState<HTMLDivElement|null>(null);const [tabMenu,setTabMenu]=useState<{path:string;x:number;y:number}>()
   /**
@@ -537,7 +621,8 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
         let paths: string[] = []
         try { paths = (JSON.parse(String(event.data)) as { paths?: string[] }).paths ?? [] } catch { /* 忽略格式不对的消息 */ }
         window.dispatchEvent(new CustomEvent('dvw-files-changed', { detail: paths }))
-        setTabs(current => current.map(tab => tab.dirty ? { ...tab, external: true } : tab))
+        // 守卫在 markTabsExternal 里：没有需要标记的脏标签时返回原数组，不触发整棵树重渲染。
+        setTabs(markTabsExternal)
       }
     }
     // 宿主地址可能还没到（第一次 API 尚未返回），稍后重试一次。
@@ -657,20 +742,27 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const selectView=(view:WorkbenchView)=>{if(snapshot.view===view&&primarySideVisible){setPrimarySideVisible(false);return}setPrimarySideVisible(true);service.show(view)}
   const selectHeading=(index:number)=>{if(activeTab===undefined)return;setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab));window.setTimeout(()=>window.dispatchEvent(new CustomEvent('dvw-markdown-heading',{detail:index})),50)}
   const suppressAttachmentDrop=(event:DragEvent)=>{if(!event.dataTransfer.types.includes('Files'))return;const target=event.target;const insideTree=target instanceof Element&&target.closest('.dvw-tree')!==null;if(!insideTree){event.preventDefault();event.stopPropagation()}}
-  if(!snapshot.visible)return null
-  if(sessionId===undefined)return <div className="dvw-overlay"><div className="dvw-empty" style={{gridColumn:'1/4'}}><div>请先选择或创建一个 DSH 会话。<br/><button onClick={()=>hideWorkbench()}>返回 DSH</button></div></div></div>
+  // 编辑器身份与大纲都在提前返回之前算：hooks 不能放在条件分支之后。
   const markdown=activeTab!==undefined&&!activeTab.path.startsWith('diff:')&&/\.md$/i.test(activeTab.path)
   const diffMarkdown=activeTab?.diff!==undefined&&/\.md$/i.test(activeTab.diffSourcePath??'')
   const markdownPreview=markdown||(diffMarkdown&&activeTab?.preview===true)
-  const headings=markdownPreview&&activeTab?markdownHeadings(activeTab.diff?.modified??activeTab.draft):[]
-  return <div className="dvw-overlay" data-dvw-chat={chatVisible||undefined} data-dvw-primary-side={primarySideVisible||undefined} style={{'--dvw-side-width':`${sideWidth}px`,'--dvw-chat-width':`${chatWidth}px`} as CSSProperties} role="dialog" aria-label="VS Code 工作台" onDragEnterCapture={suppressAttachmentDrop} onDragOverCapture={suppressAttachmentDrop} onDropCapture={suppressAttachmentDrop}>
+  /**
+   * 大纲标题。提取是全文 split+逐行正则（实测 300KB 文档 416µs/次），原来每次渲染都跑；
+   * 而它会跟着「保存文件 / 拖动分隔条 / 右键菜单」这类与文档无关的重渲染一起触发，必须 memo。
+   * 依赖只有源文本：预览开关切换（preview=true）时源文本不变，也不需要重算。
+   */
+  const markdownSource=markdownPreview&&activeTab!==undefined?(activeTab.diff?.modified??activeTab.draft):undefined
+  const headings=useMemo(()=>markdownSource===undefined?[]:markdownHeadings(markdownSource),[markdownSource])
+  if(!snapshot.visible)return null
+  if(sessionId===undefined)return <div className="dvw-overlay"><div className="dvw-empty" style={{gridColumn:'1/4'}}><div>请先选择或创建一个 DSH 会话。<br/><button onClick={()=>hideWorkbench()}>返回 DSH</button></div></div></div>
+  return <div ref={overlayRef} className="dvw-overlay" data-dvw-chat={chatVisible||undefined} data-dvw-primary-side={primarySideVisible||undefined} style={{'--dvw-side-width':`${sideWidth}px`,'--dvw-chat-width':`${chatWidth}px`,'--dvw-bottom-height':`${panelHeight}px`} as CSSProperties} role="dialog" aria-label="VS Code 工作台" onDragEnterCapture={suppressAttachmentDrop} onDragOverCapture={suppressAttachmentDrop} onDropCapture={suppressAttachmentDrop}>
     <DshConversationPanel visible={chatVisible} width={chatWidth}/>
-    {chatVisible&&<aside className="dvw-chat"><PanelResizer className="dvw-chat-resizer" label="拖动调整 DSH 对话栏宽度" width={chatWidth} min={400} max={720} defaultWidth={420} direction={-1} onWidth={setChatWidth}/><header className="dvw-chat-head"><span><DshMark/> DSH</span><button className="dvw-icon" title="关闭 DSH 对话栏" onClick={()=>setChatVisible(false)}><Icon name="close"/></button></header><div className="dvw-chat-body"/></aside>}
+    {chatVisible&&<aside className="dvw-chat"><PanelResizer className="dvw-chat-resizer" label="拖动调整 DSH 对话栏宽度" width={chatWidth} min={400} max={720} defaultWidth={420} direction={-1} onWidth={setChatWidth} onPreview={previewPanelWidth('chatWidth')}/><header className="dvw-chat-head"><span><DshMark/> DSH</span><button className="dvw-icon" title="关闭 DSH 对话栏" onClick={()=>setChatVisible(false)}><Icon name="close"/></button></header><div className="dvw-chat-body"/></aside>}
     <nav className="dvw-activity"><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='explorer'} title="资源管理器" onClick={()=>selectView('explorer')}><Icon name="files"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='search'} title="搜索" onClick={()=>selectView('search')}><Icon name="search"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='git'} title="源代码管理" onClick={()=>selectView('git')}><Icon name="source-control"/></button><button className="dvw-act" data-active={snapshot.bottomPanel==='terminal'} disabled={!terminalAvailable} title={terminalAvailable?(snapshot.bottomPanel==='terminal'?'隐藏终端':'显示终端'):'终端适配器未安装'} onClick={()=>toggleTerminal(service)}><Icon name="terminal"/></button><button className="dvw-act dsh" title="返回 DSH" onClick={()=>hideWorkbench()}><Icon name="home"/></button><button className="dvw-act" title="在 DSH 设置中管理工作台选项" onClick={()=>service.openDshSettings()}><Icon name="settings"/></button></nav>
     <aside className="dvw-side" data-side-width={sideWidth}>{snapshot.view==='explorer'&&<Explorer sessionId={sessionId} cwd={workspace?.cwd} selected={active} dirty={new Set(tabs.filter(tab=>tab.dirty).map(tab=>tab.path))} onOpen={(path,pin)=>void open(path,undefined,undefined,pin)}/>} {snapshot.view==='search'&&<Search sessionId={sessionId} onOpen={(path,line,column)=>void open(path,line,column)}/>} {snapshot.view==='git'&&<Git sessionId={sessionId} absoluteRoot={workspace?.cwd} onDiff={(path,diff,title,diffSourcePath)=>{const key=`diff:${path}`;setTabs(rows=>[...rows.filter(row=>row.path!==key),{path:key,title,content:diff.diff,draft:diff.diff,revision:'',size:diff.diff.length,binary:false,tooLarge:false,dirty:false,pinned:true,diff,diffMode:'inline',diffSourcePath}]);setActive(key)}}/>}</aside>
-    <PanelResizer className="dvw-side-resizer" label="拖动调整源码管理侧边栏宽度" width={sideWidth} min={210} max={640} defaultWidth={210} direction={1} onWidth={setSideWidth}/>
+    <PanelResizer className="dvw-side-resizer" label="拖动调整源码管理侧边栏宽度" width={sideWidth} min={210} max={640} defaultWidth={210} direction={1} onWidth={setSideWidth} onPreview={previewPanelWidth('sideWidth')}/>
     <main className="dvw-main"><div className="dvw-tabs"><div className="dvw-tab-list">{tabs.map(tab=><button className="dvw-tab" data-active={tab.path===active} data-pinned={tab.pinned===true||undefined} key={tab.path} title={tab.diffSourcePath??tab.path} onClick={()=>setActive(tab.path)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setTabMenu({path:tab.path,x:event.clientX,y:event.clientY})}}><span className="dvw-tab-name">{tab.dirty?'● ':''}{tabLabel(tab)}</span><span onClick={event=>{event.stopPropagation();requestCloseTabs([tab.path])}}><Icon name="close"/></span></button>)}</div>{tabMenu!==undefined&&<ContextMenu position={{x:tabMenu.x,y:tabMenu.y}} label="标签页操作" entries={tabMenuEntries(tabMenu)} onClose={()=>setTabMenu(undefined)}/>}<div className="dvw-tab-actions">{tabs.length>0&&<button className="dvw-icon dvw-close-all" title="全部关闭" onClick={closeAll}><Icon name="close-all"/></button>}<button className="dvw-icon dvw-chat-action" data-active={chatVisible||undefined} title={chatVisible?'隐藏 DSH 对话栏 (Ctrl+Alt+B)':'显示 DSH 对话栏 (Ctrl+Alt+B)'} aria-pressed={chatVisible} onClick={()=>setChatVisible(value=>!value)}><Icon name={chatVisible?'layout-sidebar-right':'layout-sidebar-right-off'}/></button></div></div><div className="dvw-editor" data-outline={markdownPreview&&outlineVisible&&headings.length>0}>{error&&<div className="dvw-error"><button className="dvw-icon" onClick={()=>setError(undefined)}><Icon name="close"/></button>{error}</div>}{markdownPreview&&outlineVisible&&headings.length>0&&<MarkdownOutline headings={headings} onClose={()=>setOutlineVisible(false)} onHeading={selectHeading}/>} {markdown&&activeTab&&<div className="dvw-editor-toolbar"><button className="dvw-icon dvw-outline-toggle" data-active={outlineVisible} title={outlineVisible?'关闭 Markdown 大纲':'显示 Markdown 大纲'} onClick={()=>setOutlineVisible(value=>!value)}><Icon name="list-tree"/></button><button className="dvw-mode-button" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="code"/> 源码</button><button className="dvw-mode-button" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{activeTab?.diff&&<div className="dvw-editor-toolbar dvw-diff-toolbar">{diffMarkdown&&<div className="dvw-diff-preview-switch"><button className="dvw-mode-button" data-diff-view="diff" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="diff"/> 差异</button><button className="dvw-mode-button" data-diff-view="preview" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{!activeTab.preview&&<><button className="dvw-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button className="dvw-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button></>}</div>}<div className="dvw-editor-body" data-toolbar={markdown||activeTab?.diff!==undefined}>{activeTab?.tooLarge===true?<div className="dvw-editor-prompt"><strong>文件超过 5 MiB，是否加载此文件？</strong><span>{activeTab.path}（{Math.round(activeTab.size/1048576)} MiB）</span><span className="dvw-editor-prompt-note">大文件会让编辑器变慢，也会占用较多内存。</span><button type="button" className="dvw-mode-button" onClick={()=>void forceLoad(activeTab.path)}>加载此文件</button></div>:activeTab===undefined?<div className="dvw-empty"><div><strong>DSH Workbench</strong><br/>从资源管理器或搜索结果打开文件</div></div>:activeTab.diff?diffMarkdown&&activeTab.preview?<MarkdownPreview source={activeTab.diff.modified} sessionId={sessionId} path={activeTab.diffSourcePath??''}/>:<MonacoDiffEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} original={activeTab.diff.original} modified={activeTab.diff.modified} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.imageUrl?<div className="dvw-image-preview"><img src={activeTab.imageUrl} alt={activeTab.path}/><span>{activeTab.path}</span></div>:activeTab.documentPreview&&activeTab.documentUrl?<DocumentPreview kind={activeTab.documentPreview} src={activeTab.documentUrl} path={activeTab.path}/>:markdown&&activeTab.preview?<MarkdownPreview source={activeTab.draft} sessionId={sessionId} path={activeTab.path}/>:<MonacoEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} onChange={draft=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,draft,dirty:draft!==tab.content}:tab))} onSave={()=>void save(activeTab)}/>}</div></div></main>
-    {bottomPanelId!==undefined&&<section className="dvw-bottom" style={{height:panelHeight,...(snapshot.bottomPanel===undefined?{display:'none'}:{})}}><div style={{height:4,cursor:'ns-resize'}} onPointerDown={event=>{const startY=event.clientY,startHeight=panelHeight;const move=(e:PointerEvent)=>setPanelHeight(Math.max(120,Math.min(window.innerHeight-160,startHeight+startY-e.clientY)));const up=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up)};window.addEventListener('pointermove',move);window.addEventListener('pointerup',up)}}/><div className="dvw-bottom-head"><div className="dvw-bottom-headslot" ref={setHeaderHost}/>{snapshot.bottomPanel==='terminal'&&sessionId!==undefined&&<TerminalNewButton sessionId={sessionId}/>}<button className="dvw-icon" style={{marginLeft:'auto'}} onClick={()=>service.toggleBottomPanel(snapshot.bottomPanel!)}><Icon name="close"/></button></div><div className="dvw-bottom-body">{Panel&&cwd&&<Panel sessionId={sessionId} cwd={cwd} visible={snapshot.bottomPanel!==undefined} colorScheme={colorScheme} header={headerHost}/>}</div></section>}
+    {bottomPanelId!==undefined&&<section className="dvw-bottom" style={{height:'var(--dvw-bottom-height, 260px)',...(snapshot.bottomPanel===undefined?{display:'none'}:{})}}><div style={{height:4,cursor:'ns-resize'}} onPointerDown={dragBottomPanel}/><div className="dvw-bottom-head"><div className="dvw-bottom-headslot" ref={setHeaderHost}/>{snapshot.bottomPanel==='terminal'&&sessionId!==undefined&&<TerminalNewButton sessionId={sessionId}/>}<button className="dvw-icon" style={{marginLeft:'auto'}} onClick={()=>service.toggleBottomPanel(snapshot.bottomPanel!)}><Icon name="close"/></button></div><div className="dvw-bottom-body">{Panel&&cwd&&<Panel sessionId={sessionId} cwd={cwd} visible={snapshot.bottomPanel!==undefined} colorScheme={colorScheme} header={headerHost}/>}</div></section>}
     <footer className="dvw-status"><span><Icon name="git-branch"/> 工作区</span><span>{workspace?.cwd??cwd??''}</span>{activeTab?.external&&<span>磁盘文件已变化</span>}<button className="dvw-icon" style={{color:'white',marginLeft:'auto'}} onClick={()=>hideWorkbench()}>返回 DSH</button></footer>
     {pendingClose!==undefined&&<ClosePrompt paths={pendingClose.dirtyPaths} onSave={()=>void resolvePendingClose('save')} onDiscard={()=>void resolvePendingClose('discard')} onCancel={()=>setPendingClose(undefined)}/>}
   </div>
