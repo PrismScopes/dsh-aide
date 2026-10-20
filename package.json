@@ -1,16 +1,16 @@
 {
-  "name": "dsh-vscode-workbench",
-  "version": "0.2.9",
-  "description": "Explorer, Monaco editor, search and local Git overlay for DSH",
+  "name": "dsh-aide",
+  "version": "0.3.0",
+  "description": "AIDE (AI + IDE): VS Code-style workbench for DeepSeek Harness with Monaco, explorer, search, Git and terminal",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tingfeng347/dsh-vscode-workbench.git"
+    "url": "git+https://github.com/PrismScopes/dsh-aide.git"
   },
-  "homepage": "https://github.com/tingfeng347/dsh-vscode-workbench#readme",
+  "homepage": "https://github.com/PrismScopes/dsh-aide#readme",
   "bugs": {
-    "url": "https://github.com/tingfeng347/dsh-vscode-workbench/issues"
+    "url": "https://github.com/PrismScopes/dsh-aide/issues"
   },
   "publishConfig": {
     "access": "public",
@@ -128,5 +128,15 @@
     "tsdown": "^0.22.2",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
-  }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "aide",
+    "ai",
+    "ide",
+    "monaco",
+    "workbench"
+  ]
 }

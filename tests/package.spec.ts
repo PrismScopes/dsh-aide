@@ -21,6 +21,6 @@ describe('published plugin assembly', () => {
     expect((manifest as { dependencies?: Record<string, string> }).dependencies).toMatchObject({ 'node-pty': '^1.1.0', '@xterm/xterm': '^5.5.0', '@xterm/addon-fit': '^0.11.0' })
 
     const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
-    expect(patch).toContain('name: dsh-vscode-workbench')
+    expect(patch).toContain('name: dsh-aide')
   })
 })

@@ -52,7 +52,7 @@ interface ModelRouteHelpers {
 
 const DEFAULT_TIMEOUT_MS = 1500
 const DEFAULT_LIMIT = 200
-const ROUTE_LABEL = 'dsh-vscode-workbench: model routes'
+const ROUTE_LABEL = 'dsh-aide: model routes'
 
 /**
  * 收集 DSH 可用的 provider/model 路由；永不抛错，失败的那一路记为缺失。

@@ -214,7 +214,7 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
         if (!res.writableEnded) res.end()
       }
     },
-  }), 'dsh-vscode-workbench: inline completion')
+  }), 'dsh-aide: inline completion')
 }
 
 /** 补全埋点聚合器（文档七：采纳率为主指标）。进程内保存，重启即清零。 */

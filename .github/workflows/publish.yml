@@ -82,7 +82,7 @@ jobs:
 
           PACKAGE_NAME="$(tar -xOzf "$PACKAGE_FILE" package/package.json | node -e 'let value=""; process.stdin.on("data", chunk => value += chunk); process.stdin.on("end", () => console.log(JSON.parse(value).name))')"
           PACKAGE_VERSION="$(tar -xOzf "$PACKAGE_FILE" package/package.json | node -e 'let value=""; process.stdin.on("data", chunk => value += chunk); process.stdin.on("end", () => console.log(JSON.parse(value).version))')"
-          test "$PACKAGE_NAME" = "dsh-vscode-workbench"
+          test "$PACKAGE_NAME" = "dsh-aide"
           test "v$PACKAGE_VERSION" = "${{ github.ref_name }}"
 
       - name: Upload npm package

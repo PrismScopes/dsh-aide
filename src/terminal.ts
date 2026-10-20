@@ -568,7 +568,7 @@ export function installTerminal(ctx: HostContext): void {
       // 把本机地址一并带上，供客户端拼 WebSocket 用（桌面端按 location.host 拼不出可连的地址）。
       send(res, 200, { ok: true, value, wsBase: localBase(req) })
     } catch (error) { sendError(res, error) }
-  } }), 'dsh-vscode-workbench: terminal API')
+  } }), 'dsh-aide: terminal API')
 
   const webSocket = new WebSocketServer({ noServer: true })
   ctx.effect(() => ctx.webServer.registerUpgrade({ path: '/dsh-vscode-terminal/ws', handler(req, socket, head) {
@@ -603,6 +603,6 @@ export function installTerminal(ctx: HostContext): void {
       // 连接关闭：先把剩余输出尽力发出去（socket 已关时 send 会自己跳过），再注销订阅并清理定时器。
       connection.on('close', () => { coalescer.dispose(); handle.listeners.delete(listener) })
     })
-  } }), 'dsh-vscode-workbench: terminal WebSocket')
-  ctx.effect(() => () => { webSocket.close(); manager.dispose() }, 'dsh-vscode-workbench: terminal teardown')
+  } }), 'dsh-aide: terminal WebSocket')
+  ctx.effect(() => () => { webSocket.close(); manager.dispose() }, 'dsh-aide: terminal teardown')
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"
      role="img" aria-labelledby="title desc">
-  <title id="title">DSH VS Code Workbench logo</title>
+  <title id="title">DSH AIDE logo</title>
   <desc id="desc">A neon workbench mark with an activity bar and code brackets for DSH.</desc>
   <defs>
     <linearGradient id="core" x1="0" y1="0" x2="0" y2="1">

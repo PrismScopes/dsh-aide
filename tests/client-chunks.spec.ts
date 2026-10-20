@@ -61,14 +61,14 @@ describe('client chunk loader', () => {
 
 describe('chunk build wiring', () => {
   it('emits pdf/docx chunks with the loader registration banner', () => {
-    const configs = dshPackage('dsh-vscode-workbench')
+    const configs = dshPackage('dsh-aide')
     const chunks = configs.slice(2)
     expect(chunks).toHaveLength(2)
     const banners = chunks.map(config => outputOf(config).banner ?? '')
     const files = banners.map(banner => /chunk: "([^"]+)"/.exec(banner)?.[1] ?? '')
     expect(files).toEqual(['client.pdf.js', 'client.docx.js'])
     for (const [index, banner] of banners.entries()) {
-      expect(banner).toBe(`window.__ModuleLoader__.load({ id: "dsh-vscode-workbench", chunk: "${files[index]}", factory: (require) => {`)
+      expect(banner).toBe(`window.__ModuleLoader__.load({ id: "dsh-aide", chunk: "${files[index]}", factory: (require) => {`)
       expect(files[index]).toMatch(CHUNK_FILE)
     }
     // chunk 必须各自单入口、禁用代码分割（rolldown 不允许 false + 多入口）。
@@ -79,7 +79,7 @@ describe('chunk build wiring', () => {
   })
 
   it('injects the loader require into the main bundle and keeps it chunk-free', () => {
-    const main = dshPackage('dsh-vscode-workbench')[1]!
+    const main = dshPackage('dsh-aide')[1]!
     expect(outputOf(main).intro ?? '').toContain('var __dshRequire = require')
     expect(outputOf(main).banner ?? '').not.toContain('chunk:')
   })

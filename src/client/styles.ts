@@ -174,7 +174,7 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 `
 
 export function installStyles(): () => void {
-  const id = 'dsh-vscode-workbench/styles'
+  const id = 'dsh-aide/styles'
   let tag = document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${id}"]`)
   if (tag === null) { tag = document.createElement('style'); tag.dataset.pluginCss = id; tag.textContent = CSS; document.head.append(tag) }
   return () => { tag?.remove() }

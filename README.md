@@ -1,25 +1,17 @@
-<h1 align="center">DSH VS Code Workbench</h1>
+<h1 align="center">DSH AIDE</h1>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tingfeng347/dsh-vscode-workbench/main/assets/dsh-neon-workbench-core.svg" width="220" alt="DSH VS Code Workbench Logo">
+  <img src="https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/assets/dsh-aide-logo.svg" width="220" alt="DSH AIDE Logo">
 </p>
 
-<p align="center">在 DeepSeek Harness 中叠加 VS Code 风格的本地开发工作台。</p>
+<p align="center"><b>AIDE = AI + IDE</b>：在 DeepSeek Harness 中叠加 VS Code 风格的本地开发工作台。</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-vscode-workbench"><img src="https://img.shields.io/npm/v/dsh-vscode-workbench?logo=npm&label=npm" alt="npm 版本"></a>
-  <a href="https://www.npmjs.com/package/dsh-vscode-workbench"><img src="https://img.shields.io/npm/dm/dsh-vscode-workbench?label=downloads" alt="npm 月下载量"></a>
-  <a href="https://github.com/tingfeng347/dsh-vscode-workbench/stargazers"><img src="https://img.shields.io/github/stars/tingfeng347/dsh-vscode-workbench?logo=github&label=Stars" alt="GitHub Stars"></a>
-  <a href="https://github.com/tingfeng347/dsh-vscode-workbench/commits/main"><img src="https://img.shields.io/github/last-commit/tingfeng347/dsh-vscode-workbench?label=last%20commit" alt="最近提交"></a>
-  <a href="https://github.com/tingfeng347/dsh-vscode-workbench/blob/main/LICENSE"><img src="https://img.shields.io/github/license/tingfeng347/dsh-vscode-workbench?label=license" alt="MIT 许可证"></a>
-  <br>
-  <a href="https://awesome-dsh-plugin.com/p/tingfeng347/dsh-vscode-workbench/"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin"></a>
-  <a href="https://dshpluginhub.ai/plugins/dsh-vscode-workbench"><img src="https://dshpluginhub.ai/badges/plugins/dsh-vscode-workbench.svg" alt="DSH Plugin Hub 已收录"></a>
-  <a href="https://dshmarket.com/p/tingfeng347/dsh-vscode-workbench/"><img src="https://img.shields.io/badge/dsh--market-已收录-5b7cfa?style=flat" alt="dsh-market 已收录"></a>
-  <a href="https://dshmk.com/plugins/1343926987"><img src="https://img.shields.io/badge/DSH%20插件市场-已收录-0ea5e9?style=flat" alt="DSH 插件市场已收录"></a>
-  <a href="https://dsh-ai.org/p/tingfeng347/dsh-vscode-workbench"><img src="https://img.shields.io/badge/dsh--ai.org-已收录-8b5cf6?style=flat" alt="dsh-ai.org 已收录"></a>
-  <a href="https://duink.com/plugins/1343926987/"><img src="https://img.shields.io/badge/DSH%20Universe-已收录-14b8a6?style=flat" alt="DSH Universe 已收录"></a>
-  <a href="https://deepseekplugin.org/plugins/tingfeng347-dsh-vscode-workbench"><img src="https://img.shields.io/badge/DeepseekPlugin-已收录-2563eb?style=flat" alt="DeepseekPlugin 已收录"></a>
+  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/v/dsh-aide?logo=npm&label=npm" alt="npm 版本"></a>
+  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/dm/dsh-aide?label=downloads" alt="npm 月下载量"></a>
+  <a href="https://github.com/PrismScopes/dsh-aide/stargazers"><img src="https://img.shields.io/github/stars/PrismScopes/dsh-aide?logo=github&label=Stars" alt="GitHub Stars"></a>
+  <a href="https://github.com/PrismScopes/dsh-aide/commits/main"><img src="https://img.shields.io/github/last-commit/PrismScopes/dsh-aide?label=last%20commit" alt="最近提交"></a>
+  <a href="https://github.com/PrismScopes/dsh-aide/blob/main/LICENSE"><img src="https://img.shields.io/github/license/PrismScopes/dsh-aide?label=license" alt="MIT 许可证"></a>
 </p>
 
 <p align="center"><b>中文</b> · <a href="README.en.md">English</a></p>
@@ -43,7 +35,7 @@
   不重建 xterm、不重放输出，回来即用。
 - **布局与 DSH**：左侧视图、终端面板和右侧 DSH 对话栏可独立显示和调整；宽度直接拖分隔条改、双击恢复默认，
   这些都在界面里就地完成，不再重复成设置项。
-- **设置页**：DSH 设置里的「VS Code 工作台」一页，单列滚动、按分组（编辑器 / AI 补全 / 终端 / 快捷键 /
+- **设置页**：DSH 设置里的「AIDE 工作台」一页，单列滚动、按分组（编辑器 / AI 补全 / 终端 / 快捷键 /
   关于与诊断）分段，字号与 DSH 设置页统一（行标题 14/20、说明 12/18、控件 14/32px）。编辑器：字号、行高、
   制表符宽度与空格缩进、自动换行（关/按宽度/按列）、
   缩略图、概览标尺、选中内容同类词高亮、空白字符、光标样式、平滑滚动、粘性滚动、自动保存与延迟；
@@ -106,12 +98,12 @@
 ## 演示
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tingfeng347/dsh-vscode-workbench/main/assets/screenshots/explorer.png" width="800" alt="资源管理器与 Monaco 编辑器">
+  <img src="https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/assets/screenshots/explorer.png" width="800" alt="资源管理器与 Monaco 编辑器">
   <br><em>资源管理器与 Monaco 编辑器</em>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tingfeng347/dsh-vscode-workbench/main/assets/screenshots/source-control.png" width="800" alt="源代码管理与提交图表">
+  <img src="https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/assets/screenshots/source-control.png" width="800" alt="源代码管理与提交图表">
   <br><em>源代码管理与提交图表</em>
 </p>
 
@@ -124,7 +116,7 @@
 ## 安装
 
 ```bash
-dsh plugin --profile web add dsh-vscode-workbench
+dsh plugin --profile web add dsh-aide
 ```
 
 ### 首次安装终端支持

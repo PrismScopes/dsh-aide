@@ -29,7 +29,7 @@ export type { BottomPanelContribution, BottomPanelProps, VscodeWorkbench, Workbe
  * 侧栏“全局面板”行的 id，同时用作 main 面板的 key。
  * 两者必须配对注册：layout.selectPanel 会校验 hasMainPanel(id)，缺任一侧点击即抛错。
  */
-const PANEL_ID = 'dsh-vscode-workbench'
+const PANEL_ID = 'dsh-aide'
 
 declare module '@deepseek-ai/cordis' { interface Context { vscodeWorkbench: VscodeWorkbench } }
 
@@ -55,7 +55,7 @@ function openDshSettings(): void {
   const registry = (shortcutsService as { registry?: { invoke?(id: string, context: unknown): unknown } } | undefined)?.registry
   if (typeof registry?.invoke === 'function') {
     console.info('[dvw] 打开 DSH 设置：走 shortcuts.registry.invoke')
-    registry.invoke(SETTINGS_COMMAND, { modal: null, source: 'dsh-vscode-workbench' })
+    registry.invoke(SETTINGS_COMMAND, { modal: null, source: 'dsh-aide' })
     return
   }
   console.warn('[dvw] 打开 DSH 设置：shortcuts.registry.invoke 不可用，回退到派发组合键（桌面端此回退无效）')
@@ -164,7 +164,7 @@ const PanelIcon = ({ service }: { service: VscodeWorkbench }) => {
         那样图标不占位，行文字会顶到行首把图标压住。 */}
     <span className="dvw-panel-icon"><Icon name="code"/></span>
     {/* 命中层单独一个绝对定位元素：铺满整行，在冒泡阶段吃掉点击。 */}
-    <span ref={hit} className="dvw-panel-hit" role="button" tabIndex={0} title="VS Code 工作台"
+    <span ref={hit} className="dvw-panel-hit" role="button" tabIndex={0} title="AIDE 工作台"
       onClick={open}
       onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') open(event) }}/>
   </>
@@ -256,8 +256,8 @@ export function apply(ctx: ClientContext): void {
   const layout = ctx.layout
   // shortcuts 服务的类型在绑定的旧版官方类型里还没有，按运行时形状取（同 layout 的做法）。
   shortcutsService = (ctx as unknown as { shortcuts?: unknown }).shortcuts
-  ctx.effect(() => installStyles(), 'dsh-vscode-workbench: styles')
-  ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-vscode-workbench: service')
+  ctx.effect(() => installStyles(), 'dsh-aide: styles')
+  ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-aide: service')
   // 编辑器右键菜单的「DeepSeek Harness」子菜单：注册成置顶贡献。
   // 它的动作只把引用/指令插入 DSH 对话输入框（不直接发送），因此不需要注入任何 DSH 客户端服务；
   // 找不到输入框时会回退到剪贴板并提示。其它插件也能通过
@@ -265,16 +265,16 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => service.registerEditorMenuContribution({
     id: 'dsh-harness', place: 'top', order: -100,
     entries: target => target.hasSelection ? [dshHarnessEntry(target)] : [],
-  }), 'dsh-vscode-workbench: dsh editor menu')
-  ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-vscode-workbench: terminal panel')
-  ctx.effect(() => service.registerCommand({ id: 'terminal.new', run() { window.dispatchEvent(new Event('dvw-terminal-new')) } }), 'dsh-vscode-workbench: terminal command')
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-vscode-workbench-overlay', inject: () => ({ service }) }, Overlay))
+  }), 'dsh-aide: dsh editor menu')
+  ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-aide: terminal panel')
+  ctx.effect(() => service.registerCommand({ id: 'terminal.new', run() { window.dispatchEvent(new Event('dvw-terminal-new')) } }), 'dsh-aide: terminal command')
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-aide-overlay', inject: () => ({ service }) }, Overlay))
   // 侧栏“全局面板”入口：与下方 main 面板成对注册。
   ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, inject: () => ({ service, layout }) }, PanelPage))
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: 'VS Code 工作台', inject: () => ({ service }) }, PanelIcon))
-  // DSH 设置导航里的「VS Code 工作台」页。order 取较大值，排在「插件市场」下面。
+  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: 'AIDE 工作台', inject: () => ({ service }) }, PanelIcon))
+  // DSH 设置导航里的「AIDE 工作台」页。order 取较大值，排在「插件市场」下面。
   // 设置页自己读写偏好（客户端 localStorage + 宿主的补全设置端点），不需要注入 workbench 服务。
-  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: PANEL_ID, order: 1000, label: 'VS Code 工作台', inject: () => ({}) }, SettingsPanel))
+  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: PANEL_ID, order: 1000, label: 'AIDE 工作台', inject: () => ({}) }, SettingsPanel))
   ctx.effect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (handleTerminalShortcut(event, service)) return
@@ -283,5 +283,5 @@ export function apply(ctx: ClientContext): void {
       if (view !== undefined) { event.preventDefault(); service.show(view) }
     }
     window.addEventListener('keydown', onKey, true); return () => window.removeEventListener('keydown', onKey, true)
-  }, 'dsh-vscode-workbench: navigation shortcuts')
+  }, 'dsh-aide: navigation shortcuts')
 }

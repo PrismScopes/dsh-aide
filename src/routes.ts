@@ -184,12 +184,12 @@ export function createFilesChangedBatcher(workspace: string, send: (message: Fil
 }
 
 export function registerWorkbenchRoutes(ctx: HostContext): void {
-  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: Codicon font', kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', resolve: () => codiconAsset() })
-  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: PDF.js worker', kind: 'exact', path: '/dsh-vscode/pdfjs/worker.mjs', resolve: () => pdfWorkerAsset() })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-aide: Codicon font', kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', resolve: () => codiconAsset() })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-aide: PDF.js worker', kind: 'exact', path: '/dsh-vscode/pdfjs/worker.mjs', resolve: () => pdfWorkerAsset() })
 
   // TextMate 语法按需提供：全部语法约 2.5MB，留在宿主侧就不会进客户端 bundle。
   // 客户端只在真正需要某种语言时取一次，之后由 immutable 缓存接管。
-  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: TextMate grammars', kind: 'prefix', path: '/dsh-vscode/grammar', resource: pathname => pathname.slice('/dsh-vscode/grammar/'.length), resolve: async name => ({ json: JSON.stringify(await readGrammar(name)) }) })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-aide: TextMate grammars', kind: 'prefix', path: '/dsh-vscode/grammar', resource: pathname => pathname.slice('/dsh-vscode/grammar/'.length), resolve: async name => ({ json: JSON.stringify(await readGrammar(name)) }) })
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/dsh-vscode/api', handler: async (req, res) => {
@@ -206,7 +206,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         send(res, 200, { ok: true, value: await dispatch(ctx, method, await readBody(req), controller.signal), wsBase: localBase(req) })
       } catch (error) { sendError(res, error) }
     },
-  }), 'dsh-vscode-workbench: API')
+  }), 'dsh-aide: API')
 
   // 补全走独立的 SSE 端点：它要边算边发，与 /api 的一问一答不同。
   registerCompletionRoute(ctx, { authorize: (req, res) => authorize(req, res, ctx.connection), readBody, send, sendError, cwdFor: sessionId => cwdFor(ctx, sessionId) })
@@ -238,7 +238,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         else sendError(res, error)
       }
     },
-  }), 'dsh-vscode-workbench: settings')
+  }), 'dsh-aide: settings')
 
   // 设置页的模型下拉：DSH 当前可用的 provider/model。和 settings 一样不依赖会话，
   // 也不受补全设置影响 —— 它读的是 DSH 自己的模型目录（llm / agentDefaultModel 服务）。
@@ -256,16 +256,16 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         send(res, 201, { ok: true, value: await uploadFile(cwdFor(ctx, sessionId), directory, name, await readBinaryBody(req)) })
       } catch (error) { sendError(res, error) }
     },
-  }), 'dsh-vscode-workbench: file upload')
+  }), 'dsh-aide: file upload')
 
   ctx.effect(() => ctx.webServer.register({
     kind:'prefix',path:'/dsh-vscode/file',handler:async(req,res)=>{if(!authorize(req,res,ctx.connection))return;try{const url=new URL(req.url??'/','http://dsh.local');const sessionId=url.searchParams.get('sessionId');const path=url.searchParams.get('path');if(sessionId===null||path===null)throw new WorkbenchError('bad-request','sessionId and path are required');const asset=await workspacePreviewFile(cwdFor(ctx,sessionId),path);res.writeHead(200,{'content-type':asset.type,'x-content-type-options':'nosniff','cache-control':'no-store'});res.end(await readFile(asset.path))}catch(error){sendError(res,error)}}
-  }), 'dsh-vscode-workbench: file preview')
+  }), 'dsh-aide: file preview')
 
-  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: Monaco assets', kind: 'prefix', path: '/dsh-vscode/monaco', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/monaco/'.length)), resolve: monacoAsset })
-  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: KaTeX assets', kind: 'prefix', path: '/dsh-vscode/katex', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/katex/'.length)), resolve: katexAsset })
-  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: file type icons', kind: 'prefix', path: '/dsh-vscode/file-icons', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/file-icons/'.length)), resolve: fileIconAsset })
-  registerImmutableAssetRoute(ctx, { label: 'dsh-vscode-workbench: oniguruma wasm', kind: 'prefix', path: '/dsh-vscode/onig', resolve: () => onigWasmAsset() })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-aide: Monaco assets', kind: 'prefix', path: '/dsh-vscode/monaco', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/monaco/'.length)), resolve: monacoAsset })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-aide: KaTeX assets', kind: 'prefix', path: '/dsh-vscode/katex', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/katex/'.length)), resolve: katexAsset })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-aide: file type icons', kind: 'prefix', path: '/dsh-vscode/file-icons', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/file-icons/'.length)), resolve: fileIconAsset })
+  registerImmutableAssetRoute(ctx, { label: 'dsh-aide: oniguruma wasm', kind: 'prefix', path: '/dsh-vscode/onig', resolve: () => onigWasmAsset() })
 
   const wss = new WebSocketServer({ noServer: true })
   const watches = new WorkspaceWatch(createWorkspaceWatcher)
@@ -288,6 +288,6 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         ws.on('close', () => { batcher.dispose(); watcher.off('all', onAll); watches.release(workspace) })
       })
     },
-  }), 'dsh-vscode-workbench: file watcher')
-  ctx.effect(() => () => { watches.closeAll(); wss.close() }, 'dsh-vscode-workbench: watcher teardown')
+  }), 'dsh-aide: file watcher')
+  ctx.effect(() => () => { watches.closeAll(); wss.close() }, 'dsh-aide: watcher teardown')
 }

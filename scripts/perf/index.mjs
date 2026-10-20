@@ -1,5 +1,5 @@
 /**
- * dsh-vscode-workbench 性能基准入口。
+ * dsh-aide 性能基准入口。
  *
  * 用法：
  *   node scripts/perf/index.mjs                 # 跑全部（pty + bundle + host）
@@ -201,7 +201,7 @@ async function runSuite(name, options) {
 function printHeader(results, options) {
   const repo = results.repo
   console.log('')
-  console.log('dsh-vscode-workbench · perf baseline')
+  console.log('dsh-aide · perf baseline')
   console.log(`  repo      ${repo.name ?? '?'}@${repo.version ?? '?'}  ${repo.branch ?? '?'}@${repo.head ?? '?'}`)
   console.log(`  runtime   node ${results.runtime.node}  ${results.runtime.platform}/${results.runtime.arch}  cpu=${results.runtime.cpu ?? '?'}`)
   console.log(`  options   rounds=${options.rounds}  only=${options.only.join(',')}  conptyDllControl=${options.conptyDllControl ? 'on' : 'off'}`)
@@ -361,7 +361,7 @@ async function main(argv) {
   const startedAt = new Date().toISOString()
   const results = {
     schemaVersion: 1,
-    tool: 'dsh-vscode-workbench-perf',
+    tool: 'dsh-aide-perf',
     generatedAt: startedAt,
     repo: await readRepoMeta(),
     runtime: runtimeMeta(),

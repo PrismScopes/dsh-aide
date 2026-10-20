@@ -86,7 +86,7 @@ DSH_COMPLETION_FALLBACK=local
 { "completion": { "route": "provider/model", "fallback": true } }
 ```
 
-**不需要手改。** DSH 设置里的「VS Code 工作台」一页就写这个文件：模型路由是一个输入框（留空＝跟随
+**不需要手改。** DSH 设置里的「AIDE 工作台」一页就写这个文件：模型路由是一个输入框（留空＝跟随
 应用默认模型），宿主会把 **DSH 已配置的模型目录**作为候选列出来（`GET /dsh-vscode/model-routes`，
 数据来自 `llm.listProviders()/listModels()` 与 `agentDefaultModel.currentSelection()`，任一提供方失败只丢它自己）；
 兜底是一个开关，保存后立刻生效（宿主写完就地重算，不等两秒的重读周期）。设置页还会

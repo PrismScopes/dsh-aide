@@ -1,25 +1,17 @@
-<h1 align="center">DSH VS Code Workbench</h1>
+<h1 align="center">DSH AIDE</h1>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tingfeng347/dsh-vscode-workbench/main/assets/dsh-neon-workbench-core.svg" width="220" alt="DSH VS Code Workbench Logo">
+  <img src="https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/assets/dsh-aide-logo.svg" width="220" alt="DSH AIDE Logo">
 </p>
 
-<p align="center">A VS Code-style local development workbench for DeepSeek Harness.</p>
+<p align="center"><b>AIDE = AI + IDE</b>: a VS Code-style local development workbench for DeepSeek Harness.</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-vscode-workbench"><img src="https://img.shields.io/npm/v/dsh-vscode-workbench?logo=npm&label=npm" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/dsh-vscode-workbench"><img src="https://img.shields.io/npm/dm/dsh-vscode-workbench?label=downloads" alt="npm downloads"></a>
-  <a href="https://github.com/tingfeng347/dsh-vscode-workbench/stargazers"><img src="https://img.shields.io/github/stars/tingfeng347/dsh-vscode-workbench?logo=github&label=Stars" alt="GitHub stars"></a>
-  <a href="https://github.com/tingfeng347/dsh-vscode-workbench/commits/main"><img src="https://img.shields.io/github/last-commit/tingfeng347/dsh-vscode-workbench?label=last%20commit" alt="Last commit"></a>
-  <a href="https://github.com/tingfeng347/dsh-vscode-workbench/blob/main/LICENSE"><img src="https://img.shields.io/github/license/tingfeng347/dsh-vscode-workbench?label=license" alt="MIT license"></a>
-  <br>
-  <a href="https://awesome-dsh-plugin.com/p/tingfeng347/dsh-vscode-workbench/"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="awesome · DSH plugin"></a>
-  <a href="https://dshpluginhub.ai/plugins/dsh-vscode-workbench"><img src="https://dshpluginhub.ai/badges/plugins/dsh-vscode-workbench.svg" alt="Listed on DSH Plugin Hub"></a>
-  <a href="https://dshmarket.com/p/tingfeng347/dsh-vscode-workbench/"><img src="https://img.shields.io/badge/dsh--market-Listed-5b7cfa?style=flat" alt="Listed on dsh-market"></a>
-  <a href="https://dshmk.com/plugins/1343926987"><img src="https://img.shields.io/badge/DSH%20Plugin%20Market-Listed-0ea5e9?style=flat" alt="Listed on DSH Plugin Market"></a>
-  <a href="https://dsh-ai.org/p/tingfeng347/dsh-vscode-workbench"><img src="https://img.shields.io/badge/dsh--ai.org-Listed-8b5cf6?style=flat" alt="Listed on dsh-ai.org"></a>
-  <a href="https://duink.com/plugins/1343926987/"><img src="https://img.shields.io/badge/DSH%20Universe-Listed-14b8a6?style=flat" alt="Listed on DSH Universe"></a>
-  <a href="https://deepseekplugin.org/en/plugins/tingfeng347-dsh-vscode-workbench"><img src="https://img.shields.io/badge/DeepseekPlugin-Listed-2563eb?style=flat" alt="Listed on DeepseekPlugin"></a>
+  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/v/dsh-aide?logo=npm&label=npm" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/dm/dsh-aide?label=downloads" alt="npm downloads"></a>
+  <a href="https://github.com/PrismScopes/dsh-aide/stargazers"><img src="https://img.shields.io/github/stars/PrismScopes/dsh-aide?logo=github&label=Stars" alt="GitHub stars"></a>
+  <a href="https://github.com/PrismScopes/dsh-aide/commits/main"><img src="https://img.shields.io/github/last-commit/PrismScopes/dsh-aide?label=last%20commit" alt="Last commit"></a>
+  <a href="https://github.com/PrismScopes/dsh-aide/blob/main/LICENSE"><img src="https://img.shields.io/github/license/PrismScopes/dsh-aide?label=license" alt="MIT license"></a>
 </p>
 
 <p align="center"><a href="README.md">中文</a> · <b>English</b></p>
@@ -40,7 +32,7 @@
 - **Search and Git**: `@vscode/ripgrep` supports case, whole-word, regex, and path filters; Git covers stage, unstage, discard, commit, branches, diffs, commit files, and the graph.
 - **Terminal**: `node-pty` and xterm with up to eight sessions, rename, a right-side switcher, splits, ANSI output, and Ctrl+C. The host pre-warms the default shell when the panel opens, so a new terminal usually already has its prompt in the replay buffer; collapsing the panel or switching tabs keeps the xterm instances instead of rebuilding and replaying them.
 - **Layout and DSH**: the primary view, terminal panel, and DSH conversation sidebar can be shown and resized independently; widths are dragged and double-clicked back to default in place, so they are not duplicated as settings.
-- **Settings page**: the "VS Code Workbench" page under DSH settings is one scrolling page grouped into Editor / AI completion / Terminal / Shortcuts / About and diagnostics, using the same type scale as DSH settings (row title 14/20, hint 12/18, controls 14/32px). Editor: font size, line height, tab size and insert-spaces, word wrap (off/on/bounded), minimap, overview ruler, occurrence highlight, whitespace rendering, cursor style, smooth scrolling, sticky scroll, auto save and delay. AI completion: master switch, trigger delay, model route (**listed from the models DSH already has configured**, free-form allowed), failure fallback, plus the model actually in use and the last failure. Also terminal font size, the shortcut reference, and reset-to-defaults.
+- **Settings page**: the "AIDE" page under DSH settings is one scrolling page grouped into Editor / AI completion / Terminal / Shortcuts / About and diagnostics, using the same type scale as DSH settings (row title 14/20, hint 12/18, controls 14/32px). Editor: font size, line height, tab size and insert-spaces, word wrap (off/on/bounded), minimap, overview ruler, occurrence highlight, whitespace rendering, cursor style, smooth scrolling, sticky scroll, auto save and delay. AI completion: master switch, trigger delay, model route (**listed from the models DSH already has configured**, free-form allowed), failure fallback, plus the model actually in use and the last failure. Also terminal font size, the shortcut reference, and reset-to-defaults.
 - **Occurrence highlight and overview ruler**: selecting or double-clicking a word highlights every occurrence in the document the way VS Code does, and a three-lane overview ruler appears on the right (selection, occurrences, and find matches are drawn in the scrollbar strip). Ruler markers use the foreground color (white on dark themes, no longer the blue accent), and the scrollbar slider is translucent so it never hides them.
 - **Close confirmation and auto save**: closing a tab, bulk-closing (others/right/saved/all), or returning to DSH with unsaved edits opens a VS Code-style dialog (single: Save / Don't Save / Cancel; multiple: Save All / Don't Save All / Cancel with the file list). Files that fail to save stay open and report the error, and returning to DSH is blocked while any save failed. An optional delayed auto save is available too.
 - **Localized context menus**: the explorer, tabs, code editor, terminal, and source control all have VS Code-style menus in Chinese — new/upload/cut/copy/paste/rename/delete, copy relative or absolute path, open in terminal, tab close-others/right/saved, editor undo-redo and find-replace, terminal copy/paste and clear, Git stage/unstage/discard/copy commit hash. Monaco's built-in English menu is disabled (`contextmenu:false`); menu contents are pure data (unit-tested) over one shared shell.
@@ -89,12 +81,12 @@ replace or disable `ui-layout`.
 ## Demo
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tingfeng347/dsh-vscode-workbench/main/assets/screenshots/explorer.png" width="800" alt="Explorer and Monaco editor">
+  <img src="https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/assets/screenshots/explorer.png" width="800" alt="Explorer and Monaco editor">
   <br><em>Explorer and Monaco editor</em>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tingfeng347/dsh-vscode-workbench/main/assets/screenshots/source-control.png" width="800" alt="Source control and commit graph">
+  <img src="https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/assets/screenshots/source-control.png" width="800" alt="Source control and commit graph">
   <br><em>Source control and commit graph</em>
 </p>
 
@@ -107,7 +99,7 @@ replace or disable `ui-layout`.
 ## Installation
 
 ```bash
-dsh plugin --profile web add dsh-vscode-workbench
+dsh plugin --profile web add dsh-aide
 ```
 
 ### First terminal installation
