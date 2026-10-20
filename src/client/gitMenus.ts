@@ -64,6 +64,14 @@ interface CommitMenuActions {
   /** 等同于点一下提交行：展开/收起这次提交的文件列表。 */
   toggleFiles(): void
   copyMessage(): void
+  /** 分离头指针检出这次提交（VS Code Git Graph 的「签出」）。 */
+  checkout(): void
+  /** 以这次提交为基准新建分支（名字由面板层的分支选择器输入）。 */
+  createBranch(): void
+  /** 把这次提交拣选到当前分支。 */
+  cherryPick(): void
+  /** 反向提交，撤销这次提交的改动（危险操作，面板层负责二次确认）。 */
+  revert(): void
 }
 
 interface CommitMenuContext {
@@ -73,7 +81,12 @@ interface CommitMenuContext {
   actions: CommitMenuActions
 }
 
-/** 提交图行的菜单：复制哈希 / 查看提交文件 / 复制提交说明 —— 都是点开一次就能拿到的信息。 */
+/**
+ * 提交图行的菜单。
+ *
+ * 前一组是「点开一次就能拿到的信息」，后一组是 Git Graph 扩展里对单次提交的常用操作
+ * （检出 / 建分支 / 拣选 / 还原）；写操作都放在分隔线之后，避免手滑点到。
+ */
 export function commitMenuItems(context: CommitMenuContext): MenuEntry[] {
   const { expanded, actions } = context
   return [
@@ -81,6 +94,11 @@ export function commitMenuItems(context: CommitMenuContext): MenuEntry[] {
     // 文案跟随当前状态：已展开时再写「查看」会让人以为点了不生效。
     item({ id: 'toggle-commit-files', label: expanded ? '隐藏提交文件' : '查看提交文件', onSelect: actions.toggleFiles }),
     item({ id: 'copy-commit-message', label: '复制提交说明', onSelect: actions.copyMessage }),
+    separator(),
+    item({ id: 'commit-checkout', label: '检出此提交', onSelect: actions.checkout }),
+    item({ id: 'commit-create-branch', label: '在此创建分支', onSelect: actions.createBranch }),
+    item({ id: 'commit-cherry-pick', label: '拣选此提交', onSelect: actions.cherryPick }),
+    item({ id: 'commit-revert', label: '还原此提交', danger: true, onSelect: actions.revert }),
   ]
 }
 
@@ -103,5 +121,106 @@ export function commitFileMenuItems(context: CommitFileMenuContext): MenuEntry[]
   return [
     item({ id: 'open-commit-file-diff', label: '打开差异', onSelect: actions.openDiff }),
     item({ id: 'copy-commit-file-path', label: '复制路径', onSelect: actions.copyPath }),
+  ]
+}
+
+/** 面板顶部「更多操作」菜单（VS Code 源代码管理视图标题上的 `...`）。 */
+interface ScmMenuActions {
+  refresh(): void
+  fetch(): void
+  pull(): void
+  push(): void
+  sync(): void
+  stageAll(): void
+  unstageAll(): void
+  discardAll(): void
+  checkout(): void
+  createBranch(): void
+  deleteBranch(): void
+}
+
+interface ScmMenuContext {
+  busy: boolean
+  /** 是否配置了远程：拉取/推送/同步/获取在没远程时禁用而不是隐藏，菜单位置不会跳。 */
+  remote: boolean
+  /** 暂存区条目数，决定「取消暂存所有更改」是否可点。 */
+  stagedCount: number
+  /** 未暂存条目数，决定「暂存 / 放弃所有更改」是否可点。 */
+  changeCount: number
+  actions: ScmMenuActions
+}
+
+/**
+ * 顶部菜单。分组顺序与 VS Code 一致：先同步（拉取/推送/同步/获取），
+ * 再整批的暂存与放弃，最后才是分支操作；破坏性操作带 danger 标记。
+ */
+export function scmMenuItems(context: ScmMenuContext): MenuEntry[] {
+  const { busy, remote, stagedCount, changeCount, actions } = context
+  const offline = busy || !remote
+  return [
+    item({ id: 'scm-refresh', label: '刷新', disabled: busy, onSelect: actions.refresh }),
+    separator(),
+    item({ id: 'scm-pull', label: '拉取', disabled: offline, onSelect: actions.pull }),
+    item({ id: 'scm-push', label: '推送', disabled: offline, onSelect: actions.push }),
+    item({ id: 'scm-sync', label: '同步', disabled: offline, onSelect: actions.sync }),
+    item({ id: 'scm-fetch', label: '获取', disabled: offline, onSelect: actions.fetch }),
+    separator(),
+    item({ id: 'scm-stage-all', label: '暂存所有更改', disabled: busy || changeCount === 0, onSelect: actions.stageAll }),
+    item({ id: 'scm-unstage-all', label: '取消暂存所有更改', disabled: busy || stagedCount === 0, onSelect: actions.unstageAll }),
+    item({ id: 'scm-discard-all', label: '放弃所有更改', danger: true, disabled: busy || changeCount === 0, onSelect: actions.discardAll }),
+    separator(),
+    item({ id: 'scm-checkout', label: '检出到…', disabled: busy, onSelect: actions.checkout }),
+    item({ id: 'scm-create-branch', label: '新建分支…', disabled: busy, onSelect: actions.createBranch }),
+    item({ id: 'scm-delete-branch', label: '删除分支…', disabled: busy, onSelect: actions.deleteBranch }),
+  ]
+}
+
+/** 分组标题上的 `...` 菜单：暂存的更改 / 更改 / 图表。 */
+export type GitGroup = 'staged' | 'changes' | 'graph'
+
+interface GroupMenuActions {
+  stageAll(): void
+  unstageAll(): void
+  discardAll(): void
+  refreshGraph(): void
+  /** 在「全部提交」与「仅当前分支」之间切换提交图的范围。 */
+  toggleAllCommits(): void
+  /** 提交图多取一页。 */
+  loadMore(): void
+  /** 收起当前展开的提交文件列表。 */
+  collapseCommit(): void
+}
+
+interface GroupMenuContext {
+  group: GitGroup
+  busy: boolean
+  /** 该组的条目数（图表组不用，传提交数也行）。 */
+  count: number
+  /** 提交图当前是否显示全部分支。 */
+  allCommits: boolean
+  /** 提交图是否还有下一页可加载。 */
+  canLoadMore: boolean
+  /** 是否有展开的提交（决定「收起提交文件」是否可点）。 */
+  expandedCommit: boolean
+  actions: GroupMenuActions
+}
+
+/** 分组菜单：只列这一组能做的操作，避免把所有动作塞进一个巨型菜单。 */
+export function groupMenuItems(context: GroupMenuContext): MenuEntry[] {
+  const { group, busy, count, allCommits, canLoadMore, expandedCommit, actions } = context
+  if (group === 'staged') {
+    return [item({ id: 'group-unstage-all', label: '取消暂存所有更改', disabled: busy || count === 0, onSelect: actions.unstageAll })]
+  }
+  if (group === 'changes') {
+    return [
+      item({ id: 'group-stage-all', label: '暂存所有更改', disabled: busy || count === 0, onSelect: actions.stageAll }),
+      item({ id: 'group-discard-all', label: '放弃所有更改', danger: true, disabled: busy || count === 0, onSelect: actions.discardAll }),
+    ]
+  }
+  return [
+    item({ id: 'graph-refresh', label: '刷新提交图', disabled: busy, onSelect: actions.refreshGraph }),
+    item({ id: 'graph-toggle-all', label: allCommits ? '仅显示当前分支' : '显示全部分支', disabled: busy, onSelect: actions.toggleAllCommits }),
+    item({ id: 'graph-load-more', label: '加载更多提交', disabled: busy || !canLoadMore, onSelect: actions.loadMore }),
+    item({ id: 'graph-collapse-commit', label: '收起提交文件', disabled: expandedCommit === false, onSelect: actions.collapseCommit }),
   ]
 }

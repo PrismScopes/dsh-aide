@@ -5,7 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, reso
 import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import type { HostContext } from './context.ts'
-import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
+import type { FileDocument, FileEntry, GitBranchList, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
 import { inside, resolveCreatableWorkspacePath, resolveExistingWorkspacePath, type WorkspacePathErrors } from './paths.ts'
 import { WorkbenchError } from './wire.ts'
 
@@ -226,7 +226,10 @@ export type ProcessRunner = (command: string, args: string[], cwd: string, timeo
  */
 export function run(command: string, args: string[], cwd: string, timeout = PROCESS_TIMEOUT, signal?: AbortSignal, maxStdoutBytes = Number.POSITIVE_INFINITY): Promise<ProcessResult> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { cwd, shell: false, windowsHide: true })
+    // git 的网络动作（fetch/pull/push）在凭据缺失时会等 stdin 输入，而这里没有 stdin：
+    // 不关掉终端提示的话只能等满 30s 超时。GIT_TERMINAL_PROMPT=0 让它立刻报「需要认证」。
+    const env = command === 'git' ? { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } : undefined
+    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, ...(env === undefined ? {} : { env }) })
     let stdout = ''
     let stderr = ''
     let stdoutBytes = 0
@@ -550,6 +553,66 @@ export async function gitStatus(cwd: string, runner: ProcessRunner = run): Promi
   return { repository, branch, ahead, behind, changes }
 }
 
+/**
+ * 分支名守卫。
+ *
+ * git 自己的规则很碎（`check-ref-format`），这里只挡「明显非法 / 危险」的写法：
+ * 选项注入（以 `-` 开头）、空白、`..`、以及 git 明确禁止的字符，避免把用户输入当命令参数。
+ */
+const FORBIDDEN_BRANCH_CHARS = [' ', '~', '^', ':', '?', '*', '[', '\\']
+export function validateBranchName(value: string | undefined): string {
+  const name = (value ?? '').trim()
+  if (name === '' || name.startsWith('-') || name.includes('..') || name.endsWith('/') || name.endsWith('.')) {
+    throw new WorkbenchError('bad-request', 'branch name is invalid')
+  }
+  if (FORBIDDEN_BRANCH_CHARS.some(char => name.includes(char))) throw new WorkbenchError('bad-request', 'branch name is invalid')
+  return name
+}
+
+/** 提交图的取数：`-n` 条，可选 `--all`（显示全部分支）。 */
+async function gitLog(runGit: (args: string[]) => Promise<ProcessResult>, count: number, all: boolean): Promise<GitCommit[]> {
+  const limit = String(Math.min(1000, Math.max(1, count)))
+  const args = ['log', '--topo-order', '--date=iso-strict', '--decorate=short', '--pretty=format:%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1f%D%x00', '-n', limit]
+  if (all) args.push('--all')
+  // 不再先跑 `rev-parse --verify HEAD`：正常仓库直接 log（-1 spawn）；失败时才懒回退判断空仓库。
+  const result = await runGit(args)
+  if (result.code !== 0) {
+    const head = await runGit(['rev-parse', '--verify', 'HEAD'])
+    if (head.code !== 0) return []
+    throw new WorkbenchError('git-failed', result.stderr || result.stdout, 500)
+  }
+  return result.stdout.split('\0').filter(Boolean).map((record): GitCommit => {
+    const [rawHash = '', parents = '', author = '', date = '', subject = '', refs = ''] = record.split('\x1f'); const hash = rawHash.trim()
+    return { hash, parents: parents.split(' ').filter(Boolean), author, date, subject, refs: refs.split(',').map(item => item.trim()).filter(Boolean) }
+  })
+}
+
+/** 本地 + 远程分支清单；空仓库（没有 HEAD）时 current 为空串。 */
+async function gitBranchList(runGit: (args: string[]) => Promise<ProcessResult>): Promise<GitBranchList> {
+  const current = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])
+  const local = await runGit(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])
+  const remote = await runGit(['for-each-ref', '--format=%(refname:short)', 'refs/remotes'])
+  return {
+    current: current.code === 0 ? current.stdout.trim() : '',
+    local: local.code === 0 ? local.stdout.split('\n').map(value => value.trim()).filter(Boolean) : [],
+    // `origin/HEAD` 是符号引用，列出来也签不出东西。
+    remote: remote.code === 0 ? remote.stdout.split('\n').map(value => value.trim()).filter(value => value !== '' && !value.endsWith('/HEAD')) : [],
+  }
+}
+
+/** 推送参数：有上游就普通 push，没有上游就把当前分支推到第一个远程（与 VS Code 的提示语义一致）。 */
+async function gitPushArgs(runGit: (args: string[]) => Promise<ProcessResult>): Promise<string[]> {
+  const upstream = await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
+  if (upstream.code === 0) return ['push']
+  const remote = await runGit(['remote'])
+  const name = remote.stdout.split('\n').map(value => value.trim()).filter(Boolean)[0]
+  if (name === undefined) throw new WorkbenchError('git-failed', '没有配置远程仓库', 409)
+  const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])
+  const branchName = branch.code === 0 ? branch.stdout.trim() : ''
+  if (branchName === '' || branchName === 'HEAD') throw new WorkbenchError('git-failed', '当前不在任何分支上，无法推送', 409)
+  return ['push', '--set-upstream', name, branchName]
+}
+
 export async function gitAction(cwd: string, action: string, path?: string, value?: string, runner: ProcessRunner = run): Promise<unknown> {
   const repository = await gitRoot(cwd, runner)
   // 同一个动作里的所有 git 调用共用一个已解析的仓库根：不再每个 run 都重新 rev-parse。
@@ -575,26 +638,32 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       return gitStatus(cwd, runner)
     }
     case 'commit': args = ['commit', '-m', value ?? '']; break
-    case 'branch.create': args = ['switch', '-c', value ?? '']; break
-    case 'branch.switch': args = ['switch', value ?? '']; break
+    case 'branch.create': args = ['switch', '-c', validateBranchName(value)]; break
+    case 'branch.switch': {
+      const name = validateBranchName(value)
+      const direct = await runGit(['switch', name])
+      // 远程分支（origin/x）不能直接签出：先试一次，失败再退回 --track 建同名本地分支。
+      if (direct.code !== 0) {
+        const local = name.includes('/') ? name.slice(name.indexOf('/') + 1) : name
+        const track = await runGit(['switch', '--track', '-c', local, name])
+        if (track.code !== 0) throw new WorkbenchError('git-failed', track.stderr || direct.stderr || direct.stdout, 409)
+      }
+      return gitStatus(cwd, runner)
+    }
+    case 'branch.delete': args = ['branch', '-d', validateBranchName(value)]; break
+    case 'branch.list': return gitBranchList(runGit)
+    case 'remotes': {
+      const result = await runGit(['remote'])
+      if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr, 500)
+      return result.stdout.split('\n').map(item => item.trim()).filter(Boolean)
+    }
     case 'branches': {
       const result = await runGit(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])
       if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr, 500)
       return result.stdout.split('\n').filter(Boolean)
     }
-    case 'log': {
-      // 不再先跑 `rev-parse --verify HEAD`：正常仓库直接 log（-1 spawn）；失败时才懒回退判断空仓库。
-      const result = await runGit(['log', '--topo-order', '--date=iso-strict', '--decorate=short', '--pretty=format:%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1f%D%x00', '-n', '100'])
-      if (result.code !== 0) {
-        const head = await runGit(['rev-parse', '--verify', 'HEAD'])
-        if (head.code !== 0) return []
-        throw new WorkbenchError('git-failed', result.stderr || result.stdout, 500)
-      }
-      return result.stdout.split('\0').filter(Boolean).map((record): GitCommit => {
-        const [rawHash = '', parents = '', author = '', date = '', subject = '', refs = ''] = record.split('\x1f');const hash=rawHash.trim()
-        return { hash, parents: parents.split(' ').filter(Boolean), author, date, subject, refs: refs.split(',').map(item => item.trim()).filter(Boolean) }
-      })
-    }
+    case 'log':
+    case 'log.all': return gitLog(runGit, Number.parseInt(value ?? '', 10) || 100, action === 'log.all')
     case 'commit.show': {
       const hash = validateCommitHash(value)
       const result = await runGit(['show', '--no-ext-diff', '--find-renames', '--format=fuller', '--stat', '--patch', '--no-color', hash])
@@ -614,6 +683,22 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       const original=file.status==='A'||parent.code!==0?'':await gitObject(repository,`${parent.stdout.trim()}:${file.previousPath??target}`, runner)
       const modified=file.status==='D'?'':await gitObject(repository,`${hash}:${target}`, runner)
       return {diff:shown.stdout,original,modified} satisfies GitDiff
+    }
+    case 'commit.checkout': args = ['switch', '--detach', validateCommitHash(value)]; break
+    // path 在这里复用为「新分支名」，value 是基准提交（与 commit.show / commit.files 一样把哈希放 value）。
+    case 'commit.branch': args = ['switch', '-c', validateBranchName(path), validateCommitHash(value)]; break
+    case 'commit.cherrypick': args = ['cherry-pick', validateCommitHash(value)]; break
+    case 'commit.revert': args = ['revert', '--no-edit', validateCommitHash(value)]; break
+    // 远程动作：`run()` 给 git 带了 GIT_TERMINAL_PROMPT=0，缺凭据时立刻报错而不是等满超时。
+    case 'fetch': args = ['fetch', '--all', '--prune', '--quiet']; break
+    case 'pull': args = ['pull']; break
+    case 'push': args = await gitPushArgs(runGit); break
+    case 'sync': {
+      const pull = await runGit(['pull'])
+      if (pull.code !== 0) throw new WorkbenchError('git-failed', pull.stderr || pull.stdout, 409)
+      const push = await runGit(await gitPushArgs(runGit))
+      if (push.code !== 0) throw new WorkbenchError('git-failed', push.stderr || push.stdout, 409)
+      return gitStatus(cwd, runner)
     }
     case 'diff': {
       const untracked = value === 'untracked'

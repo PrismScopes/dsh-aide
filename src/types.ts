@@ -52,6 +52,13 @@ export interface SearchReplaceResult { files: string[]; replacements: number }
 export interface GitChange { path: string; originalPath?: string; index: string; worktree: string; staged: boolean; untracked: boolean }
 /** Local repository state. */
 export interface GitStatus { repository: string; branch: string; ahead: number; behind: number; changes: GitChange[] }
+/**
+ * 分支清单（分支选择器用）。
+ *
+ * `remote` 里的名字是 `origin/main` 这种完整短名：签出远程分支时宿主会退回
+ * `switch --track`，客户端不用自己拼本地分支名。
+ */
+export interface GitBranchList { current: string; local: string[]; remote: string[] }
 /** One commit displayed by the source-control graph. */
 export interface GitCommit { hash: string; parents: string[]; author: string; date: string; subject: string; refs: string[] }
 /** One path changed by a local commit. */

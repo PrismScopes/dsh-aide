@@ -390,7 +390,10 @@ describe('GitPanel：commit 复用宿主返回的状态（审计「其它」）'
 
   it('commit 不再触发整面板 refresh（只重取提交图）', () => {
     expect(source).not.toContain("if(name==='commit')refresh()")
-    expect(source).toContain("if(name==='commit')refreshLog()")
+    // 需要重取提交图的动作现在由一个集合描述（提交 / 分支操作 / 远程动作都算）：
+    // 这些动作只重取图表，仍然不会触发整面板的 status+log 刷新。
+    expect(source).toContain("const RELOG_ACTIONS = new Set(['commit'")
+    expect(source).toContain('if(RELOG_ACTIONS.has(name))refreshLog()')
     expect(source).toContain('const refreshLog = useCallback(')
     // 改动列表直接用动作响应更新：宿主对非 diff 动作返回最新 GitStatus。
     expect(source).toContain('setStatus(result as GitStatus)')

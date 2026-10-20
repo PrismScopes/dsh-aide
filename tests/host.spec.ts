@@ -258,6 +258,92 @@ describe('local Git',()=>{
   it('discards tracked and untracked changes together',async()=>{const root=await temp();const {execFile}=await import('node:child_process');const run=(args:string[])=>new Promise<void>((resolve,reject)=>execFile('git',args,{cwd:root},error=>error?reject(error):resolve()));await run(['init']);await run(['config','user.email','test@example.com']);await run(['config','user.name','Test']);await run(['config','core.autocrlf','false']);await writeFile(join(root,'tracked.txt'),'original\n');await gitAction(root,'stage.all');await gitAction(root,'commit',undefined,'initial');await writeFile(join(root,'tracked.txt'),'changed\n');await writeFile(join(root,'untracked.txt'),'temporary\n');expect((await gitStatus(root)).changes).toHaveLength(2);await gitAction(root,'discard.all');expect((await gitStatus(root)).changes).toEqual([]);expect(await readFile(join(root,'tracked.txt'),'utf8')).toBe('original\n');await expect(readFile(join(root,'untracked.txt'),'utf8')).rejects.toMatchObject({code:'ENOENT'})})
 })
 
+/** 建一个有一个提交的真仓库；默认分支名不写死（受 init.defaultBranch 影响）。 */
+async function gitFixture(): Promise<{ root: string; original: string; first: string }> {
+  const root = await temp()
+  const { execFile } = await import('node:child_process')
+  const shell = (args: string[]) => new Promise<void>((resolve, reject) => execFile('git', args, { cwd: root }, error => error ? reject(error) : resolve()))
+  await shell(['init'])
+  await shell(['config', 'user.email', 'test@example.com'])
+  await shell(['config', 'user.name', 'Test'])
+  await shell(['config', 'core.autocrlf', 'false'])
+  await writeFile(join(root, 'a.txt'), 'one\n')
+  await gitAction(root, 'stage.all')
+  await gitAction(root, 'commit', undefined, 'first')
+  const first = ((await gitAction(root, 'log')) as Array<{ hash: string }>)[0]!.hash
+  const original = ((await gitAction(root, 'branch.list')) as { current: string }).current
+  return { root, original, first }
+}
+
+describe('git panel actions', () => {
+  it('lists branches, switches, creates and deletes them', async () => {
+    const { root, original } = await gitFixture()
+    expect((await gitAction(root, 'remotes'))).toEqual([])
+    await gitAction(root, 'branch.create', undefined, 'temp')
+    expect(((await gitAction(root, 'branch.list')) as { current: string }).current).toBe('temp')
+    await gitAction(root, 'branch.switch', undefined, original)
+    await gitAction(root, 'branch.delete', undefined, 'temp')
+    const list = (await gitAction(root, 'branch.list')) as { current: string; local: string[]; remote: string[] }
+    expect(list.current).toBe(original)
+    expect(list.local).not.toContain('temp')
+    expect(list.remote).toEqual([])
+    // 分支名会拼进 git 参数：空白与以 - 开头的写法必须在宿主侧就挡掉。
+    await expect(gitAction(root, 'branch.create', undefined, 'bad name')).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'branch.create', undefined, '-x')).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'branch.create', undefined, 'a..b')).rejects.toMatchObject({ code: 'bad-request' })
+  })
+
+  it('checks out a commit in detached HEAD and creates a branch from it', async () => {
+    const { root, original, first } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'second')
+    await gitAction(root, 'commit.checkout', undefined, first)
+    // 分离头指针的写法随 git 版本变化：porcelain v2 有的是 (detached)，老版本是 HEAD。
+    expect(['HEAD', '(detached)']).toContain((await gitStatus(root)).branch)
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('one\n')
+    const status = (await gitAction(root, 'commit.branch', 'from-first', first)) as { branch: string }
+    expect(status.branch).toBe('from-first')
+    await gitAction(root, 'branch.switch', undefined, original)
+    const list = (await gitAction(root, 'branch.list')) as { local: string[] }
+    expect(list.local).toContain('from-first')
+  })
+
+  it('cherry-picks and reverts commits', async () => {
+    const { root, original } = await gitFixture()
+    await gitAction(root, 'branch.create', undefined, 'side')
+    await writeFile(join(root, 'a.txt'), 'side\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'side commit')
+    const side = ((await gitAction(root, 'log')) as Array<{ hash: string }>)[0]!.hash
+    await gitAction(root, 'branch.switch', undefined, original)
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('one\n')
+    await gitAction(root, 'commit.cherrypick', undefined, side)
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('side\n')
+    expect(((await gitAction(root, 'log')) as Array<{ subject: string }>).map(commit => commit.subject)).toContain('side commit')
+    await gitAction(root, 'commit.revert', undefined, side)
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('one\n')
+    // first + 拣选出来的提交 + 还原提交
+    expect(((await gitAction(root, 'log')) as Array<{ subject: string }>).length).toBe(3)
+  })
+
+  it('pages the commit graph and can include every branch', async () => {
+    const { root, original } = await gitFixture()
+    await gitAction(root, 'branch.create', undefined, 'side')
+    await writeFile(join(root, 'side.txt'), 'side\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'side only')
+    await gitAction(root, 'branch.switch', undefined, original)
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'second')
+    expect(((await gitAction(root, 'log')) as unknown[]).length).toBe(2)
+    expect(((await gitAction(root, 'log', undefined, '1')) as unknown[]).length).toBe(1)
+    expect(((await gitAction(root, 'log.all')) as unknown[]).length).toBe(3)
+    await expect(gitAction(root, 'push')).rejects.toMatchObject({ code: 'git-failed' })
+  })
+})
+
 describe('client assets',()=>{it('resolves the VS Code Codicon font',()=>{expect(codiconAsset()).toMatchObject({type:'font/ttf'});expect(codiconAsset().path).toMatch(/codicon\.ttf$/)});it('resolves the PDF.js module worker',()=>{expect(pdfWorkerAsset()).toMatchObject({type:'text/javascript; charset=utf-8'});expect(pdfWorkerAsset().path).toMatch(/pdf\.worker\.min\.mjs$/)})})
 
 /**

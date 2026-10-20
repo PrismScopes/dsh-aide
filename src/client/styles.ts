@@ -210,6 +210,29 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 /* 单条替换按钮只在悬停/聚焦时出现（VS Code 的替换入口同样不占常驻视觉）。 */
 .dvw-search-replace-one{flex:none;opacity:0}
 .dvw-result:hover .dvw-search-replace-one,.dvw-result:focus-within .dvw-search-replace-one{opacity:1}
+
+/* ---- 源代码管理：分组 ... 菜单 / 提交图引用配色 / 分支选择器 ---- */
+.dvw-group-actions{display:flex;align-items:center;gap:2px;flex:none}
+.dvw-git-notice{padding:6px 10px;font-size:12px;color:var(--dvw-success);border-bottom:1px solid var(--dvw-border-soft)}
+.dvw-graph-empty{padding:14px 10px;color:var(--dvw-text-3);font-size:12px;text-align:center}
+.dvw-graph-row[data-head=true]{background:color-mix(in srgb,var(--dvw-accent) 6%,transparent)}
+.dvw-ref[data-kind=head]{border-color:color-mix(in srgb,var(--dvw-success) 55%,transparent);color:var(--dvw-success);font-weight:600}
+.dvw-ref[data-kind=tag]{border-color:color-mix(in srgb,var(--dvw-warn) 55%,transparent);color:var(--dvw-warn)}
+.dvw-ref[data-kind=remote]{border-color:var(--dvw-border);color:var(--dvw-text-2)}
+.dvw-ref[data-kind=branch]{border-color:color-mix(in srgb,var(--dvw-accent) 50%,transparent);color:var(--dvw-accent)}
+/* 分支选择器：VS Code quick pick 的形状（顶部居中 + 输入过滤 + 当前分支打勾）。 */
+.dvw-quickpick-backdrop{position:fixed;z-index:70;inset:0;background:var(--dvw-mask)}
+.dvw-quickpick{position:absolute;top:12%;left:50%;transform:translateX(-50%);width:min(460px,92vw);max-height:60vh;display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-sm);background:var(--dvw-surface-2);box-shadow:var(--dvw-shadow-3)}
+.dvw-quickpick-head{font-size:12px;color:var(--dvw-text-2)}
+.dvw-quickpick-list{display:flex;flex-direction:column;min-height:0;overflow:auto}
+.dvw-quickpick-item{width:100%;min-height:26px;border:0;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text);display:flex;align-items:center;gap:6px;padding:0 8px;text-align:left;cursor:pointer}
+.dvw-quickpick-item:hover,.dvw-quickpick-item[data-active=true]{background:var(--dvw-active)}
+.dvw-quickpick-blank{width:16px;flex:none}
+.dvw-quickpick-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dvw-quickpick-meta{flex:none;font-size:11px;color:var(--dvw-text-3)}
+.dvw-quickpick-empty{padding:8px;font-size:12px;color:var(--dvw-text-3);text-align:center}
+.dvw-quickpick-create{color:var(--dvw-accent)}
+
 `
 
 
