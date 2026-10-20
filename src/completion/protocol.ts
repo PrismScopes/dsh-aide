@@ -4,7 +4,6 @@
  * 这一层只描述「两端之间传什么」，不含任何一端的行为，因此宿主与客户端都直接引用它，
  * 字段名只在这里出现一次。
  */
-import type { CompletionParams } from './params.ts'
 
 /** 一次编辑的前后文本与时间戳。 */
 export interface EditHistoryEntry { before: string; after: string; timestamp: number }

@@ -1,9 +1,9 @@
 import { ICON_BY_EXTENSION, ICON_BY_NAME, ICON_FILES } from './fileIcons.ts'
 
-export type CodiconName =  | 'add' | 'check' | 'check-all' | 'chevron-down' | 'chevron-right' | 'clear-all' | 'close' | 'close-all' | 'cloud-upload' | 'code' | 'color-mode' | 'copy' | 'edit'
+export type CodiconName =  | 'add' | 'check' | 'chevron-down' | 'chevron-right' | 'close' | 'close-all' | 'cloud-upload' | 'code'
   | 'diff' | 'diff-sidebyside' | 'diff-single' | 'discard' | 'file' | 'file-code' | 'file-media' | 'file-pdf' | 'file-zip'
-  | 'files' | 'folder' | 'folder-opened' | 'git-branch' | 'git-commit' | 'graph' | 'home' | 'list-tree' | 'new-file'
-  | 'layout-sidebar-right' | 'layout-sidebar-right-off' | 'new-folder' | 'pin' | 'preview' | 'refresh' | 'remove' | 'search' | 'settings' | 'source-control' | 'sparkle' | 'split-horizontal' | 'terminal' | 'trash'
+  | 'files' | 'folder' | 'folder-opened' | 'git-branch' | 'home' | 'list-tree' | 'new-file'
+  | 'layout-sidebar-right' | 'layout-sidebar-right-off' | 'new-folder' | 'preview' | 'refresh' | 'remove' | 'search' | 'settings' | 'source-control' | 'split-horizontal' | 'terminal' | 'trash'
 
 /** Render one glyph from Microsoft's VS Code Codicon font. */
 export function Icon({ name, className = '' }: { name: CodiconName; className?: string }) {

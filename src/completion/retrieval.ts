@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { DEFAULT_CHUNK_LIMITS, extractChunks, shouldSkipFile, type Chunk, type ChunkLimits } from './chunks.ts'
-import { cosineSimilarity, hashingEmbedder, jaccardWord, tokenizeCode, type Embedder } from './embedding.ts'
+import { cosineSimilarity, hashingEmbedder, tokenizeCode, type Embedder } from './embedding.ts'
 
 export interface IndexLimits {
   maxFiles: number
@@ -325,13 +325,4 @@ export function formatSnippets(snippets: readonly RetrievedSnippet[], texts: Rea
   return out
 }
 
-function jaccardOfTokens(left: Set<string>, right: Set<string>): number {
-  if (left.size === 0 || right.size === 0) return 0
-  let intersection = 0
-  for (const token of left) if (right.has(token)) intersection++
-  const union = left.size + right.size - intersection
-  return union === 0 ? 0 : intersection / union
-}
 
-/** 供测试与调试：词级相似度的直通实现。 */
-export const wordSimilarity = jaccardWord

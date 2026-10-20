@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { CompletionSettingsView, WorkbenchSettingsView } from './api.ts'
 import { ApiError, readWorkbenchSettings, writeWorkbenchSettings } from './api.ts'
 import { listDshModelRoutes } from './dshModels.ts'

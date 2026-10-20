@@ -18,7 +18,7 @@ import { noteCompletion } from './diagnostics.ts'
 import { WorkspaceIndex } from './workspaceIndex.ts'
 import type { SecurityHit } from './security.ts'
 import { groupForSession, paramsForGroup } from './experiment.ts'
-import { TelemetryAggregator, type CompletionTelemetryEvent } from './telemetry.ts'
+import { TelemetryAggregator } from './telemetry.ts'
 import { appendFile } from 'node:fs/promises'
 import path from 'node:path'
 

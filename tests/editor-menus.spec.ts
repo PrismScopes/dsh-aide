@@ -7,7 +7,6 @@ import {
   menuPositionAtCursor,
   pasteFallbackText,
   type DiffMenuActions,
-  type EditorMenuActions,
   type EditorMenuContext,
 } from '../src/client/editorMenus.ts'
 

@@ -39,7 +39,12 @@ export interface Chunk {
   startLine: number
   endLine: number
   text: string
-  /** 用于嵌入的摘要文本：路径 + 种类 + 名称 + 首行 + 正文。 */
+  /**
+   * 参与嵌入的文本：只放代码正文，不放路径、种类与名称。实测（同一份查询与候选）：
+   * 把元信息一起嵌入会在短查询下把相关与无关的余弦压到 0.128 对 0.072（几乎分不开），
+   * 只嵌正文是 0.211 对 0.061（差距 3.5 倍）；长查询下分别是 0.448 对 0.025 与 0.510 对 0.059。
+   * 元信息不是没用 —— 它放在注入 prompt 的片段头里，那里才是它起作用的位置。
+   */
   embeddingText: string
 }
 
@@ -110,18 +115,6 @@ function endByIndent(lines: readonly string[], start: number, indent: number): n
 }
 
 /**
- * 参与嵌入的文本。
- *
- * 这里只放代码正文，不放路径、种类与名称。实测（同一份查询与候选）：把元信息一起嵌入会在短查询下
- * 把相关与无关的余弦压到 0.128 对 0.072（几乎分不开），只嵌正文是 0.211 对 0.061（差距 3.5 倍）；
- * 长查询下分别是 0.448 对 0.025 与 0.510 对 0.059。元信息不是没用 —— 它放在注入 prompt 的片段头里，
- * 那里才是它起作用的位置。
- */
-function embeddingTextOf(text: string): string {
-  return text
-}
-
-/**
  * 抽取一个文件的块。
  *
  * 产出顺序：一个模块块（文件头若干行，回答「这个文件是什么」）+ 各实体块。没有任何实体可识别时
@@ -138,7 +131,7 @@ export function extractChunks(path: string, language: string, text: string, limi
     chunks.push({
       path, language, kind, ...(name === undefined ? {} : { name }),
       startLine: start + 1, endLine: Math.min(end + 1, lines.length), text: trimmed,
-      embeddingText: embeddingTextOf(trimmed),
+      embeddingText: trimmed,
     })
   }
 

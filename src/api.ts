@@ -1,7 +1,6 @@
 import type { HostContext } from './context.ts'
-import { copyEntry, createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, moveEntry, readDocument, renameEntry, saveDocument, searchWorkspace, uploadFile, workspacePreviewFile } from './host.ts'
+import { copyEntry, createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, moveEntry, readDocument, renameEntry, saveDocument, searchWorkspace } from './host.ts'
 import type { SearchRequest } from './types.ts'
-import { DEFAULT_COMPLETION_PARAMS } from './completion/params.ts'
 import { completionIndexFor, completionTelemetry, resolveProvider } from './completion/register.ts'
 import { completionSettings } from './completion/settings.ts'
 import { groupForSession, paramsForGroup } from './completion/experiment.ts'

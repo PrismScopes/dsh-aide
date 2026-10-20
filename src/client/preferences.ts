@@ -223,9 +223,6 @@ export function updatePreferences(patch: Partial<WorkbenchPreferences>): Workben
 /** 恢复全部默认值（设置页「恢复默认设置」按钮的落点）。 */
 export function resetPreferences(): WorkbenchPreferences { return preferences.reset() }
 
-/** 订阅偏好变化（给编辑器与设置页共用）。 */
-export function subscribePreferences(listener: () => void): () => void { return preferences.subscribe(listener) }
-
 /** React 侧读取：偏好一变，用到它的组件立刻重渲染（字体大小不必刷新页面）。 */
 export function usePreferences(): WorkbenchPreferences {
   return useSyncExternalStore(preferences.subscribe, preferences.get, preferences.get)

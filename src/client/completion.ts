@@ -115,7 +115,6 @@ export class CompletionClient {
   private readonly now: () => number
   private cache: { key: string; at: number; response: CompletionResponse } | undefined
   private lastAccepted: AcceptedRange | undefined
-  private cancelled: string | undefined
 
   constructor(private readonly options: CompletionClientOptions) {
     this.params = options.params ?? DEFAULT_COMPLETION_PARAMS
@@ -135,17 +134,7 @@ export class CompletionClient {
   /** 记录一次采纳，供「与上次采纳区间」两条判定使用。 */
   recordAccept(range: AcceptedRange): void {
     this.lastAccepted = range
-    this.cancelled = undefined
     this.cache = undefined
-  }
-
-  /** 记录因选择变化而取消的建议文本，供「刚建议过但未采纳」判定使用。 */
-  recordCancel(text: string): void {
-    this.cancelled = text
-  }
-
-  get tracking(): { lastAccepted?: AcceptedRange; cancelledSuggestion?: string } {
-    return { ...(this.lastAccepted === undefined ? {} : { lastAccepted: this.lastAccepted }), ...(this.cancelled === undefined ? {} : { cancelledSuggestion: this.cancelled }) }
   }
 
   /**
@@ -228,7 +217,7 @@ export class CompletionClient {
     if (timing.firstByteAt !== undefined) timing.rttMs = timing.firstByteAt - requestedAt
     if (failure !== undefined) throw new Error(failure)
 
-    const filtered = filterCandidates(slots, this.filterState(input, slots), this.filterOptions)
+    const filtered = filterCandidates(slots, this.filterState(input), this.filterOptions)
     const processed = filtered
       .filter((entry): entry is { text: string } => entry.dropped === undefined)
       .map(entry => postProcess(entry.text, { document: input.document, offset: this.offsetOf(input) }))
@@ -248,14 +237,13 @@ export class CompletionClient {
     return Math.min(offset + Math.max(0, input.rewriteAt.column), input.document.length)
   }
 
-  private filterState(input: SuggestInput, slots: readonly string[]) {
+  private filterState(input: SuggestInput) {
     return {
       filePath: input.filePath,
       document: input.document,
       offset: this.offsetOf(input),
       language: input.language,
       ...(this.lastAccepted === undefined ? {} : { lastAccepted: this.lastAccepted }),
-      ...(this.cancelled === undefined || slots.length === 0 ? {} : { cancelledSuggestion: this.cancelled }),
     }
   }
 }
