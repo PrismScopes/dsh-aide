@@ -8,6 +8,7 @@
 import { DEFAULT_COMPLETION_PARAMS, debounceFor, type CompletionParams } from '../completion/params.ts'
 import { parseSse, type CompletionEvent, type CompletionRequest, type EditHistoryEntry } from '../completion/protocol.ts'
 import { cropDocumentForRequest } from '../completion/prompt.ts'
+import { WORKBENCH_VERSION } from './version.ts'
 import {
   DEFAULT_FILTER_OPTIONS,
   filterCandidates,
@@ -156,7 +157,7 @@ export class CompletionClient {
     const requestDocument = cropDocumentForRequest(input.document, input.rewriteAt, params)
     const body: CompletionRequest = {
       sessionId: this.options.sessionId,
-      environment: { ideVersion: 'dsh-workbench', extensionVersion: '0.2.5', region: '', channel: 'desktop', repository: '', ...(this.options.environment ?? {}) },
+      environment: { ideVersion: 'dsh-workbench', extensionVersion: WORKBENCH_VERSION, region: '', channel: 'desktop', repository: '', ...(this.options.environment ?? {}) },
       language: input.language,
       trigger: 'inline',
       edits: input.edits ?? [],

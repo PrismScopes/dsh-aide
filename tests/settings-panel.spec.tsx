@@ -17,6 +17,8 @@ import { PREFERENCES_KEY, preferences } from '../src/client/preferences.ts'
  * 宿主设置与模型列表在挂载后才会拉取；静态渲染只验证控件留了位置、拿不到列表时有兜底文案。
  */
 const styles = readFileSync(fileURLToPath(new URL('../src/client/styles.ts', import.meta.url)), 'utf8')
+/** 版本号只有 package.json 一个事实源：测试跟着它走，发版时不用再改这里。 */
+const VERSION = (JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { version: string }).version
 const html = renderToStaticMarkup(<SettingsPanel/>)
 
 describe('workbench settings page', () => {
@@ -97,7 +99,7 @@ describe('workbench settings page', () => {
     expect(html).toContain('编辑器内查找')
     expect(html).toContain('显示或隐藏终端')
     expect(html).toContain('版本')
-    expect(html).toContain('0.2.5')
+    expect(html).toContain(VERSION)
     expect(html).toContain('DSH 设置文件')
     expect(html).toContain(PREFERENCES_KEY)
     expect(html).toContain('恢复默认设置')
