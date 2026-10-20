@@ -2,19 +2,22 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { markTabsExternal } from '../src/client/Workbench.tsx'
+import { MODEL_CACHE_LIMIT, pruneModels } from '../src/client/MonacoEditor.tsx'
 import { createTextMateInstaller, TEXTMATE_MAX_CHARS, TEXTMATE_MAX_LINES, textMateSize, withinTextMateLimits } from '../src/client/textmateHighlight.ts'
 
 /**
  * 客户端重渲染守卫 / 记忆化的**接线**测试。
  *
- * 依据运行时性能审计（_perf/audit-runtime.md 第 3、4、6 条与「其它」里的 GitPanel/markdown 热项）：
+ * 依据运行时性能审计（_perf/audit-runtime.md 第 3、4、6、8 条与「其它」里的 GitPanel/markdown/搜索热项）：
  *   1. 每条 files.changed 都无条件 `setTabs(map(...))` → 即使没有脏标签变化也整树重渲染；
  *   2. 拖分隔条每个 pointermove 都 setLayout/setState → service.emit + 同步 localStorage.setItem + 整树重渲染；
  *   3. markdownHeadings 每次渲染都全文 split+正则（实测 300KB 文档 416µs/次）；
  *   4. 提交信息框每敲一键都重渲染 100 行提交图的 SVG（graphRows 实测 100 提交 90µs/次）；
  *   5. 每次开文件/切标签都重装 TextMate token provider，作废该语言全部模型的缓存（可见区重分词 6.7ms，
  *      165µs/行、4524 行 725ms），所以需要语言级守卫 + 大文件回退内置分词；
- *   6. 底部面板拖拽每个 pointermove 都 setPanelHeight → 整树重渲染。
+ *   6. 底部面板拖拽每个 pointermove 都 setPanelHeight → 整树重渲染；
+ *   7. commit 之后无条件 refresh() 会白跑一次 git.status（多 2 个 git.exe）；
+ *   8. Monaco 模型只 getModel/createModel、从不 dispose → 长会话内存随打开文件数线性增长。
  *
  * 组件本身没有 jsdom 可渲染，所以行为用纯函数断言、接线用源码静态断言钉住 —— 与
  * close-prompt.spec.ts / panel-resize.spec.ts 的既有风格一致。
@@ -249,28 +252,170 @@ describe('TextMate / 底部面板的接线', () => {
     expect(editor).toContain('installTextMate(monaco, [original.getLanguageId()], textMateSize(original))')
   })
 
-  it('底部面板高度读 CSS 变量，拖动期间只写变量、只有提交时 setState', () => {
+  it('底部面板高度读 CSS 变量，拖动期间只写变量、只有提交时 setLayout 一次', () => {
     const source = read('Workbench.tsx')
-    // 默认值 260px 作为变量 fallback 保留；变量本身由 overlay 的 inline style 初始化（无样式表改动）。
-    expect(source).toContain("height:'var(--dvw-bottom-height, 260px)'")
-    expect(source).toContain("'--dvw-bottom-height':`${panelHeight}px`")
+    // 默认值作为变量 fallback 保留；变量本身由 overlay 的 inline style 初始化（无样式表改动）。
+    expect(source).toContain('var(--dvw-bottom-height, ${BOTTOM_HEIGHT.default}px)')
+    expect(source).toContain("'--dvw-bottom-height':`${bottomHeight}px`")
     // 拖拽手柄接上新函数，旧的内联 setState 版本已消失。
     expect(source).toContain('onPointerDown={dragBottomPanel}')
     expect(source).not.toContain('const move=(e:PointerEvent)=>setPanelHeight(')
-    // 整个文件里 setPanelHeight 只出现一次：就是提交那一次。
-    expect(source.match(/setPanelHeight\(/g) ?? []).toHaveLength(1)
+    // 高度已经挪进 layout：Workbench 里不该再有 panelHeight 本地 state。
+    expect(source).not.toContain('setPanelHeight')
+    expect(source).toContain('const setBottomHeight = (value: number) => service.setLayout({ bottomHeight: value })')
     const handlerStart = source.indexOf('const dragBottomPanel=')
     expect(handlerStart).toBeGreaterThan(-1)
     const handlerEnd = source.indexOf('\n  }', handlerStart)
-    const handler = source.slice(handlerStart, handlerEnd > handlerStart ? handlerEnd : handlerStart + 1200)
-    // pointermove 里只写 CSS 变量：setState 会让整棵树（含提交图/资源管理器/终端面板）重渲染。
+    const handler = source.slice(handlerStart, handlerEnd > handlerStart ? handlerEnd : handlerStart + 1400)
+    // pointermove 里只写 CSS 变量：setLayout/setState 会让整棵树重渲染。
     expect(handler).toContain("overlayRef.current?.style.setProperty('--dvw-bottom-height'")
     const moveLine = handler.split('\n').find(line => line.includes('const move='))
     expect(moveLine).toBeDefined()
-    expect(moveLine).not.toContain('setPanelHeight')
-    // 松手与 pointercancel/失焦都提交（夹取规则不变：120 .. innerHeight-160）。
+    expect(moveLine).not.toContain('setBottomHeight')
+    // 松手与 pointercancel/失焦都提交（夹取规则不变：BOTTOM_HEIGHT.min .. bottomHeightLimit()）。
     expect(handler).toContain('pointercancel')
     expect(handler).toContain("addEventListener('blur'")
-    expect(handler).toContain('Math.max(120,Math.min(window.innerHeight-160,startHeight+startY-nextY))')
+    expect(handler).toContain('Math.max(BOTTOM_HEIGHT.min,Math.min(bottomHeightLimit(),startHeight+startY-nextY))')
+  })
+})
+
+/** 假模型：只记录 dispose，避免在单测里碰真 Monaco。 */
+function fakeModel(uri: string) {
+  let disposed = false
+  return { uri, get disposed() { return disposed }, dispose() { disposed = true } }
+}
+
+describe('Monaco 模型 LRU 回收（审计第 8 项）', () => {
+  it('保留「正在使用 + 仍打开的标签」，其余按最近使用只留 limit 个', () => {
+    const models = Array.from({ length: 20 }, (_, index) => fakeModel(`file:///f${index}.ts`))
+    // 最近使用在前：f19 最新 … f0 最旧。
+    const recentOrder = [...models].reverse().map(model => model.uri)
+    // f0/f1 虽然最旧，但标签还开着 → 永不回收。
+    const evicted = pruneModels(models, { keep: new Set(['file:///f0.ts', 'file:///f1.ts']), recentOrder, limit: 3 })
+    // 可回收的 18 个里保留最近 3 个（f19/f18/f17），回收其余 15 个。
+    expect(evicted).toHaveLength(15)
+    expect(models[19]!.disposed).toBe(false)
+    expect(models[18]!.disposed).toBe(false)
+    expect(models[17]!.disposed).toBe(false)
+    expect(models[0]!.disposed).toBe(false)
+    expect(models[1]!.disposed).toBe(false)
+    expect(evicted).not.toContain('file:///f0.ts')
+    expect(evicted).not.toContain('file:///f19.ts')
+    expect(evicted).toContain('file:///f2.ts')
+    // 返回值就是被 dispose 的那批 URI，调用方据此清自己的簿记。
+    for (const uri of evicted) expect(models.find(model => model.uri === uri)!.disposed).toBe(true)
+  })
+
+  it('dirty 集合无条件保留（不在 keep、也不在最近使用里也一样）', () => {
+    const open = fakeModel('file:///open.ts')
+    const dirty = fakeModel('file:///dirty.ts')
+    const stale = fakeModel('file:///stale.ts')
+    const evicted = pruneModels([open, dirty, stale], {
+      keep: new Set([open.uri]),
+      dirty: new Set([dirty.uri]),
+      recentOrder: [open.uri],
+      limit: 0,
+    })
+    expect(evicted).toEqual([stale.uri])
+    expect(dirty.disposed).toBe(false)
+  })
+
+  it('limit 为 0 时回收所有可回收模型，但绝不动 keep/dirty', () => {
+    const kept = fakeModel('file:///kept.ts')
+    const dirty = fakeModel('file:///dirty.ts')
+    const extras = [fakeModel('file:///a.ts'), fakeModel('file:///b.ts')]
+    const evicted = pruneModels([kept, dirty, ...extras], {
+      keep: new Set([kept.uri]),
+      dirty: new Set([dirty.uri]),
+      recentOrder: [kept.uri, dirty.uri, extras[0]!.uri, extras[1]!.uri],
+      limit: 0,
+    })
+    expect(evicted.sort()).toEqual(['file:///a.ts', 'file:///b.ts'])
+    expect(kept.disposed).toBe(false)
+    expect(dirty.disposed).toBe(false)
+  })
+
+  it('recentOrder 里没有的模型按「最旧」处理', () => {
+    const known = fakeModel('file:///known.ts')
+    const unknown = fakeModel('file:///unknown.ts')
+    const evicted = pruneModels([known, unknown], { keep: new Set(), recentOrder: [known.uri], limit: 1 })
+    expect(evicted).toEqual([unknown.uri])
+    expect(known.disposed).toBe(false)
+  })
+
+  it('当前正在使用的模型一定不回收（调用方把它放进 keep 的契约）', () => {
+    const current = fakeModel('file:///current.ts')
+    const older = fakeModel('file:///older.ts')
+    const evicted = pruneModels([older, current], { keep: new Set([current.uri]), recentOrder: [current.uri, older.uri], limit: 0 })
+    expect(evicted).toEqual([older.uri])
+    expect(current.disposed).toBe(false)
+  })
+
+  it('默认上限 MODEL_CACHE_LIMIT = 12（超出的最旧模型被回收）', () => {
+    expect(MODEL_CACHE_LIMIT).toBe(12)
+    const models = Array.from({ length: MODEL_CACHE_LIMIT + 2 }, (_, index) => fakeModel(`file:///g${index}.ts`))
+    const evicted = pruneModels(models, { keep: new Set(), recentOrder: models.map(model => model.uri) })
+    expect(evicted).toEqual([`file:///g${MODEL_CACHE_LIMIT}.ts`, `file:///g${MODEL_CACHE_LIMIT + 1}.ts`])
+  })
+})
+
+describe('Monaco 模型回收接线', () => {
+  const editor = read('MonacoEditor.tsx')
+  const workbench = read('Workbench.tsx')
+
+  it('只在编辑器挂载（切文件/新建模型）时回收一次，不在按键路径上', () => {
+    const calls = editor.match(/evictModels\(monaco, uriText, keepPathsRef\.current, dirtyPathsRef\.current \?\? \[\]\)/g) ?? []
+    expect(calls).toHaveLength(1)
+    // 卸载时只销毁编辑器实例；模型的去留交给 LRU（否则「关标签再打开」会丢 tokenize 缓存）。
+    expect(editor).toContain('return () => { disposed = true; editor.current?.dispose(); editor.current = undefined }')
+  })
+
+  it('只回收本组件创建的 file:/// 模型（差异编辑器模型由它自己 dispose）', () => {
+    expect(editor).toContain('ownedModels.has(model.uri.toString())')
+    expect(editor).toContain('models.current?.original.dispose()')
+  })
+
+  it('「打开 / 脏」集合由 Workbench 按标签算出来传入，不用全局单例', () => {
+    expect(workbench).toContain('keepModelPaths={keepModelPaths}')
+    expect(workbench).toContain('dirtyModelPaths={dirtyModelPaths}')
+    expect(workbench).toContain("const keepModelPaths=workspace===undefined?undefined:tabs.filter(tab=>!tab.path.startsWith('diff:')).map(tab=>modelUriOf(tab.path))")
+    expect(workbench).toContain("const dirtyModelPaths=workspace===undefined?undefined:tabs.filter(tab=>tab.dirty&&!tab.path.startsWith('diff:')).map(tab=>modelUriOf(tab.path))")
+    // 工作区未知时传 undefined（编辑器跳过回收判定），避免把打开中的标签误回收。
+    expect(editor).toContain('if (keepPathsRef.current !== undefined)')
+  })
+})
+
+describe('GitPanel：commit 复用宿主返回的状态（审计「其它」）', () => {
+  const source = read('GitPanel.tsx')
+
+  it('commit 不再触发整面板 refresh（只重取提交图）', () => {
+    expect(source).not.toContain("if(name==='commit')refresh()")
+    expect(source).toContain("if(name==='commit')refreshLog()")
+    expect(source).toContain('const refreshLog = useCallback(')
+    // 改动列表直接用动作响应更新：宿主对非 diff 动作返回最新 GitStatus。
+    expect(source).toContain('setStatus(result as GitStatus)')
+    // 面板刷新按钮与 files.changed 仍走完整 refresh（status + log）。
+    expect(source).toContain('useEffect(refresh,[refresh])')
+    expect(source).toContain('onClick={refresh}')
+  })
+
+  it('行为不变：提交成功后清空输入框（CommitBox 里）', () => {
+    expect(source).toContain("void onCommit(message).then(() => setMessage(''))")
+  })
+})
+
+describe('搜索截断文案（审计「其它」）', () => {
+  const source = read('Workbench.tsx')
+
+  it('读宿主的 truncated/limited，文案不再写死 2000 条', () => {
+    expect(source).toContain("api<SearchResult>('search'")
+    expect(source).toContain('setTruncated(result.truncated === true || result.limited === true)')
+    expect(source).toContain('结果已截断，请缩小范围或用更精确的查询')
+    expect(source).not.toContain('结果已截断到 2000 条')
+  })
+
+  it('宿主类型里确实暴露了 truncated（客户端只读，不改宿主行为）', () => {
+    const types = readFileSync(fileURLToPath(new URL('../src/types.ts', import.meta.url)), 'utf8')
+    expect(types).toContain('truncated: boolean')
   })
 })

@@ -519,7 +519,83 @@ export function MonacoDiffEditor(props: { uri: string; original: string; modifie
     : <div className="dvw-error">{error}</div>
 }
 
-export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' | 'light'; line?: number; column?: number; sessionId?: string; onChange(value: string): void; onSave(): void }) {
+/** 同时缓存多少个「当前没在用」的 Monaco 模型。 */
+export const MODEL_CACHE_LIMIT = 12
+
+/** 回收函数需要的最小模型接口（单测注入假模型，不碰真 Monaco）。 */
+export interface CachedModelHandle { uri: string; dispose(): void }
+export interface PruneModelsOptions {
+  /** 正在使用 + 仍打开的标签（URI 形式）。 */
+  keep: ReadonlySet<string>
+  /** 脏文件：无论上限如何都保留（调用方通常已把它们并进 keep，这里再兜一层）。 */
+  dirty?: ReadonlySet<string>
+  /** 最近使用在前（LRU 顺序）。 */
+  recentOrder: readonly string[]
+  /** 允许保留的「未使用」模型数量，默认 MODEL_CACHE_LIMIT。 */
+  limit?: number
+}
+
+/**
+ * 纯函数：按 LRU 回收不再需要的 Monaco 模型，返回被 dispose 的 URI。
+ *
+ * 规则：
+ * - `keep` / `dirty` 里的模型**永远不回收**（当前编辑器在用的那一个必须由调用方放进 keep，
+ *   否则编辑器会拿到已 dispose 的模型）；
+ * - 其余模型按 `recentOrder`（最近使用在前）保留最新的 `limit` 个，更旧的 dispose；
+ *   `recentOrder` 里没有的按「最旧」处理；
+ * - 被回收文件的 undo 栈会丢 —— 与 VS Code 里关掉标签再打开一致（文件内容还在磁盘/标签里，
+ *   只是撤销历史不保留）。仍打开或脏的标签不会被回收，所以不会丢未保存内容。
+ */
+export function pruneModels(models: readonly CachedModelHandle[], options: PruneModelsOptions): string[] {
+  const limit = Math.max(0, options.limit ?? MODEL_CACHE_LIMIT)
+  const retained = new Set<string>([...options.keep, ...(options.dirty ?? [])])
+  const rank = new Map<string, number>()
+  options.recentOrder.forEach((uri, index) => { if (!rank.has(uri)) rank.set(uri, index) })
+  const evictable = models
+    .filter(model => !retained.has(model.uri))
+    .sort((left, right) => (rank.get(left.uri) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.uri) ?? Number.MAX_SAFE_INTEGER))
+  const evicted = evictable.slice(limit)
+  for (const model of evicted) model.dispose()
+  return evicted.map(model => model.uri)
+}
+
+/**
+ * 本组件创建的 file:/// 模型。只回收自己造的 —— Monaco 里可能还有别的插件或差异编辑器的模型
+ * （`dvw-diff-*` 由 MonacoDiffEditor 自己 dispose），不能按「所有模型」一刀切。
+ *
+ * 模型生命周期是编辑器自己的知识（Workbench 只知道「哪些标签开着」），所以这份簿记放模块级；
+ * 「哪些不能回收」由 Workbench 通过 props 传入，不在这里做全局单例。
+ */
+const ownedModels = new Set<string>()
+/** 最近使用在前的 LRU 顺序（组件在切标签时可能重建，所以同样放模块级）。 */
+const modelRecency: string[] = []
+function touchModel(uri: string): void {
+  const index = modelRecency.indexOf(uri)
+  if (index !== -1) modelRecency.splice(index, 1)
+  modelRecency.unshift(uri)
+}
+/** 把「打开的标签路径」归一成模型 URI（与创建模型时同一套拼法，两边才比得上）。 */
+function modelUri(monaco: Monaco, path: string): string {
+  return monaco.Uri.parse(`file:///${path.replace(/^\/+/, '')}`).toString()
+}
+/**
+ * 回收一次：当前模型 + 仍打开/脏的标签保留，其余按 LRU 只留 MODEL_CACHE_LIMIT 个。
+ * 触发点是「编辑器挂载」（切文件、新建模型），不在每次 keystroke 上跑。
+ */
+function evictModels(monaco: Monaco, currentUri: string, keepPaths: readonly string[], dirtyPaths: readonly string[]): string[] {
+  const keep = new Set<string>([currentUri, ...keepPaths.map(path => modelUri(monaco, path))])
+  const dirty = new Set<string>(dirtyPaths.map(path => modelUri(monaco, path)))
+  const owned: CachedModelHandle[] = monaco.editor.getModels()
+    .filter(model => ownedModels.has(model.uri.toString()))
+    .map(model => ({ uri: model.uri.toString(), dispose: () => model.dispose() }))
+  const evicted = pruneModels(owned, { keep, dirty, recentOrder: modelRecency })
+  for (const uri of evicted) ownedModels.delete(uri)
+  // 顺序表只留最近一小段：被回收/关闭的模型不必继续占位（更旧的会按「最旧」处理，结果不变）。
+  if (modelRecency.length > MODEL_CACHE_LIMIT * 4) modelRecency.length = MODEL_CACHE_LIMIT * 4
+  return evicted
+}
+
+export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' | 'light'; line?: number; column?: number; sessionId?: string; keepModelPaths?: readonly string[]; dirtyModelPaths?: readonly string[]; onChange(value: string): void; onSave(): void }) {
   const root = useRef<HTMLDivElement>(null)
   const editor = useRef<MonacoEditorInstance>()
   const callbacks = useRef({ onChange: props.onChange, onSave: props.onSave })
@@ -529,6 +605,12 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
   // 因此这里另存一份最新值，在模型建立后用它写入。
   const valueRef = useRef(props.value)
   valueRef.current = props.value
+  // 「打开 / 脏」集合只在挂载 effect 里读一次（用 ref 持有最新值）：它们变化不该重建编辑器。
+  // undefined 表示调用方还不知道工作区（拿不到 cwd）：这时不做回收判定，宁可不回收也别误伤。
+  const keepPathsRef = useRef<readonly string[] | undefined>(props.keepModelPaths)
+  keepPathsRef.current = props.keepModelPaths
+  const dirtyPathsRef = useRef<readonly string[] | undefined>(props.dirtyModelPaths)
+  dirtyPathsRef.current = props.dirtyModelPaths
   const [error, setError] = useState<string>()
   // 右键菜单的位置；keyboard 标记用于关闭后把焦点还给编辑器（键盘用户不能丢焦点）。
   // 菜单项在渲染时按当时的选区现算。
@@ -539,7 +621,14 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
     void loadMonaco().then(async (monaco) => {
       if (disposed || root.current === null) return
       const uri = monaco.Uri.parse(`file:///${props.uri.replace(/^\/+/, '')}`)
+      const uriText = uri.toString()
       model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(props.value, undefined, uri)
+      if (!ownedModels.has(uriText)) ownedModels.add(uriText)
+      touchModel(uriText)
+      // 切文件/新建模型之后回收一次：保留当前模型 + Workbench 传来的打开/脏标签（见 pruneModels 注释），
+      // 其余按 LRU 只留 MODEL_CACHE_LIMIT 个。放在挂载路径里，不在每次 keystroke 上跑。
+      // keepModelPaths 缺席（工作区还没解析出来）时跳过判定，避免把打开中的标签误回收。
+      if (keepPathsRef.current !== undefined) evictModels(monaco, uriText, keepPathsRef.current, dirtyPathsRef.current ?? [])
       if (model.getValue() !== props.value) model.setValue(props.value)
       // 换成 TextMate 分词器，让高亮与 VS Code 同源；失败则继续用 Monaco 内置分词。
       // 带上模型规模：超过阈值的文件不注入（否则从头分词可达数百 ms），回退内置分词。

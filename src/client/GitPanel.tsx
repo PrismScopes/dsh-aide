@@ -119,9 +119,18 @@ export function Git(props: { sessionId: string; /** 工作区绝对根（Workben
   const [status, setStatus] = useState<GitStatus>(); const [commits,setCommits]=useState<GitCommit[]>([]); const [error, setError] = useState<string>(); const [busy,setBusy]=useState(false); const [expanded,setExpanded]=useState({staged:true,changes:true,graph:true});const [expandedCommit,setExpandedCommit]=useState<string>();const [commitFileMap,setCommitFileMap]=useState<Map<string,GitCommitFile[]>>(new Map())
   const [menu,setMenu]=useState<GitMenuState>()
   const refresh = useCallback(() => { void Promise.all([api<GitStatus>('git.status',{sessionId:props.sessionId}),api<GitCommit[]>('git.action',{sessionId:props.sessionId,action:'log'})]).then(([nextStatus,nextCommits])=>{setStatus(nextStatus);setCommits(nextCommits);setError(undefined)}).catch(error=>{setStatus(undefined);setCommits([]);setError(error instanceof ApiError&&error.code==='not-repository'?undefined:String(error))}) }, [props.sessionId])
+  /**
+   * 只刷新提交图（`git.action=log`）。
+   *
+   * commit 之后需要重取的只有提交图：改动列表/分支/ahead-behind 已经由 `gitAction` 的响应带回
+   * （宿主对非 diff 动作返回最新的 `gitStatus`），再调一次 `refresh()` 会白跑 `git.status`
+   * （实测多 2 个 git.exe，一次 commit 端到端 9→7）。日志这一条不能省，否则新提交不会出现在图里
+   * —— `.git` 在 watcher 的忽略列表里，不会有 files.changed 事件替我们刷新。
+   */
+  const refreshLog = useCallback(() => { void api<GitCommit[]>('git.action',{sessionId:props.sessionId,action:'log'}).then(setCommits).catch(error=>setError(String(error))) }, [props.sessionId])
   const refreshDebounced = useDebouncedCallback(refresh, 500)
   useEffect(refresh,[refresh]); useEffect(()=>{const fn=()=>refreshDebounced();window.addEventListener('dvw-files-changed',fn);return()=>window.removeEventListener('dvw-files-changed',fn)},[refreshDebounced])
-  const action = async (name: string, path?: string, value?: string) => { setBusy(true);try { const result = await api<GitStatus | GitDiff>('git.action',{sessionId:props.sessionId,action:name,path,value}); if(name==='diff'&&'diff'in result){const key=path??'';props.onDiff(key,result,key.split('/').at(-1)??key,key)} else {setStatus(result as GitStatus);if(name==='commit')refresh()} } catch(error){setError(String(error))}finally{setBusy(false)} }
+  const action = async (name: string, path?: string, value?: string) => { setBusy(true);try { const result = await api<GitStatus | GitDiff>('git.action',{sessionId:props.sessionId,action:name,path,value}); if(name==='diff'&&'diff'in result){const key=path??'';props.onDiff(key,result,key.split('/').at(-1)??key,key)} else {setStatus(result as GitStatus);if(name==='commit')refreshLog()} } catch(error){setError(String(error))}finally{setBusy(false)} }
   const branch = async () => { const branches=await api<string[]>('git.action',{sessionId:props.sessionId,action:'branches'}); const choice=prompt(`切换分支，或输入 +新分支\n${branches.join('\n')}`); if(!choice)return; await action(choice.startsWith('+')?'branch.create':'branch.switch',undefined,choice.replace(/^\+/,'')) }
   // 两个被提交图用到的动作都要有稳定标识，否则 memo(CommitGraph) 等于没做：
   // 依赖写全（expandedCommit / commitFileMap 都是它真正读到的状态），不会读到过期闭包。

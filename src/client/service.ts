@@ -19,15 +19,43 @@ interface WorkbenchStorage { getItem(key:string):string|null; setItem(key:string
  *
  * 它们**不在**设置页里：每一个都有就地控件，把可拖动的东西再抄一份成数字只会让同一个状态有两个入口。
  * 状态栏可见性已移除：24px 的一条，承载工作区路径与返回入口，工作台里没有就地开关能把它叫回来。
+ * 底部面板高度（bottomHeight）同理：由拖拽产生，所以也持久化在这里 —— 它是像素值，
+ * 恢复时要按当前窗口重新夹取（见 clampBottomHeight），换到更小的窗口后旧值可能已经不合法。
  */
 export interface WorkbenchLayout {
   primarySideVisible: boolean
   chatVisible: boolean
   sideWidth: number
   chatWidth: number
+  /** 底部面板高度（px）。 */
+  bottomHeight: number
 }
 export const LAYOUT_LIMITS = { sideWidth: { min: 210, max: 640 }, chatWidth: { min: 400, max: 720 } } as const
-export const DEFAULT_LAYOUT: WorkbenchLayout = { primarySideVisible: true, chatVisible: true, sideWidth: 210, chatWidth: 420 }
+/** 底部面板高度的边界与默认值；上限依赖视口高度，所以单独用函数算。 */
+export const BOTTOM_HEIGHT = { min: 120, default: 260, fallbackMax: 2000 } as const
+export const DEFAULT_LAYOUT: WorkbenchLayout = { primarySideVisible: true, chatVisible: true, sideWidth: 210, chatWidth: 420, bottomHeight: BOTTOM_HEIGHT.default }
+
+/** 浏览器视口高度；非浏览器环境（测试/SSR）返回 undefined。 */
+function viewportInnerHeight(): number | undefined {
+  const value = (globalThis as { innerHeight?: unknown }).innerHeight
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * 底部面板的最大高度。
+ *
+ * 与拖拽时的夹取规则一致（window.innerHeight - 160：给上方的编辑器留出空间）。恢复持久化值、
+ * 或者 `setLayout` 收到一个高度时都用它夹取；拿不到视口高度时只挡坏数据（fallbackMax）。
+ */
+export function bottomHeightLimit(viewportHeight: number | undefined = viewportInnerHeight()): number {
+  if (viewportHeight === undefined || !Number.isFinite(viewportHeight)) return BOTTOM_HEIGHT.fallbackMax
+  return Math.max(BOTTOM_HEIGHT.min, Math.round(viewportHeight - 160))
+}
+
+/** 把底部高度夹到当前窗口的合法区间（传入值必须已确认是有限数字）。 */
+export function clampBottomHeight(value: number, limit: number = bottomHeightLimit()): number {
+  return Math.max(BOTTOM_HEIGHT.min, Math.min(limit, Math.round(value)))
+}
 
 const SNAPSHOT_KEY='dvw:workbench:snapshot:v1'
 const LAYOUT_KEY='dvw:workbench:layout:v1'
@@ -47,7 +75,9 @@ function restoreLayout(storage:WorkbenchStorage|undefined):WorkbenchLayout{
       primarySideVisible:typeof value.primarySideVisible==='boolean'?value.primarySideVisible:DEFAULT_LAYOUT.primarySideVisible,
       chatVisible:typeof value.chatVisible==='boolean'?value.chatVisible:DEFAULT_LAYOUT.chatVisible,
       sideWidth:clamp(value.sideWidth,LAYOUT_LIMITS.sideWidth.min,LAYOUT_LIMITS.sideWidth.max,DEFAULT_LAYOUT.sideWidth),
-      chatWidth:clamp(value.chatWidth,LAYOUT_LIMITS.chatWidth.min,LAYOUT_LIMITS.chatWidth.max,DEFAULT_LAYOUT.chatWidth)
+      chatWidth:clamp(value.chatWidth,LAYOUT_LIMITS.chatWidth.min,LAYOUT_LIMITS.chatWidth.max,DEFAULT_LAYOUT.chatWidth),
+      // 像素高度按「当前窗口」重新夹取：换到更小的窗口后，持久化下来的旧值可能比窗口还高。
+      bottomHeight:typeof value.bottomHeight==='number'&&Number.isFinite(value.bottomHeight)?clampBottomHeight(value.bottomHeight):DEFAULT_LAYOUT.bottomHeight
     }
   }catch{return {...DEFAULT_LAYOUT}}
 }
@@ -123,7 +153,8 @@ export class WorkbenchController implements VscodeWorkbench {
       primarySideVisible: patch.primarySideVisible ?? this.layout.primarySideVisible,
       chatVisible: patch.chatVisible ?? this.layout.chatVisible,
       sideWidth: clamp(patch.sideWidth,LAYOUT_LIMITS.sideWidth.min,LAYOUT_LIMITS.sideWidth.max,this.layout.sideWidth),
-      chatWidth: clamp(patch.chatWidth,LAYOUT_LIMITS.chatWidth.min,LAYOUT_LIMITS.chatWidth.max,this.layout.chatWidth)
+      chatWidth: clamp(patch.chatWidth,LAYOUT_LIMITS.chatWidth.min,LAYOUT_LIMITS.chatWidth.max,this.layout.chatWidth),
+      bottomHeight: clamp(patch.bottomHeight,BOTTOM_HEIGHT.min,bottomHeightLimit(),this.layout.bottomHeight)
     }
     this.layout = next
     try { this.storage?.setItem(LAYOUT_KEY, JSON.stringify(next)) } catch { /* 隐私模式下存储可能被拒，内存中的布局仍然可用。 */ }
