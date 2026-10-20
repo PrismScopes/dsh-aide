@@ -87,14 +87,18 @@
 - **渲染与 IO**：文件变更推送只在真的影响标签状态时更新；拖动分隔条期间只改 CSS 变量，松开才写入布局偏好并持久化；
   Markdown 大纲与 Git 提交图按内容 memo，不在每次输入时重算；Monaco 模型按 LRU 回收（保留打开/脏文件，上限 12），
   TextMate 语法按语言只安装一次、超过 3000 行或 200KB 的文件回退内置分词。
+- **冷启动分包**：PDF 与 Word 的渲染栈只在打开对应文件时才需要，已拆成 DSH 客户端的按需 chunk
+  （`lib/client.pdf.js` 487 KB、`lib/client.docx.js` 243 KB，首次预览时同源加载）。主包从 2.65 MB 降到 **1.75 MB**
+  （gzip 584 KB → 375 KB），V8 编译 28 ms → 18 ms；不打开 PDF/Word 就完全不下载这两块。
 - **补全**：请求体只带光标附近的窗口（1MB 文档约 20KB，prompt 与全量发送逐字节相同）；响应头不再等检索索引，
   片段按命中行范围读取，同一文件的多条命中一次扫描。
 - **Git**：`gitRoot` 与 rev-parse 结果缓存，Git 面板刷新从 5 个 `git.exe` 降到热路径 2 个；提交后复用宿主返回的状态，
   只重取提交日志。
 - **可复现基准**：`pnpm perf` 覆盖终端启动（三种 shell 的 spawn / 首字节 / 可交互时间，以及「预热就绪 / 认领预热 /
-  不预热干等」）、客户端包体积与解析成本、宿主入口加载成本，结果写到 `perf-results/baseline.json`（已 gitignore）。
-  本机实测预热认领约 2ms、不预热点新建到提示符约 100–160ms（shell 冷启动成本被面板打开/悬停的空档吸收）。
-  当前包基线：`lib/client.js` 2.65 MB（gzip 约 570 KB，V8 编译约 28 ms），宿主入口 import 约 37 ms。
+  不预热干等」）、客户端包体积与解析成本（含按需 chunk）、宿主入口加载成本，结果写到
+  `perf-results/baseline.json`（已 gitignore）。本机实测预热认领约 2 ms、不预热点新建到提示符约 100–160 ms
+  （shell 冷启动成本被面板打开/悬停的空档吸收）。当前包基线：主包 `lib/client.js` 1.75 MB
+  （gzip 约 375 KB，V8 编译约 18 ms），宿主入口 import 约 37 ms。
 - **没有引入 native/Rust 扩展**：宿主热点主要是 Windows 进程创建（每次 `git.exe` / shell 约 44ms 的下限）与协议开销，
   不是 JS 计算；这部分纯 JS 优化即可拿到大部分收益，而 native addon 需要同时覆盖 Electron 与 Node 两套 ABI、
   每个平台各带预编译产物，安装体积与分发成本不划算。
@@ -140,6 +144,10 @@ pnpm approve-builds --all && pnpm rebuild node-pty
 ```
 
 刚发布不足 24 小时的版本可能被 pnpm 的安全等待期拦截。等待后重试即可；DSH 提供“立即更新”时可直接选择它。
+
+### 版本要求
+
+PDF / Word 预览的渲染栈通过 DSH 客户端模块系统的按需 chunk（`require.async`）加载，要求 DSH `0.2.1-rc.2` 及以上（插件 `package.json` 的 `dsh.compatibility` 已声明）。更老的宿主上这两个预览会提示“当前 DSH 版本不支持按需加载”，其余功能不受影响。
 
 ## 快捷键
 

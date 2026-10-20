@@ -67,17 +67,21 @@ replace or disable `ui-layout`.
   variables and persist the layout once on pointer-up; the Markdown outline and the Git commit graph are memoized; Monaco
   models are evicted LRU (open/dirty files kept, limit 12); TextMate grammars are installed once per language and files over
   3000 lines or 200 KB fall back to the built-in tokenizer.
+- **Cold-start code splitting**: the PDF and Word render stacks are only needed when such a file is opened, so they now live
+  in DSH client chunks (`lib/client.pdf.js` 487 KB, `lib/client.docx.js` 243 KB) loaded same-origin on first preview. The main
+  bundle drops from 2.65 MB to **1.75 MB** (gzip 584 KB → 375 KB) and V8 compile from 28 ms to 18 ms; neither chunk is
+  downloaded unless you open a PDF or Word document.
 - **Completion**: request bodies carry only the cursor window (about 20 KB for a 1 MB document, with the prompt byte-identical
   to sending the whole document); response headers no longer wait for the retrieval index; snippets are read by line range and
   multiple hits in one file share a single scan.
 - **Git**: `gitRoot` and rev-parse results are cached, bringing a Git panel refresh from five `git.exe` invocations to two on the
   warm path; committing reuses the status the host returns and only refetches the log.
 - **Reproducible baseline**: `pnpm perf` measures terminal startup (spawn / first byte / interactive readiness for three shells,
-  plus "warm ready / adopting the warm shell / waiting without prewarm"), client bundle size and compile cost, and host entry
-  load cost, writing `perf-results/baseline.json` (gitignored). Measured here: adopting the warm shell takes about 2 ms, while
-  clicking "new terminal" without prewarm needs about 100–160 ms to a prompt (the shell's own startup is absorbed by the time
-  the panel is open or the button is hovered). Current bundle numbers: `lib/client.js` 2.65 MB (about 570 KB gzip, about 28 ms
-  V8 compile), host entry import about 37 ms.
+  plus "warm ready / adopting the warm shell / waiting without prewarm"), client bundle size and compile cost (including the
+  on-demand chunks), and host entry load cost, writing `perf-results/baseline.json` (gitignored). Measured here: adopting the
+  warm shell takes about 2 ms, while clicking "new terminal" without prewarm needs about 100–160 ms to a prompt (the shell's
+  own startup is absorbed by the time the panel is open or the button is hovered). Current bundle numbers: main
+  `lib/client.js` 1.75 MB (about 375 KB gzip, about 18 ms V8 compile), host entry import about 37 ms.
 - **No native/Rust addon**: the host's hot spots are Windows process creation (about a 44 ms floor per `git.exe` or shell) and
   protocol overhead, not JavaScript computation. Pure JS optimizations capture most of the win, while a native addon would need
   to cover both the Electron and Node ABIs with per-platform prebuilds, which is not worth the install size and distribution cost.
@@ -123,6 +127,12 @@ pnpm approve-builds --all && pnpm rebuild node-pty
 ```
 
 pnpm can also delay versions published less than 24 hours ago. Retry after the waiting period, or use DSH's "Update now" action when it is offered.
+
+### Version requirement
+
+PDF and Word previews load their render stacks through DSH client-module on-demand chunks (`require.async`), which requires DSH
+`0.2.1-rc.2` or newer (declared in `dsh.compatibility`). On older hosts those two previews report that on-demand loading is not
+supported; every other feature keeps working.
 
 ## Shortcuts
 
