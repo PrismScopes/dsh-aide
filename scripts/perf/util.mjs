@@ -161,14 +161,14 @@ export function classifyStderr(stderr) {
       }
       continue
     }
-    const blockStart = /conpty_console_list_agent\.js:\d+/.test(line) || /AttachConsole failed/i.test(line)
+    const blockStart = /conpty_console_list_agent\.(?:js|ts):\d+/.test(line) || /AttachConsole failed/i.test(line)
     if (blockStart) {
       insideNoiseBlock = true
       noise.push(line)
       continue
     }
     if (insideNoiseBlock) {
-      const stackFrame = /^\s+at /.test(line) || /^Node\.js v\d/.test(line) || /^var consoleProcessList/.test(line) || /^\s*\^/.test(line)
+      const stackFrame = /^\s+at /.test(line) || /^Node\.js v\d/.test(line) || /^(?:var|const|let) consoleProcessList/.test(line) || /^\s*\^/.test(line)
       if (stackFrame) {
         noise.push(line)
         continue

@@ -72,10 +72,12 @@ replace or disable `ui-layout`.
   multiple hits in one file share a single scan.
 - **Git**: `gitRoot` and rev-parse results are cached, bringing a Git panel refresh from five `git.exe` invocations to two on the
   warm path; committing reuses the status the host returns and only refetches the log.
-- **Reproducible baseline**: `pnpm perf` measures terminal startup (spawn / first byte / interactive readiness for three shells),
-  client bundle size and compile cost, and host entry load cost, writing `perf-results/baseline.json` (gitignored). Current
-  numbers: `lib/client.js` 2.65 MB (about 570 KB gzip, about 28 ms V8 compile), host entry import about 37 ms, `pwsh`
-  interactive on Windows about 560 ms.
+- **Reproducible baseline**: `pnpm perf` measures terminal startup (spawn / first byte / interactive readiness for three shells,
+  plus "warm ready / adopting the warm shell / waiting without prewarm"), client bundle size and compile cost, and host entry
+  load cost, writing `perf-results/baseline.json` (gitignored). Measured here: adopting the warm shell takes about 2 ms, while
+  clicking "new terminal" without prewarm needs about 100–160 ms to a prompt (the shell's own startup is absorbed by the time
+  the panel is open or the button is hovered). Current bundle numbers: `lib/client.js` 2.65 MB (about 570 KB gzip, about 28 ms
+  V8 compile), host entry import about 37 ms.
 - **No native/Rust addon**: the host's hot spots are Windows process creation (about a 44 ms floor per `git.exe` or shell) and
   protocol overhead, not JavaScript computation. Pure JS optimizations capture most of the win, while a native addon would need
   to cover both the Electron and Node ABIs with per-platform prebuilds, which is not worth the install size and distribution cost.

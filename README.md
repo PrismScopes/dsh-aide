@@ -91,9 +91,10 @@
   片段按命中行范围读取，同一文件的多条命中一次扫描。
 - **Git**：`gitRoot` 与 rev-parse 结果缓存，Git 面板刷新从 5 个 `git.exe` 降到热路径 2 个；提交后复用宿主返回的状态，
   只重取提交日志。
-- **可复现基准**：`pnpm perf` 覆盖终端启动（三种 shell 的 spawn / 首字节 / 可交互时间）、客户端包体积与解析成本、
-  宿主入口加载成本，结果写到 `perf-results/baseline.json`（已 gitignore）。当前基线：`lib/client.js` 2.65 MB
-  （gzip 约 570 KB，V8 编译约 28 ms），宿主入口 import 约 37 ms，Windows 上 `pwsh` 可交互约 560 ms。
+- **可复现基准**：`pnpm perf` 覆盖终端启动（三种 shell 的 spawn / 首字节 / 可交互时间，以及「预热就绪 / 认领预热 /
+  不预热干等」）、客户端包体积与解析成本、宿主入口加载成本，结果写到 `perf-results/baseline.json`（已 gitignore）。
+  本机实测预热认领约 2ms、不预热点新建到提示符约 100–160ms（shell 冷启动成本被面板打开/悬停的空档吸收）。
+  当前包基线：`lib/client.js` 2.65 MB（gzip 约 570 KB，V8 编译约 28 ms），宿主入口 import 约 37 ms。
 - **没有引入 native/Rust 扩展**：宿主热点主要是 Windows 进程创建（每次 `git.exe` / shell 约 44ms 的下限）与协议开销，
   不是 JS 计算；这部分纯 JS 优化即可拿到大部分收益，而 native addon 需要同时覆盖 Electron 与 Node 两套 ABI、
   每个平台各带预编译产物，安装体积与分发成本不划算。

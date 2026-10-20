@@ -33,7 +33,7 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, '..', '..')
 const DEFAULT_OUT = process.env.DVW_PERF_OUT ?? 'perf-results/baseline.json'
-const ALL_SUITES = ['pty', 'bundle', 'host']
+const ALL_SUITES = ['pty', 'prewarm', 'bundle', 'host']
 const DEFAULT_ROUNDS = 5
 
 function usage() {
@@ -41,7 +41,7 @@ function usage() {
     'usage: node scripts/perf/index.mjs [options]',
     '',
     'options:',
-    '  --only=pty|bundle|host   只跑指定套件，可用逗号组合（默认全部）',
+    '  --only=pty|prewarm|bundle|host  只跑指定套件，可用逗号组合（默认全部）',
     '  --rounds=N               每个指标的有效样本数（默认 5）',
     '  --conpty-dll-control     额外跑一次 useConptyDll:true 对照（已知异常，默认关闭）',
     '  --out=PATH               结果 JSON 路径（默认 ' + DEFAULT_OUT + '）',
@@ -122,30 +122,24 @@ function runtimeMeta() {
   }
 }
 
-/** 把 pty 套件放进子进程跑，从而把 node-pty 的 stderr 噪声隔离开。 */
-async function runPtySuiteIsolated({ rounds, conptyDllControl }) {
-  const script = join(HERE, 'pty.mjs')
-  const args = [script, `--rounds=${rounds}`]
-  if (conptyDllControl) args.push('--conpty-dll-control')
-  const run = await runCommand(process.execPath, args, { cwd: REPO_ROOT, timeoutMs: 600_000 })
+/**
+ * 通用「子进程套件」运行器：pty / prewarm 这类会起真 shell 的套件都放进子进程，
+ * 把 node-pty 的 stderr 噪声与 pty 句柄隔离在子进程里（父进程只解析最后一行 JSON）。
+ */
+async function runNodeSuiteIsolated({ suite, script, nodeArgs = [], args = [], rounds, timeoutMs = 600_000 }) {
+  const run = await runCommand(process.execPath, [...nodeArgs, script, `--rounds=${rounds}`, ...args], { cwd: REPO_ROOT, timeoutMs })
   const stderr = classifyStderr(run.stderr)
   const parsed = parseLastJsonLine(run.stdout)
   const errors = []
 
-  if (run.spawnError) {
-    errors.push(toErrorRecord('pty', 'child-spawn-failed', run.spawnError))
-  }
-  if (run.timedOut) {
-    errors.push(toErrorRecord('pty', 'child-timeout', new Error('pty 子进程超时未退出')))
-  }
-  if (parsed.error !== undefined) {
-    errors.push(toErrorRecord('pty', 'child-protocol-error', new Error(parsed.error), { raw: parsed.raw, stderr: stderr.unexpected.slice(0, 20) }))
-  }
+  if (run.spawnError) errors.push(toErrorRecord(suite, 'child-spawn-failed', run.spawnError))
+  if (run.timedOut) errors.push(toErrorRecord(suite, 'child-timeout', new Error(`${suite} 子进程超时未退出`)))
+  if (parsed.error !== undefined) errors.push(toErrorRecord(suite, 'child-protocol-error', new Error(parsed.error), { raw: parsed.raw, stderr: stderr.unexpected.slice(0, 20) }))
 
-  const data = parsed.value ?? { suite: 'pty', shells: [], missingShells: [], controls: { useConptyDll: null }, errors: [], warnings: [] }
+  const data = parsed.value ?? { suite, errors: [], warnings: [] }
   if (Array.isArray(data.errors)) errors.push(...data.errors)
   if (run.code !== 0 && errors.length === 0) {
-    errors.push(toErrorRecord('pty', 'child-exit', new Error(`pty 子进程退出码 ${run.code}`), { signal: run.signal }))
+    errors.push(toErrorRecord(suite, 'child-exit', new Error(`${suite} 子进程退出码 ${run.code}`), { signal: run.signal }))
   }
   for (const line of stderr.unexpected) {
     data.warnings = data.warnings ?? []
@@ -175,8 +169,24 @@ async function runPtySuiteIsolated({ rounds, conptyDllControl }) {
   }
 }
 
+/** pty 套件：三种 shell 的 spawn / 首字节 / shell-ready。 */
+function runPtySuiteIsolated({ rounds, conptyDllControl }) {
+  return runNodeSuiteIsolated({ suite: 'pty', script: join(HERE, 'pty.mjs'), args: conptyDllControl ? ['--conpty-dll-control'] : [], rounds })
+}
+
+/**
+ * 预热套件：真机起 TerminalManager 预热 shell，量「预热就绪 / 认领 / 不预热干等」。
+ * src/terminal.ts 有 TS 参数属性，需要 Node 的 transform-types 模式。
+ */
+async function runPrewarmSuiteIsolated({ rounds }) {
+  const result = await runNodeSuiteIsolated({ suite: 'prewarm', script: join(HERE, 'prewarm.mjs'), nodeArgs: ['--experimental-transform-types', '--no-warnings'], rounds })
+  for (const failure of result.data.failures ?? []) result.errors.push(toErrorRecord('prewarm', 'sample-failure', new Error(JSON.stringify(failure))))
+  return result
+}
+
 async function runSuite(name, options) {
   if (name === 'pty') return runPtySuiteIsolated(options)
+  if (name === 'prewarm') return runPrewarmSuiteIsolated(options)
   if (name === 'bundle') {
     const data = await runBundleSuite({ repoRoot: REPO_ROOT, rounds: options.rounds })
     return { data, errors: data.errors, warnings: data.warnings }
@@ -281,6 +291,25 @@ function printBundle(bundle) {
   printSourcemap(bundle.sourcemaps?.index)
 }
 
+function printPrewarm(prewarm) {
+  console.log('\n[prewarm] terminal prewarm · 真机 shell · 预热由面板打开/悬停触发，create 认领')
+  if (prewarm === undefined || prewarm === null) {
+    console.log('  (skipped)')
+    return
+  }
+  const rows = [
+    ['warm ready（shell 自己启动，被空档吸收）', formatTiming(prewarm.warmReadyMs), 'ms'],
+    ['create adopt（用户点新建后宿主侧等待）', formatTiming(prewarm.adoptMs), 'ms'],
+    ['cold ready（不预热时点新建到提示符）', formatTiming(prewarm.coldReadyMs), 'ms'],
+    ['saved vs cold（adopt 相对冷启动）', prewarm.savedMs === null ? '-' : `${prewarm.savedMs} ms`, ''],
+  ]
+  console.log(renderTable(['metric', 'mean(min-max)', ''], rows))
+  if ((prewarm.failures ?? []).length > 0) {
+    console.log(`  FAILURES: ${JSON.stringify(prewarm.failures.slice(0, 5))}`)
+  }
+  console.log('  说明：warm ready 是 shell 自身启动成本；adopt 是用户点新建后真正要等的时间；差值即预热收益。')
+}
+
 function printHost(host) {
   console.log('\n[host] lib/index.js isolated import · 每个样本独立 node 子进程 · warmup 1 次')
   if (host === undefined || host === null) {
@@ -370,6 +399,7 @@ async function main(argv) {
     'bundle: new Function 重复编译相同源码会命中 V8 编译缓存，正式样本每轮在源码尾部追加唯一注释。',
     'bundle: sourcemap 体积按 sourcesContent 的 UTF-8 字节聚合，不等于该包在最终 bundle 中的精确字节占比。',
     'host: 每个样本独立 node 进程；importMs 在子进程内测量，wall 包含 node 启动。',
+    'prewarm: warm ready = 预热 shell 自己吐出提示符的耗时；adopt = create() 认领预热 shell（用户点新建后真正要等的时间）；cold ready = 不预热时 create 到提示符。',
   ]
 
   try {
@@ -382,6 +412,7 @@ async function main(argv) {
 
   printHeader(results, options)
   if (results.pty !== undefined) printPty(results.pty)
+  if (results.prewarm !== undefined) printPrewarm(results.prewarm)
   if (results.bundle !== undefined) printBundle(results.bundle)
   if (results.host !== undefined) printHost(results.host)
   printDiagnostics(results)
