@@ -5,7 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, reso
 import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import type { HostContext } from './context.ts'
-import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchRequest, SearchResult } from './types.ts'
+import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
 import { inside, resolveCreatableWorkspacePath, resolveExistingWorkspacePath, type WorkspacePathErrors } from './paths.ts'
 import { WorkbenchError } from './wire.ts'
 
@@ -103,10 +103,20 @@ export async function saveDocument(cwd: string, path: string, content: string, e
   const { absolute } = await workspacePath(cwd, path)
   const current = await readDocument(cwd, path)
   if (current.revision !== expected) throw new WorkbenchError('revision-conflict', 'file changed on disk; reload before saving', 409)
+  await writeAtomic(absolute, content)
+  return readDocument(cwd, path)
+}
+
+/**
+ * 原子写：同目录临时文件 + rename。
+ *
+ * 搜索替换要一次改很多文件，用户也可能正开着其中几个；直接 writeFile 在进程被中断时
+ * 会留下半截文件，而 rename 在同一文件系统内是原子的（保存文档也走这里）。
+ */
+async function writeAtomic(absolute: string, content: string): Promise<void> {
   const temp = join(dirname(absolute), `.${randomUUID()}.dsh-vscode.tmp`)
   await writeFile(temp, content, { encoding: 'utf8', flag: 'wx' })
   try { await rename(temp, absolute) } catch (error) { await rm(temp, { force: true }); throw error }
-  return readDocument(cwd, path)
 }
 
 export async function createEntry(cwd: string, path: string, kind: 'file' | 'directory'): Promise<void> {
@@ -257,6 +267,18 @@ function positiveLimit(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : fallback
 }
 
+/**
+ * rg 输出的路径归一成工作区相对路径（正斜杠）。
+ *
+ * rg 把命令行里的 `.` 原样拼在路径前：POSIX 上是 `./src/a.ts`，Windows 上是 `.\src\a.ts`，
+ * 所以前缀两种分隔符都要剥；Windows 的分隔符再统一成正斜杠，客户端（含标签页/资源管理器）
+ * 只认一种写法。POSIX 上的反斜杠是合法文件名字符，不能动。
+ */
+function ripgrepRelative(value: string): string {
+  const stripped = value.replace(/^\.[\\/]/, '')
+  return sep === '\\' ? stripped.split('\\').join('/') : stripped
+}
+
 export async function searchWorkspace(cwd: string, request: SearchRequest, signal?: AbortSignal, runner: ProcessRunner = run): Promise<SearchResult> {
   if (request.query === '') return { matches: [], limited: false, truncated: false }
   const root = await canonicalRoot(cwd)
@@ -282,11 +304,160 @@ export async function searchWorkspace(cwd: string, request: SearchRequest, signa
     try { event = JSON.parse(line) as typeof event } catch { continue } // 字节上限截断时最后一行可能是半行
     if (event.type !== 'match' || event.data?.path?.text === undefined || event.data.lines?.text === undefined) continue
     for (const hit of event.data.submatches ?? []) {
-      matches.push({ path: event.data.path.text.replace(/^\.\//, ''), line: event.data.line_number ?? 1, column: hit.start + 1, preview: event.data.lines.text.trimEnd(), match: hit.match?.text ?? '' })
+      matches.push({ path: ripgrepRelative(event.data.path.text), line: event.data.line_number ?? 1, column: hit.start + 1, preview: event.data.lines.text.trimEnd(), match: hit.match?.text ?? '' })
       if (matches.length >= maxMatches) return { matches, limited: true, truncated: true }
     }
   }
   return { matches, limited: result.truncated, truncated: result.truncated }
+}
+
+function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
+
+/**
+ * 把搜索参数编译成与 ripgrep 语义对齐的全局 RegExp。
+ *
+ * - `regex=false` 时查询串转义成字面量；
+ * - `wholeWord` 用 `\b` 包裹（rg 的 --word-regexp 也是词边界语义）；
+ * - `caseSensitive=false` 加 `i` 标志。
+ * 正则写错时抛 invalid-regex：客户端在输入时就校验过，这里是服务端兜底。
+ */
+export function compileSearchPattern(request: Pick<SearchRequest, 'query' | 'regex' | 'wholeWord' | 'caseSensitive'>): RegExp {
+  const source = request.regex === true ? request.query : escapeRegExp(request.query)
+  const body = request.wholeWord === true ? `\\b(?:${source})\\b` : source
+  try { return new RegExp(body, request.caseSensitive === true ? 'g' : 'gi') }
+  catch (error) { throw new WorkbenchError('invalid-regex', error instanceof Error ? error.message : 'invalid regular expression') }
+}
+
+/**
+ * VS Code 的「保留大小写」：按命中文本的形态改写替换结果。
+ *
+ * 只识别三种可判定形态（全大写 / 全小写 / 首字母大写），其余保持替换文本原样；
+ * 逐词首字母大写（Title Case）的分支在这里刻意不做 —— 对中文与混合标识符都会给出意外结果。
+ */
+export function matchCase(matched: string, replacement: string): string {
+  if (matched === '' || replacement === '') return replacement
+  const upper = matched.toUpperCase()
+  const lower = matched.toLowerCase()
+  if (matched === upper && matched !== lower) return replacement.toUpperCase()
+  if (matched === lower && matched !== upper) return replacement.toLowerCase()
+  if (upper.charAt(0) === matched.charAt(0)) return replacement.charAt(0).toUpperCase() + replacement.slice(1)
+  return replacement
+}
+
+/** 一行的替换结果；`replacements` 用于汇总替换总数。 */
+function replaceLine(line: string, pattern: RegExp, replacement: string, preserveCase: boolean): { line: string; replacements: number } {
+  let replacements = 0
+  const next = line.replace(pattern, (matched: string) => {
+    replacements++
+    // 复用同一 pattern 展开 $1/$&/$$：命中文本本身必然在位置 0 上与 pattern 匹配，
+    // 所以这次 replace 的捕获组与当前命中一致。
+    const value = matched.replace(pattern, replacement)
+    return preserveCase ? matchCase(matched, value) : value
+  })
+  return { line: next, replacements }
+}
+
+/**
+ * 按行替换全文，保留原有行分隔符（CRLF 文件不会被改写成 LF）。
+ *
+ * 按行而不是整篇：ripgrep 是行内匹配，整篇替换会让 `^`/`$`/`\s` 这类元字符跨行，
+ * 与「搜索结果里看到的那些命中」不再是同一批。
+ */
+export function replaceInText(text: string, pattern: RegExp, replacement: string, preserveCase = false): { text: string; replacements: number } {
+  if (text === '') return { text, replacements: 0 }
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  let replacements = 0
+  const lines = text.split(eol).map(line => {
+    const result = replaceLine(line, pattern, replacement, preserveCase)
+    replacements += result.replacements
+    return result.line
+  })
+  return { text: lines.join(eol), replacements }
+}
+
+/**
+ * 只替换「某一行某一列」的那一处命中（VS Code 结果行上的单条替换）。
+ *
+ * 行列来自上一次搜索的结果，磁盘上的内容可能已经变了：这里要求该列上确实还有一个
+ * 与 pattern 匹配的命中，否则返回 0 处（调用方据此提示「文件已变化」）。
+ */
+export function replaceSingleInText(text: string, pattern: RegExp, replacement: string, preserveCase: boolean, lineNumber: number, column: number): { text: string; replacements: number } {
+  if (text === '' || lineNumber < 1 || column < 1) return { text, replacements: 0 }
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
+  const lines = text.split(eol)
+  const index = lineNumber - 1
+  if (index >= lines.length) return { text, replacements: 0 }
+  const target = lines[index] ?? ''
+  pattern.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(target)) !== null) {
+    if (match.index === column - 1) {
+      const value = match[0].replace(pattern, replacement)
+      const replaced = preserveCase ? matchCase(match[0], value) : value
+      lines[index] = target.slice(0, match.index) + replaced + target.slice(match.index + match[0].length)
+      return { text: lines.join(eol), replacements: 1 }
+    }
+    if (match.index > column - 1) break
+    // 空匹配（例如 `a*`）会让 exec 原地打转，必须手动推进。
+    if (match[0] === '') pattern.lastIndex++
+  }
+  return { text, replacements: 0 }
+}
+
+/**
+ * 工作区替换。
+ *
+ * - 传了 `only` 就只改那一处，不再跑 ripgrep（结果行上的单条替换）；
+ * - 否则 `rg --files-with-matches` 先取文件清单，再逐文件按行替换。
+ *   为什么用 -l 而不是复用 searchWorkspace：替换全部命中不该被「2000 条匹配上限」截断。
+ * 所有写入都走 writeAtomic，二进制文件与超限文件跳过（rg 侧已按 .gitignore/大小过滤）。
+ */
+export async function replaceInWorkspace(cwd: string, request: SearchReplaceRequest, signal?: AbortSignal, runner: ProcessRunner = run): Promise<SearchReplaceResult> {
+  if (request.query === '') throw new WorkbenchError('bad-request', 'query is required')
+  if (typeof request.replace !== 'string') throw new WorkbenchError('bad-request', 'replace must be a string')
+  const only = request.only
+  if (only !== undefined && (typeof only !== 'object' || only === null || typeof only.path !== 'string' || typeof only.line !== 'number' || typeof only.column !== 'number')) {
+    throw new WorkbenchError('bad-request', 'only must be { path, line, column }')
+  }
+  const pattern = compileSearchPattern(request)
+  const preserveCase = request.preserveCase === true
+  const files: string[] = []
+  let replacements = 0
+
+  if (request.only !== undefined) {
+    const { path, line, column } = request.only
+    const { absolute } = await workspacePath(cwd, path)
+    const text = await readFile(absolute, 'utf8')
+    const result = replaceSingleInText(text, pattern, request.replace, preserveCase, line, column)
+    if (result.replacements > 0) { await writeAtomic(absolute, result.text); files.push(path); replacements = result.replacements }
+    return { files, replacements }
+  }
+
+  const root = await canonicalRoot(cwd)
+  const rg = require('@vscode/ripgrep').rgPath as string
+  const maxFileSize = positiveLimit(request.maxFileSize, SEARCH_MAX_FILE_BYTES)
+  const args = ['--files-with-matches', '--null', '--hidden', '--glob', '!.git/**', '--max-filesize', String(maxFileSize)]
+  if (!request.regex) args.push('--fixed-strings')
+  if (!request.caseSensitive) args.push('--ignore-case')
+  if (request.wholeWord) args.push('--word-regexp')
+  if (request.include) args.push('--glob', request.include)
+  if (request.exclude) args.push('--glob', `!${request.exclude}`)
+  args.push('--', request.query, '.')
+  const listed = await runner(rg, args, root, PROCESS_TIMEOUT, signal, SEARCH_MAX_OUTPUT_BYTES)
+  if (listed.code > 1) throw new WorkbenchError('search-failed', listed.stderr || 'ripgrep failed', 500)
+  for (const entry of listed.stdout.split('\0')) {
+    const path = ripgrepRelative(entry.replace(/\r?\n$/, ''))
+    if (path === '') continue
+    if (signal?.aborted === true) break
+    const { absolute } = await workspacePath(cwd, path)
+    const text = await readFile(absolute, 'utf8')
+    if (text.includes('\0')) continue // 二进制文件不参与文本替换
+    const result = replaceInText(text, pattern, request.replace, preserveCase)
+    if (result.replacements === 0) continue
+    await writeAtomic(absolute, result.text)
+    files.push(path); replacements += result.replacements
+  }
+  return { files, replacements }
 }
 
 /**

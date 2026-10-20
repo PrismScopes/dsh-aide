@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, DragEvent, MouseEvent } from 'react'
-import type { FileDocument, FileEntry, GitChange, GitDiff, GitStatus, SearchMatch, SearchResult } from '../types.ts'
+import type { CSSProperties, DragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent } from 'react'
+import type { FileDocument, FileEntry, GitChange, GitDiff, GitStatus, SearchReplaceResult, SearchResult } from '../types.ts'
 import { api, currentHostBase, hostWebSocketUrl } from './api.ts'
 import type { VscodeWorkbench, WorkbenchView } from './service.ts'
 import { BOTTOM_HEIGHT, bottomHeightLimit, reclampBottomHeight } from './service.ts'
@@ -17,6 +17,8 @@ import { resetWorkspaceDocuments, WorkspaceRequestScope } from './workspaceState
 import { useDshDarkTheme } from './theme.ts'
 import { Git } from './GitPanel.tsx'
 import { useDebouncedCallback } from './hooks.ts'
+// 搜索面板的结果聚合/高亮/步进都是纯函数，拆在 searchView.ts 里以便直接用 node 断言。
+import { flattenRows, groupMatches, highlightSegments, parseSearchState, regexProblem, stepIndex, type SearchFile, type SearchRow, type SearchState } from './searchView.ts'
 import { usePreferences } from './preferences.ts'
 import type { WorkbenchPreferences } from './preferences.ts'
 import { ClosePrompt, dirtyCloseTabs, needsClosePrompt } from './ClosePrompt.tsx'
@@ -460,21 +462,262 @@ function MarkdownOutline({headings,onClose,onHeading}:{headings:MarkdownHeading[
   return <aside className="dvw-outline dvw-editor-outline"><div className="dvw-outline-head"><span><Icon name="list-tree"/> 大纲</span><button className="dvw-icon" title="关闭大纲" onClick={onClose}><Icon name="close"/></button></div><div className="dvw-outline-list">{headings.map(heading=><button className="dvw-outline-item" key={heading.index} style={{paddingLeft:8+(heading.depth-1)*13}} onClick={()=>onHeading(heading.index)}>{heading.text}</button>)}</div></aside>
 }
 
-function Search(props: { sessionId: string; onOpen(path: string, line: number, column: number): void }) {
-  const [query, setQuery] = useState(''); const [include, setInclude] = useState(''); const [exclude, setExclude] = useState(''); const [flags, setFlags] = useState({ caseSensitive: false, wholeWord: false, regex: false }); const [matches, setMatches] = useState<SearchMatch[]>([]); const [truncated, setTruncated] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState<string>()
-  const pending = useRef<AbortController>()
-  useEffect(() => () => pending.current?.abort(), [])
-  // truncated / limited 都表示「结果被截断」：truncated 是宿主的稳定语义字段（命中上限或 stdout 字节上限），
-  // limited 是旧字段（当前两者同值）。宿主的上限是可配置的，所以文案不再写死「2000 条」。
-  const search = async () => { pending.current?.abort(); const controller = new AbortController(); pending.current = controller; setBusy(true); setError(undefined); try { const result = await api<SearchResult>('search', { sessionId: props.sessionId, query, include, exclude, ...flags }, controller.signal); setMatches(result.matches); setTruncated(result.truncated === true || result.limited === true) } catch (error) { if (!controller.signal.aborted) setError(String(error)) } finally { if (pending.current === controller) setBusy(false) } }
-  const groups = useMemo(() => {
-    const grouped = new Map<string, SearchMatch[]>()
-    for (const match of matches) grouped.set(match.path, [...(grouped.get(match.path) ?? []), match])
-    return grouped
-  }, [matches])
-  return <><div className="dvw-side-head">搜索</div><form className="dvw-search-form" onSubmit={event => { event.preventDefault(); void search() }}><input className="dvw-input" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索" autoFocus/><div className="dvw-options">{([['caseSensitive','Aa'],['wholeWord','Ab'],['regex','.*']] as const).map(([key,label]) => <label key={key}><input type="checkbox" checked={flags[key]} onChange={e => setFlags({ ...flags, [key]: e.target.checked })}/>{label}</label>)}<button className="dvw-icon" title="搜索" disabled={busy}><Icon name="search"/></button></div><input className="dvw-input" value={include} onChange={e=>setInclude(e.target.value)} placeholder="包含文件，例如 src/**"/><input className="dvw-input" value={exclude} onChange={e=>setExclude(e.target.value)} placeholder="排除文件，例如 **/*.test.ts"/></form>{error&&<div className="dvw-error">{error}</div>}{truncated&&<div className="dvw-message">结果已截断，请缩小范围或用更精确的查询</div>}<div className="dvw-results">{[...groups].map(([path, rows]) => <div key={path}><div className="dvw-result-file"><Icon name="chevron-down"/> {path} <span className="dvw-badge">{rows.length}</span></div>{rows.map((row,index)=><div className="dvw-result" key={`${row.line}:${row.column}:${index}`} onClick={()=>props.onOpen(path,row.line,row.column)}><span className="dvw-line">{row.line}</span><span className="dvw-preview">{row.preview}</span></div>)}</div>)}</div></>
+/** 搜索面板的选项开关：字形与 VS Code 查找控件一致（Aa / ab / .*）。 */
+const SEARCH_FLAGS = [
+  ['caseSensitive', 'case-sensitive', '区分大小写'],
+  ['wholeWord', 'whole-word', '全字匹配'],
+  ['regex', 'regex', '使用正则表达式'],
+] as const
+
+/** 搜索面板的持久化键：与 VS Code 一样跨会话保留上一次搜索（含替换串与选项）。 */
+const SEARCH_STORAGE_KEY = 'dvw:search:v1'
+
+/** 上次搜索的恢复：隐私模式读不到、内容坏掉都回落到默认值，不让面板起不来。 */
+function readSearchState(): SearchState {
+  try { return parseSearchState(localStorage.getItem(SEARCH_STORAGE_KEY)) } catch { return parseSearchState(null) }
 }
 
+/** 一条结果行对应的命中文本（右键「复制匹配内容」用）。 */
+function matchTextOf(row: SearchRow): string {
+  const hit = row.hits.find(candidate => candidate.start === row.column - 1)
+  return hit === undefined ? row.preview.slice(row.column - 1) : row.preview.slice(hit.start, hit.start + hit.length)
+}
+
+/**
+ * 搜索面板。
+ *
+ * 与 VS Code 的搜索视图对齐：Aa / ab / .* 开关、可展开的替换行（Ctrl+Shift+H）、
+ * 包含/排除文件、按文件分组的结果（每处命中一行、行内全部命中高亮）、
+ * F4 / Shift+F4 逐条跳转、输入即搜索（300ms 防抖）、「上一次搜索」跨会话保留。
+ * 结果聚合与高亮的纯逻辑在 searchView.ts（那部分能在 node 里直接断言）。
+ */
+export function Search(props: { sessionId: string; service: VscodeWorkbench; onOpen(path: string, line: number, column: number, pin?: boolean): void }) {
+  const [state, setState] = useState<SearchState>(readSearchState)
+  const { query, include, exclude, replace, caseSensitive, wholeWord, regex, preserveCase } = state
+  const patch = (value: Partial<SearchState>) => setState(current => ({ ...current, ...value }))
+  /** 四个布尔开关走同一个写入口：计算属性名在展开对象里不好落在 Partial<SearchState> 上。 */
+  const toggleFlag = (key: 'caseSensitive' | 'wholeWord' | 'regex' | 'preserveCase') => setState(current => {
+    const next = { ...current }
+    next[key] = !current[key]
+    return next
+  })
+  const [replaceOpen, setReplaceOpen] = useState(false)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [files, setFiles] = useState<readonly SearchFile[]>([])
+  const [truncated, setTruncated] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const [message, setMessage] = useState<string>()
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  const [activeRow, setActiveRow] = useState(0)
+  const [menu, setMenu] = useState<{ row: SearchRow; x: number; y: number }>()
+  const pending = useRef<AbortController>()
+  const filesRef = useRef<readonly SearchFile[]>([])
+  const activeRef = useRef(0)
+  const queryInput = useRef<HTMLInputElement>(null)
+  const replaceInput = useRef<HTMLInputElement>(null)
+  const resultsRef = useRef<HTMLDivElement>(null)
+  // onOpen 来自 Workbench 的内联箭头函数，每次渲染都会换身份；用 ref 持有最新实现，
+  // 这样 F4 的命令注册（以及 step 的 useCallback）只做一次。
+  const onOpenRef = useRef(props.onOpen); onOpenRef.current = props.onOpen
+  const requestRef = useRef({ query, include, exclude, caseSensitive, wholeWord, regex })
+  requestRef.current = { query, include, exclude, caseSensitive, wholeWord, regex }
+  const rows = useMemo(() => flattenRows(files), [files])
+  const rowsRef = useRef(rows); rowsRef.current = rows
+  const rowIndex = useMemo(() => new Map(rows.map((row, index) => [row, index] as const)), [rows])
+  const invalidRegex = regexProblem(query, { regex, wholeWord })
+  const allCollapsed = files.length > 0 && files.every(file => collapsed.has(file.path))
+
+  useEffect(() => {
+    try { localStorage.setItem(SEARCH_STORAGE_KEY, JSON.stringify(state)) } catch { /* 隐私模式下存储可能被拒；内存中的状态仍然可用。 */ }
+  }, [state])
+  useEffect(() => () => pending.current?.abort(), [])
+
+  const runSearch = useCallback(async () => {
+    const body = requestRef.current
+    pending.current?.abort()
+    if (body.query === '') {
+      filesRef.current = []; setFiles([]); setTruncated(false); setError(undefined); setMessage(undefined); setBusy(false)
+      return
+    }
+    const controller = new AbortController(); pending.current = controller
+    setBusy(true); setError(undefined); setMessage(undefined)
+    try {
+      const result = await api<SearchResult>('search', { sessionId: props.sessionId, ...body }, controller.signal)
+      if (controller.signal.aborted) return
+      const next = groupMatches(result.matches)
+      filesRef.current = next
+      setFiles(next); setCollapsed(new Set()); setActiveRow(0); activeRef.current = 0
+      setTruncated(result.truncated === true || result.limited === true)
+    } catch (cause) {
+      if (!controller.signal.aborted) { filesRef.current = []; setFiles([]); setError(String(cause)) }
+    } finally {
+      if (pending.current === controller) setBusy(false)
+    }
+  }, [props.sessionId])
+
+  // 输入即搜索：VS Code 默认就这么干（search.searchOnType），300ms 防抖；
+  // 正则写错时不发请求，只把错误显示在输入框下面。
+  const scheduleSearch = useDebouncedCallback(() => { void runSearch() }, 300)
+  useEffect(() => {
+    if (invalidRegex !== undefined) return
+    if (query === '') {
+      filesRef.current = []; setFiles([]); setTruncated(false); setError(undefined); setMessage(undefined); setBusy(false)
+      return
+    }
+    scheduleSearch()
+  }, [query, include, exclude, caseSensitive, wholeWord, regex, invalidRegex, scheduleSearch, runSearch])
+
+  /** 打开结果行：双击（pin=true）升级成固定标签，与 VS Code 的预览标签语义一致。 */
+  const openRow = (index: number, pin?: boolean) => {
+    const row = rowsRef.current[index]
+    if (row === undefined) return
+    activeRef.current = index; setActiveRow(index)
+    onOpenRef.current(row.path, row.line, row.column, pin)
+  }
+
+  /** F4 / Shift+F4：在匹配序列上步进并直接打开，越界时环绕。 */
+  const step = useCallback((direction: 1 | -1) => {
+    const list = rowsRef.current
+    const next = stepIndex(activeRef.current, list.length, direction)
+    if (next < 0) return
+    activeRef.current = next; setActiveRow(next)
+    const row = list[next]
+    if (row === undefined) return
+    onOpenRef.current(row.path, row.line, row.column)
+    // 结果可能是刚渲染出来的，等这次提交之后再滚动。
+    window.setTimeout(() => { resultsRef.current?.querySelector(`[data-row-index="${next}"]`)?.scrollIntoView({ block: 'nearest' }) }, 0)
+  }, [])
+
+  useEffect(() => {
+    const disposers = [
+      props.service.registerCommand({ id: 'search.next', run: () => step(1) }),
+      props.service.registerCommand({ id: 'search.previous', run: () => step(-1) }),
+      props.service.registerCommand({ id: 'search.replace', run: () => { setReplaceOpen(true); window.setTimeout(() => replaceInput.current?.focus(), 0) } }),
+      props.service.registerCommand({ id: 'search.focus', run: () => { queryInput.current?.focus(); queryInput.current?.select() } }),
+    ]
+    return () => { for (const dispose of disposers) dispose() }
+  }, [props.service, step])
+
+  /**
+   * 替换：`only` 有值就只改那一处，否则改范围内全部命中。
+   * 替换后立刻重跑一次搜索，面板里看到的就是替换后的结果（也顺带验证真的写进去了）。
+   */
+  const submitReplace = async (only?: { path: string; line: number; column: number }) => {
+    const body = requestRef.current
+    if (body.query === '' || busy) return
+    setBusy(true); setError(undefined); setMessage(undefined)
+    try {
+      const result = await api<SearchReplaceResult>('search.replace', {
+        sessionId: props.sessionId, ...body, replace, preserveCase, ...(only === undefined ? {} : { only }),
+      })
+      const text = only === undefined
+        ? (result.replacements === 0 ? '没有可替换的命中' : `已替换 ${result.replacements} 处，涉及 ${result.files.length} 个文件`)
+        : (result.replacements === 0 ? '这一处已不在原位置（文件已变化），请重新搜索' : '已替换 1 处')
+      await runSearch()
+      setMessage(text)
+    } catch (cause) {
+      setError(String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggleCollapsed = (path: string) => setCollapsed(current => {
+    const next = new Set(current)
+    if (next.has(path)) next.delete(path); else next.add(path)
+    return next
+  })
+  const toggleCollapseAll = () => setCollapsed(allCollapsed ? new Set() : new Set(files.map(file => file.path)))
+  const clearResults = () => {
+    pending.current?.abort()
+    filesRef.current = []; setFiles([]); setTruncated(false); setError(undefined); setMessage(undefined); setActiveRow(0); activeRef.current = 0
+  }
+  const onResultsKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return
+    event.preventDefault()
+    if (event.key === 'Enter') { openRow(activeRef.current); return }
+    const next = stepIndex(activeRef.current, rowsRef.current.length, event.key === 'ArrowDown' ? 1 : -1)
+    if (next >= 0) { activeRef.current = next; setActiveRow(next) }
+  }
+  const resultMenu = (row: SearchRow): MenuEntry[] => [
+    { kind: 'item', id: 'search.open', label: '在编辑器中打开', onSelect: () => onOpenRef.current(row.path, row.line, row.column) },
+    { kind: 'item', id: 'search.open-pinned', label: '固定打开', onSelect: () => onOpenRef.current(row.path, row.line, row.column, true) },
+    { kind: 'item', id: 'search.copy-path', label: '复制路径', onSelect: () => { void copyText(`${row.path}:${row.line}:${row.column}`) } },
+    { kind: 'item', id: 'search.copy-match', label: '复制匹配内容', onSelect: () => { void copyText(matchTextOf(row)) } },
+  ]
+
+  return <>
+    <div className="dvw-side-head">搜索
+      <div className="dvw-toolbar">
+        <button className="dvw-icon" title="刷新搜索结果" aria-label="刷新搜索结果" disabled={busy || query === ''} onClick={() => void runSearch()}><Icon name="refresh"/></button>
+        <button className="dvw-icon" title={allCollapsed ? '全部展开' : '全部折叠'} aria-label={allCollapsed ? '全部展开' : '全部折叠'} disabled={files.length === 0} onClick={toggleCollapseAll}><Icon name={allCollapsed ? 'expand-all' : 'collapse-all'}/></button>
+        <button className="dvw-icon" title="清除搜索结果" aria-label="清除搜索结果" disabled={files.length === 0} onClick={clearResults}><Icon name="close"/></button>
+      </div>
+    </div>
+    <form className="dvw-search-form" onSubmit={event => { event.preventDefault(); void runSearch() }}>
+      <div className="dvw-search-row">
+        <button type="button" className="dvw-icon dvw-search-toggle" data-active={replaceOpen || undefined} aria-expanded={replaceOpen} aria-label={replaceOpen ? '隐藏替换' : '显示替换'} title={replaceOpen ? '隐藏替换' : '显示替换 (Ctrl+Shift+H)'} onClick={() => setReplaceOpen(value => !value)}><Icon name={replaceOpen ? 'chevron-down' : 'chevron-right'}/></button>
+        <div className="dvw-search-input">
+          <input ref={queryInput} className="dvw-input" value={query} placeholder="搜索" autoFocus aria-invalid={invalidRegex !== undefined} aria-label="搜索" onChange={event => patch({ query: event.target.value })}/>
+          {query !== '' && <button type="button" className="dvw-icon dvw-search-clear" title="清除搜索" aria-label="清除搜索" onClick={() => { patch({ query: '' }); queryInput.current?.focus() }}><Icon name="close"/></button>}
+        </div>
+        <div className="dvw-search-flags">
+          {SEARCH_FLAGS.map(([key, icon, label]) => <button key={key} type="button" className="dvw-flag" data-active={state[key] || undefined} aria-pressed={state[key]} aria-label={label} title={label} onClick={() => toggleFlag(key)}><Icon name={icon}/></button>)}
+        </div>
+        <button type="button" className="dvw-icon" data-active={optionsOpen || undefined} aria-expanded={optionsOpen} title="包含/排除文件" aria-label="包含/排除文件" onClick={() => setOptionsOpen(value => !value)}><Icon name="ellipsis"/></button>
+      </div>
+      {replaceOpen && <div className="dvw-search-row">
+        <span className="dvw-search-toggle-spacer" aria-hidden="true"/>
+        <div className="dvw-search-input">
+          <input ref={replaceInput} className="dvw-input" value={replace} placeholder="替换" aria-label="替换" onChange={event => patch({ replace: event.target.value })}/>
+        </div>
+        <div className="dvw-search-flags">
+          <button type="button" className="dvw-flag" data-active={preserveCase || undefined} aria-pressed={preserveCase} title="保留大小写" aria-label="保留大小写" onClick={() => toggleFlag('preserveCase')}><Icon name="preserve-case"/></button>
+          <button type="button" className="dvw-flag" title="全部替换" aria-label="全部替换" disabled={busy || query === '' || rows.length === 0 || invalidRegex !== undefined} onClick={() => void submitReplace()}><Icon name="replace-all"/></button>
+        </div>
+      </div>}
+      {optionsOpen && <div className="dvw-search-options">
+        <input className="dvw-input" value={include} placeholder="要包含的文件，例如 src/**/*.ts" aria-label="要包含的文件" onChange={event => patch({ include: event.target.value })}/>
+        <input className="dvw-input" value={exclude} placeholder="要排除的文件，例如 **/*.test.ts" aria-label="要排除的文件" onChange={event => patch({ exclude: event.target.value })}/>
+      </div>}
+    </form>
+    {invalidRegex !== undefined && <div className="dvw-search-hint" data-tone="error" role="alert">{invalidRegex}</div>}
+    {error !== undefined && <div className="dvw-error">{error}</div>}
+    {busy && <div className="dvw-search-progress" role="progressbar" aria-label="搜索中"/>}
+    {message !== undefined && <div className="dvw-search-hint" role="status">{message}</div>}
+    {rows.length > 0 && <div className="dvw-search-summary" role="status">{rows.length} 个结果，{files.length} 个文件</div>}
+    {truncated && <div className="dvw-search-hint" data-tone="warn">结果已截断，请缩小范围或用更精确的查询</div>}
+    {query !== '' && invalidRegex === undefined && !busy && rows.length === 0 && error === undefined && <div className="dvw-search-hint">未找到结果</div>}
+    <div className="dvw-results" ref={resultsRef} tabIndex={0} aria-label="搜索结果" onKeyDown={onResultsKeyDown}>
+      {files.map(file => {
+        const icon = fileIconUrl(file.name)
+        const folded = collapsed.has(file.path)
+        return <div className="dvw-result-group" key={file.path}>
+          <button type="button" className="dvw-result-file" aria-expanded={!folded} onClick={() => toggleCollapsed(file.path)}>
+            <Icon name={folded ? 'chevron-right' : 'chevron-down'}/>
+            {icon === undefined ? <Icon name={fileIcon(file.name)}/> : <img className="dvw-file-icon-img" src={icon} alt=""/>}
+            <span className="dvw-result-name">{file.name}</span>
+            <span className="dvw-result-dir">{file.directory}</span>
+            <span className="dvw-count">{file.rows.length}</span>
+          </button>
+          {!folded && file.rows.map(row => {
+            const index = rowIndex.get(row) ?? 0
+            return <div className="dvw-result" key={`${row.line}:${row.column}`} tabIndex={-1} data-row-index={index} data-active={index === activeRow || undefined} title={`${row.path}:${row.line}:${row.column}`}
+              onClick={() => openRow(index)} onDoubleClick={() => openRow(index, true)} onContextMenu={event => { event.preventDefault(); setMenu({ row, x: event.clientX, y: event.clientY }) }}>
+              <span className="dvw-line">{row.line}</span>
+              <span className="dvw-preview">{highlightSegments(row.preview, row.hits).map((segment, position) => segment.hit
+                ? <mark key={position} data-current={segment.start === row.column - 1 ? true : undefined}>{segment.text}</mark>
+                : <span key={position}>{segment.text}</span>)}</span>
+              {replaceOpen && <button type="button" className="dvw-icon dvw-search-replace-one" title="替换这一处" aria-label="替换这一处" disabled={busy} onClick={event => { event.stopPropagation(); void submitReplace({ path: row.path, line: row.line, column: row.column }) }}><Icon name="replace"/></button>}
+            </div>
+          })}
+        </div>
+      })}
+    </div>
+    {menu !== undefined && <ContextMenu position={{ x: menu.x, y: menu.y }} label="搜索结果" entries={resultMenu(menu.row)} onClose={() => setMenu(undefined)}/>}
+  </>
+}
 
 export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbench; sessionId?: string; cwd?: string }) {
   const [snapshot, setSnapshot] = useState(() => service.getSnapshot()); const [panels, setPanels] = useState(() => service.getPanels())
@@ -806,7 +1049,7 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     <DshConversationPanel visible={chatVisible} width={chatWidth}/>
     {chatVisible&&<aside className="dvw-chat"><PanelResizer className="dvw-chat-resizer" label="拖动调整 DSH 对话栏宽度" width={chatWidth} min={400} max={720} defaultWidth={420} direction={-1} onWidth={setChatWidth} onPreview={previewPanelWidth('chatWidth')}/><header className="dvw-chat-head"><span><DshMark/> DSH</span><button className="dvw-icon" title="关闭 DSH 对话栏" onClick={()=>setChatVisible(false)}><Icon name="close"/></button></header><div className="dvw-chat-body"/></aside>}
     <nav className="dvw-activity"><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='explorer'} title="资源管理器" onClick={()=>selectView('explorer')}><Icon name="files"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='search'} title="搜索" onClick={()=>selectView('search')}><Icon name="search"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='git'} title="源代码管理" onClick={()=>selectView('git')}><Icon name="source-control"/></button><button className="dvw-act" data-active={snapshot.bottomPanel==='terminal'} disabled={!terminalAvailable} title={terminalAvailable?(snapshot.bottomPanel==='terminal'?'隐藏终端':'显示终端'):'终端适配器未安装'} onClick={()=>toggleTerminal(service)}><Icon name="terminal"/></button><button className="dvw-act dsh" title="返回 DSH" onClick={()=>hideWorkbench()}><Icon name="home"/></button><button className="dvw-act" title="在 DSH 设置中管理 AIDE 选项" onClick={()=>service.openDshSettings()}><Icon name="settings"/></button></nav>
-    <aside className="dvw-side" data-side-width={sideWidth}>{snapshot.view==='explorer'&&<Explorer sessionId={sessionId} cwd={workspace?.cwd} selected={active} dirty={new Set(tabs.filter(tab=>tab.dirty).map(tab=>tab.path))} onOpen={(path,pin)=>void open(path,undefined,undefined,pin)}/>} {snapshot.view==='search'&&<Search sessionId={sessionId} onOpen={(path,line,column)=>void open(path,line,column)}/>} {snapshot.view==='git'&&<Git sessionId={sessionId} absoluteRoot={workspace?.cwd} onDiff={(path,diff,title,diffSourcePath)=>{const key=`diff:${path}`;setTabs(rows=>[...rows.filter(row=>row.path!==key),{path:key,title,content:diff.diff,draft:diff.diff,revision:'',size:diff.diff.length,binary:false,tooLarge:false,dirty:false,pinned:true,diff,diffMode:'inline',diffSourcePath}]);setActive(key)}}/>}</aside>
+    <aside className="dvw-side" data-side-width={sideWidth}>{snapshot.view==='explorer'&&<Explorer sessionId={sessionId} cwd={workspace?.cwd} selected={active} dirty={new Set(tabs.filter(tab=>tab.dirty).map(tab=>tab.path))} onOpen={(path,pin)=>void open(path,undefined,undefined,pin)}/>} {snapshot.view==='search'&&<Search sessionId={sessionId} service={service} onOpen={(path,line,column,pin)=>void open(path,line,column,pin)}/>} {snapshot.view==='git'&&<Git sessionId={sessionId} absoluteRoot={workspace?.cwd} onDiff={(path,diff,title,diffSourcePath)=>{const key=`diff:${path}`;setTabs(rows=>[...rows.filter(row=>row.path!==key),{path:key,title,content:diff.diff,draft:diff.diff,revision:'',size:diff.diff.length,binary:false,tooLarge:false,dirty:false,pinned:true,diff,diffMode:'inline',diffSourcePath}]);setActive(key)}}/>}</aside>
     <PanelResizer className="dvw-side-resizer" label="拖动调整源码管理侧边栏宽度" width={sideWidth} min={210} max={640} defaultWidth={210} direction={1} onWidth={setSideWidth} onPreview={previewPanelWidth('sideWidth')}/>
     <main className="dvw-main"><div className="dvw-tabs"><div className="dvw-tab-list">{tabs.map(tab=><button className="dvw-tab" data-active={tab.path===active} data-pinned={tab.pinned===true||undefined} key={tab.path} title={tab.diffSourcePath??tab.path} onClick={()=>setActive(tab.path)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setTabMenu({path:tab.path,x:event.clientX,y:event.clientY})}}><span className="dvw-tab-name">{tab.dirty?'● ':''}{tabLabel(tab)}</span><span onClick={event=>{event.stopPropagation();requestCloseTabs([tab.path])}}><Icon name="close"/></span></button>)}</div>{tabMenu!==undefined&&<ContextMenu position={{x:tabMenu.x,y:tabMenu.y}} label="标签页操作" entries={tabMenuEntries(tabMenu)} onClose={()=>setTabMenu(undefined)}/>}<div className="dvw-tab-actions">{tabs.length>0&&<button className="dvw-icon dvw-close-all" title="全部关闭" onClick={closeAll}><Icon name="close-all"/></button>}<button className="dvw-icon dvw-chat-action" data-active={chatVisible||undefined} title={chatVisible?'隐藏 DSH 对话栏 (Ctrl+Alt+B)':'显示 DSH 对话栏 (Ctrl+Alt+B)'} aria-pressed={chatVisible} onClick={()=>setChatVisible(value=>!value)}><Icon name={chatVisible?'layout-sidebar-right':'layout-sidebar-right-off'}/></button></div></div><div className="dvw-editor" data-outline={markdownPreview&&outlineVisible&&headings.length>0}>{error&&<div className="dvw-error"><button className="dvw-icon" onClick={()=>setError(undefined)}><Icon name="close"/></button>{error}</div>}{markdownPreview&&outlineVisible&&headings.length>0&&<MarkdownOutline headings={headings} onClose={()=>setOutlineVisible(false)} onHeading={selectHeading}/>} {markdown&&activeTab&&<div className="dvw-editor-toolbar"><button className="dvw-icon dvw-outline-toggle" data-active={outlineVisible} title={outlineVisible?'关闭 Markdown 大纲':'显示 Markdown 大纲'} onClick={()=>setOutlineVisible(value=>!value)}><Icon name="list-tree"/></button><button className="dvw-mode-button" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="code"/> 源码</button><button className="dvw-mode-button" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{activeTab?.diff&&<div className="dvw-editor-toolbar dvw-diff-toolbar">{diffMarkdown&&<div className="dvw-diff-preview-switch"><button className="dvw-mode-button" data-diff-view="diff" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="diff"/> 差异</button><button className="dvw-mode-button" data-diff-view="preview" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{!activeTab.preview&&<><button className="dvw-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button className="dvw-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button></>}</div>}<div className="dvw-editor-body" data-toolbar={markdown||activeTab?.diff!==undefined}>{activeTab?.tooLarge===true?<div className="dvw-editor-prompt"><strong>文件超过 5 MiB，是否加载此文件？</strong><span>{activeTab.path}（{Math.round(activeTab.size/1048576)} MiB）</span><span className="dvw-editor-prompt-note">大文件会让编辑器变慢，也会占用较多内存。</span><button type="button" className="dvw-mode-button" onClick={()=>void forceLoad(activeTab.path)}>加载此文件</button></div>:activeTab===undefined?<div className="dvw-empty"><div><strong>DSH AIDE</strong><br/>从资源管理器或搜索结果打开文件</div></div>:activeTab.diff?diffMarkdown&&activeTab.preview?<MarkdownPreview source={activeTab.diff.modified} sessionId={sessionId} path={activeTab.diffSourcePath??''}/>:<MonacoDiffEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} original={activeTab.diff.original} modified={activeTab.diff.modified} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.imageUrl?<div className="dvw-image-preview"><img src={activeTab.imageUrl} alt={activeTab.path}/><span>{activeTab.path}</span></div>:activeTab.documentPreview&&activeTab.documentUrl?<DocumentPreview kind={activeTab.documentPreview} src={activeTab.documentUrl} path={activeTab.path}/>:markdown&&activeTab.preview?<MarkdownPreview source={activeTab.draft} sessionId={sessionId} path={activeTab.path}/>:<MonacoEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={draft=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,draft,dirty:draft!==tab.content}:tab))} onSave={()=>void save(activeTab)}/>}</div></div></main>
     {bottomPanelId!==undefined&&<section className="dvw-bottom" style={{height:`var(--dvw-bottom-height, ${BOTTOM_HEIGHT.default}px)`,...(snapshot.bottomPanel===undefined?{display:'none'}:{})}}><div style={{height:4,cursor:'ns-resize'}} onPointerDown={dragBottomPanel}/><div className="dvw-bottom-head"><div className="dvw-bottom-headslot" ref={setHeaderHost}/>{snapshot.bottomPanel==='terminal'&&sessionId!==undefined&&<TerminalNewButton sessionId={sessionId}/>}<button className="dvw-icon" style={{marginLeft:'auto'}} onClick={()=>service.toggleBottomPanel(snapshot.bottomPanel!)}><Icon name="close"/></button></div><div className="dvw-bottom-body">{Panel&&cwd&&<Panel sessionId={sessionId} cwd={cwd} visible={snapshot.bottomPanel!==undefined} colorScheme={colorScheme} header={headerHost}/>}</div></section>}

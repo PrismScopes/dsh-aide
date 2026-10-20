@@ -681,6 +681,17 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
     const model = editor.current?.getModel(); if (model !== null && model !== undefined && model.getValue() !== props.value) model.setValue(props.value)
   }, [props.value])
   useEffect(() => { if (window.monaco !== undefined) window.monaco.editor.setTheme(dshMonacoTheme(window.monaco, props.theme)) }, [props.theme])
+  // 搜索结果/大纲跳转：文件已经打开时再跳到另一行，编辑器实例不会重建（创建 effect 的依赖是 props.uri），
+  // 所以定位必须在 props.line / column 变化时单独做一次 —— 否则点第二条命中没有任何反应。
+  useEffect(() => {
+    const instance = editor.current
+    const model = instance?.getModel()
+    if (instance === undefined || model === null || model === undefined || props.line === undefined) return
+    const lineNumber = Math.min(Math.max(1, props.line), model.getLineCount())
+    const column = Math.min(Math.max(1, props.column ?? 1), model.getLineMaxColumn(lineNumber))
+    instance.setPosition({ lineNumber, column })
+    instance.revealLineInCenter(lineNumber)
+  }, [props.line, props.column])
   // 偏好变了就地同步，改设置不影响编辑器里已有的滚动位置与选择。
   // 外框（概览标尺开关）与编辑器选项都重算；创建与更新共用同一套映射，两条路径不会漂。
   // tabSize/insertSpaces 是模型级选项，走 model.updateOptions。

@@ -4,6 +4,8 @@ const CSS = String.raw`
 .codicon-add:before{content:"\ea60"}.codicon-git-branch:before,.codicon-source-control:before{content:"\ea68"}.codicon-search:before{content:"\ea6d"}.codicon-close:before{content:"\ea76"}.codicon-close-all:before{content:"\eac1"}.codicon-cloud-upload:before{content:"\eac3"}.codicon-file:before{content:"\ea7b"}.codicon-new-file:before{content:"\ea7f"}.codicon-new-folder:before{content:"\ea80"}.codicon-folder:before{content:"\ea83"}.codicon-trash:before{content:"\ea81"}.codicon-code:before{content:"\eac4"}.codicon-check:before{content:"\eab2"}.codicon-chevron-down:before{content:"\eab4"}.codicon-chevron-right:before{content:"\eab6"}.codicon-diff:before,.codicon-diff-sidebyside:before{content:"\eae1"}.codicon-diff-single:before{content:"\ec22"}.codicon-discard:before{content:"\eae2"}.codicon-file-code:before{content:"\eae9"}.codicon-file-media:before{content:"\eaea"}.codicon-file-pdf:before{content:"\eaeb"}.codicon-file-zip:before{content:"\eaef"}.codicon-files:before{content:"\eaf0"}.codicon-folder-opened:before{content:"\eaf7"}.codicon-home:before{content:"\eb06"}.codicon-list-tree:before{content:"\eb86"}.codicon-preview:before{content:"\eb2f"}.codicon-refresh:before{content:"\eb37"}.codicon-remove:before{content:"\eb3b"}
 
 .codicon-layout-sidebar-right:before{content:"\ebf4"}.codicon-layout-sidebar-right-off:before{content:"\ec00"}.codicon-settings:before{content:"\eb51"}.codicon-split-horizontal:before{content:"\eb56"}.codicon-terminal:before{content:"\ea85"}
+/* 搜索面板用的字形：Aa / ab / .* / 保留大小写 / 单条替换 / 全部替换 / 更多选项 / 全部折叠 / 全部展开。 */
+.codicon-case-sensitive:before{content:"\eab1"}.codicon-whole-word:before{content:"\eb7e"}.codicon-regex:before{content:"\eb38"}.codicon-preserve-case:before{content:"\eb2e"}.codicon-replace:before{content:"\eb3d"}.codicon-replace-all:before{content:"\eb3c"}.codicon-ellipsis:before{content:"\ea7c"}.codicon-collapse-all:before{content:"\eac5"}.codicon-expand-all:before{content:"\eb95"}
 /* 工作台显示期间，把 DSH 侧栏底部那个账户/设置入口整行收起来。
    那一行在 (10, 948)–(270, 990)，伸进工作台活动栏（x 0–48）；被 overlay 盖住后既收不到点击
    （命中测试落在活动栏上），里面的图标又会从接缝里透出来，看起来就是「两个图标重叠」。
@@ -171,7 +173,45 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 
 
 @media(max-width:900px){.dvw-overlay[data-dvw-chat=true]{grid-template-columns:44px min(210px,var(--dvw-side-width)) minmax(0,1fr) min(400px,var(--dvw-chat-width))}[data-dvw-conversation-panel]{width:min(400px,var(--dvw-chat-width))!important}}
+/* ---- 搜索面板（对齐 VS Code 搜索视图）----
+   搜索框一行：折叠替换 / 输入框（内含清除）/ Aa·ab·.* / 更多选项；替换行与包含排除行各自独立成行。 */
+.dvw-search-row{display:flex;align-items:center;gap:6px}
+.dvw-search-input{position:relative;flex:1;min-width:0}
+.dvw-search-input .dvw-input{padding-right:26px}
+.dvw-search-clear{position:absolute;right:2px;top:2px}
+.dvw-search-flags{display:flex;align-items:center;gap:2px;flex:none}
+.dvw-flag{min-width:22px;height:22px;border:1px solid transparent;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text-2);display:inline-grid;place-items:center;padding:0 2px;cursor:pointer}
+.dvw-flag:hover{background:var(--dvw-hover);color:var(--dvw-text)}
+.dvw-flag[data-active=true]{border-color:var(--dvw-border);background:var(--dvw-active);color:var(--dvw-text)}
+.dvw-flag:disabled,.dvw-icon:disabled{opacity:.4;cursor:default}
+.dvw-search-toggle{flex:none}
+.dvw-search-toggle-spacer{width:24px;flex:none}
+.dvw-search-options{display:grid;gap:6px}
+.dvw-search-hint{padding:6px 10px;font-size:12px;color:var(--dvw-text-2)}
+.dvw-search-hint[data-tone=error]{color:var(--dvw-error)}
+.dvw-search-hint[data-tone=warn]{color:var(--dvw-warn)}
+.dvw-search-summary{padding:6px 10px;font-size:12px;color:var(--dvw-text-2);border-bottom:1px solid var(--dvw-border-soft)}
+/* 进行中的细进度条：搜索结果会把列表整体换掉，需要一条「还在跑」的可见反馈。 */
+.dvw-search-progress{height:2px;flex:none;background:var(--dvw-accent);animation:dvw-search-progress 1.1s ease-in-out infinite}
+@keyframes dvw-search-progress{0%{transform:scaleX(.08);opacity:.4}50%{transform:scaleX(1);opacity:1}100%{transform:scaleX(.08);opacity:.4}}
+.dvw-results{flex:1;min-height:0;overflow:auto;outline:none}
+.dvw-results:focus-visible{outline:1px solid var(--dvw-accent);outline-offset:-1px}
+.dvw-result-file{width:100%;border:0;background:transparent;color:var(--dvw-text);font:inherit;font-weight:600;display:flex;align-items:center;gap:4px;padding:4px 8px;cursor:pointer;text-align:left}
+.dvw-result-file:hover{background:var(--dvw-hover)}
+.dvw-result-file:focus-visible{outline:1px solid var(--dvw-accent);outline-offset:-1px}
+.dvw-result-name{flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dvw-result-dir{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dvw-text-3);font-weight:400}
+.dvw-count{flex:none;min-width:18px;height:18px;border-radius:var(--dvw-radius-md);display:grid;place-items:center;background:var(--dvw-surface-3);color:var(--dvw-text-2);font-size:11px;font-weight:400}
+.dvw-result{align-items:center}
+.dvw-result[data-active=true]{background:var(--dvw-active);box-shadow:inset 2px 0 0 var(--dvw-accent)}
+.dvw-preview{flex:1;min-width:0}
+.dvw-result mark{background:color-mix(in srgb,var(--dvw-warn) 34%,transparent);color:inherit;border-radius:2px}
+.dvw-result mark[data-current]{background:color-mix(in srgb,var(--dvw-warn) 82%,transparent);color:var(--dvw-base)}
+/* 单条替换按钮只在悬停/聚焦时出现（VS Code 的替换入口同样不占常驻视觉）。 */
+.dvw-search-replace-one{flex:none;opacity:0}
+.dvw-result:hover .dvw-search-replace-one,.dvw-result:focus-within .dvw-search-replace-one{opacity:1}
 `
+
 
 export function installStyles(): () => void {
   const id = 'dsh-aide/styles'

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile, readFile } from 'node
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { codiconAsset, createEntry, gitAction, gitStatus, listFiles, pdfWorkerAsset, readDocument, renameEntry, resetGitRootCache, saveDocument, searchWorkspace, uploadFile, workspacePath, workspacePreviewFile, type ProcessRunner } from '../src/host.ts'
+import { codiconAsset, compileSearchPattern, createEntry, gitAction, gitStatus, listFiles, matchCase, pdfWorkerAsset, readDocument, renameEntry, replaceInText, replaceInWorkspace, replaceSingleInText, resetGitRootCache, saveDocument, searchWorkspace, uploadFile, workspacePath, workspacePreviewFile, type ProcessRunner } from '../src/host.ts'
 
 const roots:string[]=[]
 async function temp(){const value=await mkdtemp(join(tmpdir(),'dvw-'));roots.push(value);return value}
@@ -167,6 +167,87 @@ describe('search limits', () => {
     const capped = await searchWorkspace(root, { query: 'const', maxMatches: 3 })
     expect(capped.matches).toHaveLength(3)
     expect(capped).toMatchObject({ limited: true, truncated: true })
+  })
+})
+
+describe('search replace', () => {
+  it('replaces every match in matching files and reports the counts', async () => {
+    const root = await temp()
+    await mkdir(join(root, 'src'))
+    await writeFile(join(root, 'src', 'a.ts'), 'const foo = foo\nconst bar = 1\n')
+    await writeFile(join(root, 'src', 'b.ts'), 'nothing here\n')
+    const result = await replaceInWorkspace(root, { query: 'foo', replace: 'baz' })
+    expect(result.replacements).toBe(2)
+    expect(result.files.map(path => path.replace(/\\/g, '/'))).toEqual(['src/a.ts'])
+    expect(await readFile(join(root, 'src', 'a.ts'), 'utf8')).toBe('const baz = baz\nconst bar = 1\n')
+    expect(await readFile(join(root, 'src', 'b.ts'), 'utf8')).toBe('nothing here\n')
+  })
+
+  it('honours whole words, case sensitivity and regex capture groups', async () => {
+    const root = await temp()
+    await writeFile(join(root, 'a.ts'), 'Foo foo foobar user_id\n')
+    await replaceInWorkspace(root, { query: 'foo', replace: 'x', wholeWord: true })
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('x x foobar user_id\n')
+    await replaceInWorkspace(root, { query: '(\\w+)_id', replace: '$1Id', regex: true })
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('x x foobar userId\n')
+    await expect(replaceInWorkspace(root, { query: 'x', replace: 'y', caseSensitive: true })).resolves.toMatchObject({ replacements: 2 })
+  })
+
+  it('preserves the matched case when asked', async () => {
+    const root = await temp()
+    await writeFile(join(root, 'a.ts'), 'FOO Foo foo\n')
+    await replaceInWorkspace(root, { query: 'foo', replace: 'bar', preserveCase: true })
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('BAR Bar bar\n')
+  })
+
+  it('replaces a single reported position only and reports a stale one', async () => {
+    const root = await temp()
+    await writeFile(join(root, 'a.ts'), 'foo foo foo\nsecond foo\n')
+    await expect(replaceInWorkspace(root, { query: 'foo', replace: 'bar', only: { path: 'a.ts', line: 1, column: 9 } }))
+      .resolves.toEqual({ files: ['a.ts'], replacements: 1 })
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('foo foo bar\nsecond foo\n')
+    // 这个位置现在已经是 bar：行列对不上就一处都不改，由客户端提示重新搜索。
+    await expect(replaceInWorkspace(root, { query: 'foo', replace: 'bar', only: { path: 'a.ts', line: 1, column: 9 } }))
+      .resolves.toEqual({ files: [], replacements: 0 })
+  })
+
+  it('keeps CRLF line endings and skips binary files', async () => {
+    const root = await temp()
+    await writeFile(join(root, 'a.ts'), 'foo\r\nbar\r\n')
+    await writeFile(join(root, 'bin.dat'), Buffer.from('needle\0more'))
+    await replaceInWorkspace(root, { query: 'foo', replace: 'baz' })
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('baz\r\nbar\r\n')
+    const binary = await replaceInWorkspace(root, { query: 'needle', replace: 'x' })
+    expect(binary.replacements).toBe(0)
+    expect((await readFile(join(root, 'bin.dat'))).includes(0)).toBe(true)
+  })
+
+  it('rejects an empty query and an invalid regular expression', async () => {
+    const root = await temp()
+    await expect(replaceInWorkspace(root, { query: '', replace: 'x' })).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(replaceInWorkspace(root, { query: '(', replace: 'x', regex: true })).rejects.toMatchObject({ code: 'invalid-regex' })
+  })
+})
+
+describe('search replace text helpers', () => {
+  it('applies replacements per line and keeps the original separators', () => {
+    expect(replaceInText('foo\r\nfoo bar\r\n', compileSearchPattern({ query: 'foo' }), 'x')).toEqual({ text: 'x\r\nx bar\r\n', replacements: 2 })
+    expect(replaceInText('', compileSearchPattern({ query: 'foo' }), 'x')).toEqual({ text: '', replacements: 0 })
+  })
+
+  it('maps the matched case shape for preserve-case', () => {
+    expect(matchCase('FOO', 'bar')).toBe('BAR')
+    expect(matchCase('foo', 'BAR')).toBe('bar')
+    expect(matchCase('Foo', 'bar')).toBe('Bar')
+    expect(matchCase('fOo', 'bar')).toBe('bar')
+    expect(matchCase('', 'bar')).toBe('bar')
+  })
+
+  it('replaces only the matched column and treats a moved match as stale', () => {
+    const pattern = compileSearchPattern({ query: 'foo' })
+    expect(replaceSingleInText('foo foo', pattern, 'x', false, 1, 5)).toEqual({ text: 'foo x', replacements: 1 })
+    expect(replaceSingleInText('foo foo', pattern, 'x', false, 1, 2)).toEqual({ text: 'foo foo', replacements: 0 })
+    expect(replaceSingleInText('foo', pattern, 'x', false, 3, 1)).toEqual({ text: 'foo', replacements: 0 })
   })
 })
 

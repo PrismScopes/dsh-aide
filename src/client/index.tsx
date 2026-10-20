@@ -278,8 +278,24 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (handleTerminalShortcut(event, service)) return
-      if (event.isComposing || !event.ctrlKey || event.altKey) return
-      const view = event.shiftKey && event.code === 'KeyE' ? 'explorer' : event.shiftKey && event.code === 'KeyF' ? 'search' : event.shiftKey && event.code === 'KeyG' ? 'git' : undefined
+      if (event.isComposing) return
+      // F4 / Shift+F4：搜索结果的「下一个 / 上一个匹配」（与 VS Code 同键位）。
+      // 这两条命令由搜索面板在挂载期注册，不在搜索视图里就什么都不做。
+      if (event.code === 'F4' && !event.ctrlKey && !event.altKey) {
+        const snapshot = service.getSnapshot()
+        if (snapshot.visible && snapshot.view === 'search') { event.preventDefault(); service.runCommand(event.shiftKey ? 'search.previous' : 'search.next') }
+        return
+      }
+      if (!event.ctrlKey || event.altKey) return
+      // Ctrl+Shift+F 打开搜索并聚焦输入框；Ctrl+Shift+H 同时展开替换行（VS Code 的「替换文件」）。
+      // 视图首次打开时组件还没挂载，等到这一帧提交之后再发命令。
+      if (event.shiftKey && (event.code === 'KeyF' || event.code === 'KeyH')) {
+        event.preventDefault()
+        service.show('search')
+        window.setTimeout(() => service.runCommand(event.code === 'KeyF' ? 'search.focus' : 'search.replace'), 30)
+        return
+      }
+      const view = event.shiftKey && event.code === 'KeyE' ? 'explorer' : event.shiftKey && event.code === 'KeyG' ? 'git' : undefined
       if (view !== undefined) { event.preventDefault(); service.show(view) }
     }
     window.addEventListener('keydown', onKey, true); return () => window.removeEventListener('keydown', onKey, true)

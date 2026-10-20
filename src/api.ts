@@ -1,6 +1,6 @@
 import type { HostContext } from './context.ts'
-import { copyEntry, createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, moveEntry, readDocument, renameEntry, saveDocument, searchWorkspace } from './host.ts'
-import type { SearchRequest } from './types.ts'
+import { copyEntry, createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, moveEntry, readDocument, renameEntry, replaceInWorkspace, saveDocument, searchWorkspace } from './host.ts'
+import type { SearchReplaceRequest, SearchRequest } from './types.ts'
 import { completionIndexFor, completionTelemetry, resolveProvider } from './completion/register.ts'
 import { completionSettings } from './completion/settings.ts'
 import { groupForSession, paramsForGroup } from './completion/experiment.ts'
@@ -62,6 +62,8 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
     // 「粘贴（剪切）」：同样是保持原名，只是成功后源条目消失（宿主用原子 rename 实现）。
     case 'fs.move': return moveEntry(cwd, stringField(body, 'path'), stringField(body, 'directory'))
     case 'search': return searchWorkspace(cwd, body as unknown as SearchRequest, signal)
+    // 替换：`replace` 必须是字符串（允许空串＝删除命中），其余字段与 search 同形。
+    case 'search.replace': return replaceInWorkspace(cwd, { ...(body as unknown as SearchReplaceRequest), replace: stringField(body, 'replace') }, signal)
     case 'git.status': return gitStatus(cwd)
     case 'git.action': return gitAction(cwd, stringField(body, 'action'), typeof body.path === 'string' ? body.path : undefined, typeof body.value === 'string' ? body.value : undefined)
     default: throw new WorkbenchError('not-found', `unknown workbench API method ${method}`, 404)

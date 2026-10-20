@@ -31,6 +31,23 @@ export interface SearchRequest {
  * `truncated` 是新增的稳定语义字段，两者当前同值（匹配条数上限或 stdout 字节上限触发时为 true）。
  */
 export interface SearchResult { matches: SearchMatch[]; limited: boolean; truncated: boolean }
+/**
+ * 替换请求：在搜索请求之上加「替换成什么」。
+ *
+ * 与 VS Code 一致，替换按**行内**语义执行（ripgrep 默认也是行内匹配）：
+ * `regex` 为 false 时查询串按字面量处理，为 true 时支持 `$1`/`$&` 这类 JS 替换模式。
+ */
+export interface SearchReplaceRequest extends SearchRequest {
+  /** 替换文本；允许空串（即删除命中）。 */
+  replace: string
+  /** 保留大小写：命中全大写/全小写/首字母大写时，替换结果跟随同样形态。 */
+  preserveCase?: boolean
+  /** 只替换这一处（行列与某条搜索命中一致）；缺省替换范围内的全部命中。 */
+  only?: { path: string; line: number; column: number }
+}
+
+/** 替换结果：被改写的文件与替换总处数（没有命中时两者都为空/0）。 */
+export interface SearchReplaceResult { files: string[]; replacements: number }
 /** One working tree change. */
 export interface GitChange { path: string; originalPath?: string; index: string; worktree: string; staged: boolean; untracked: boolean }
 /** Local repository state. */

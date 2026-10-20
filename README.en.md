@@ -39,7 +39,8 @@
 
 - **Files and editor**: lazy explorer with create, upload, drag-and-drop, rename, delete, and Git markers; Monaco tabs provide dirty state, atomic saves, and conflict notices.
 - **Preview**: Markdown source, outline, relative links, and images; built-in PDF paging and zoom plus DOCX rendering, with DOC/ODT download support.
-- **Search and Git**: `@vscode/ripgrep` supports case, whole-word, regex, and path filters; Git covers stage, unstage, discard, commit, branches, diffs, commit files, and the graph.
+- **Search and replace**: `@vscode/ripgrep` supports case, whole-word, regex, and path filters. Results are grouped by file with every hit highlighted; replace one match, replace all, preserve case, step through hits with `F4` / `Shift+F4`, and the last search (including replacement text and options) survives reloads.
+- **Git**: stage, unstage, discard, commit, branches, diffs, commit files, and the graph.
 - **Terminal**: `node-pty` and xterm with up to eight sessions, rename, a right-side switcher, splits, ANSI output, and Ctrl+C. The host pre-warms the default shell when the panel opens, so a new terminal usually already has its prompt in the replay buffer; collapsing the panel or switching tabs keeps the xterm instances instead of rebuilding and replaying them.
 - **Layout and DSH**: the primary view, terminal panel, and DSH conversation sidebar can be shown and resized independently; widths are dragged and double-clicked back to default in place, so they are not duplicated as settings.
 - **Settings page**: the "AIDE" page under DSH settings is one scrolling page grouped into Editor / AI completion / Terminal / Shortcuts / About and diagnostics, using the same type scale as DSH settings (row title 14/20, hint 12/18, controls 14/32px). Editor: font size, line height, tab size and insert-spaces, word wrap (off/on/bounded), minimap, overview ruler, occurrence highlight, whitespace rendering, cursor style, smooth scrolling, sticky scroll, auto save and delay. AI completion: master switch, trigger delay, model route (**listed from the models DSH already has configured**, free-form allowed), failure fallback, plus the model actually in use and the last failure. Also terminal font size, the shortcut reference, and reset-to-defaults.
@@ -153,7 +154,9 @@ Submitted listings (under review / sync): [awesome-dsh-plugins #145](https://git
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+Shift+E` | Open Explorer |
-| `Ctrl+Shift+F` | Open Search |
+| `Ctrl+Shift+F` | Open Search and focus the input |
+| `Ctrl+Shift+H` | Open Search with the replace row expanded |
+| `F4` / `Shift+F4` | Next / previous search result |
 | `Ctrl+Shift+G` | Open Source Control |
 | `Ctrl+S` | Save the active file |
 | `Ctrl+Alt+B` | Toggle the DSH conversation panel |
