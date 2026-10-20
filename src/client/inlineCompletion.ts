@@ -261,20 +261,34 @@ export class InlineCompletionController {
    *
    * 触发时机由本插件决定，而不是交给 Monaco 的自动触发链路 —— 原因见 provide。
    */
+  /**
+   * 安全地让 Monaco 执行一个 inlineSuggest 命令。
+   *
+   * 防抖回调可能在编辑器 dispose 之后才到点（关文件、切标签、测试桩），此时 editor.trigger
+   * 可能不存在或抛错；这类迟到的触发没有任何意义，静默跳过即可 —— 否则会变成进程级未捕获异常
+   *（Windows CI 上 3 个 unhandled error 就是这么来的）。
+   */
+  private fireInlineSuggestCommand(command: 'hide' | 'trigger'): void {
+    const editor = this.options.editor as { trigger?: (source: string, id: string, args: object) => void }
+    if (typeof editor.trigger !== 'function') return
+    try { editor.trigger('dsh-completion', `editor.action.inlineSuggest.${command}`, {}) }
+    catch { /* 编辑器已经销毁：迟到的触发直接忽略。 */ }
+  }
+
   private scheduleTrigger(): void {
     if (this.triggerTimer !== undefined) clearTimeout(this.triggerTimer)
     // 补全被关掉时不排触发，并且把已经显示的幻影文本收起来 —— 否则它会留成一条点不动的建议，
     // 一路跟着光标走到下一次编辑。这里读的是当前的偏好值，所以设置页里一关就生效，不用刷新。
     if (!getPreferences().completionEnabled) {
       this.triggerTimer = undefined
-      this.options.editor.trigger('dsh-completion', 'editor.action.inlineSuggest.hide', {})
+      this.fireInlineSuggestCommand('hide')
       return
     }
     const language = this.languageOf()
     const plan = triggerPlan({ isNewLine: this.tracker.lastChangeHadNewline }, language, this.paramsOf())
     this.triggerTimer = setTimeout(() => {
       this.triggerTimer = undefined
-      this.options.editor.trigger('dsh-completion', 'editor.action.inlineSuggest.trigger', {})
+      this.fireInlineSuggestCommand('trigger')
     }, plan.delayMs)
   }
 
