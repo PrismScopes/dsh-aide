@@ -64,11 +64,18 @@ replace or disable `ui-layout`.
   the host. Create/close/rename each issue a single request, and the panel plus every opened xterm instance stay mounted.
   Deployments that do not want the extra idle shell can disable prewarming with `DWV_TERMINAL_PREWARM=0` (creation still works).
 - **Rendering and IO**: file-change pushes only update tab state when something actually changed; resizer drags move CSS
-  variables and persist the layout once on pointer-up; the Markdown outline and the Git commit graph are memoized.
+  variables and persist the layout once on pointer-up; the Markdown outline and the Git commit graph are memoized; Monaco
+  models are evicted LRU (open/dirty files kept, limit 12); TextMate grammars are installed once per language and files over
+  3000 lines or 200 KB fall back to the built-in tokenizer.
+- **Completion**: request bodies carry only the cursor window (about 20 KB for a 1 MB document, with the prompt byte-identical
+  to sending the whole document); response headers no longer wait for the retrieval index; snippets are read by line range and
+  multiple hits in one file share a single scan.
+- **Git**: `gitRoot` and rev-parse results are cached, bringing a Git panel refresh from five `git.exe` invocations to two on the
+  warm path; committing reuses the status the host returns and only refetches the log.
 - **Reproducible baseline**: `pnpm perf` measures terminal startup (spawn / first byte / interactive readiness for three shells),
   client bundle size and compile cost, and host entry load cost, writing `perf-results/baseline.json` (gitignored). Current
-  numbers: `lib/client.js` 2.63 MB (about 562 KB gzip, about 25 ms V8 compile), host entry import about 29 ms, `pwsh`
-  interactive on Windows about 530 ms.
+  numbers: `lib/client.js` 2.65 MB (about 570 KB gzip, about 28 ms V8 compile), host entry import about 37 ms, `pwsh`
+  interactive on Windows about 560 ms.
 - **No native/Rust addon**: the host's hot spots are Windows process creation (about a 44 ms floor per `git.exe` or shell) and
   protocol overhead, not JavaScript computation. Pure JS optimizations capture most of the win, while a native addon would need
   to cover both the Electron and Node ABIs with per-platform prebuilds, which is not worth the install size and distribution cost.

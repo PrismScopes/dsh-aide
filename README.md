@@ -85,10 +85,15 @@
   预热后新建的宿主侧只剩约 2ms；新建/关闭/重命名各只发一次请求，面板与已打开的 xterm 实例常驻。
   不想多一个后台 shell 的部署可以用环境变量 `DWV_TERMINAL_PREWARM=0` 关掉预热（新建照常可用）。
 - **渲染与 IO**：文件变更推送只在真的影响标签状态时更新；拖动分隔条期间只改 CSS 变量，松开才写入布局偏好并持久化；
-  Markdown 大纲与 Git 提交图按内容 memo，不在每次输入时重算。
+  Markdown 大纲与 Git 提交图按内容 memo，不在每次输入时重算；Monaco 模型按 LRU 回收（保留打开/脏文件，上限 12），
+  TextMate 语法按语言只安装一次、超过 3000 行或 200KB 的文件回退内置分词。
+- **补全**：请求体只带光标附近的窗口（1MB 文档约 20KB，prompt 与全量发送逐字节相同）；响应头不再等检索索引，
+  片段按命中行范围读取，同一文件的多条命中一次扫描。
+- **Git**：`gitRoot` 与 rev-parse 结果缓存，Git 面板刷新从 5 个 `git.exe` 降到热路径 2 个；提交后复用宿主返回的状态，
+  只重取提交日志。
 - **可复现基准**：`pnpm perf` 覆盖终端启动（三种 shell 的 spawn / 首字节 / 可交互时间）、客户端包体积与解析成本、
-  宿主入口加载成本，结果写到 `perf-results/baseline.json`（已 gitignore）。当前基线：`lib/client.js` 2.63 MB
-  （gzip 约 562 KB，V8 编译约 25 ms），宿主入口 import 约 29 ms，Windows 上 `pwsh` 可交互约 530 ms。
+  宿主入口加载成本，结果写到 `perf-results/baseline.json`（已 gitignore）。当前基线：`lib/client.js` 2.65 MB
+  （gzip 约 570 KB，V8 编译约 28 ms），宿主入口 import 约 37 ms，Windows 上 `pwsh` 可交互约 560 ms。
 - **没有引入 native/Rust 扩展**：宿主热点主要是 Windows 进程创建（每次 `git.exe` / shell 约 44ms 的下限）与协议开销，
   不是 JS 计算；这部分纯 JS 优化即可拿到大部分收益，而 native addon 需要同时覆盖 Electron 与 Node 两套 ABI、
   每个平台各带预编译产物，安装体积与分发成本不划算。
