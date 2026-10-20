@@ -39,19 +39,19 @@ export interface WorkspacePathErrors {
   notDirectory?(raw: string): WorkbenchError
 }
 
-export interface ExistingPathOptions {
+interface ExistingPathOptions {
   /** `directory`：realpath 之后还要求确实是目录（终端「在终端中打开」用）。 */
   kind?: 'any' | 'directory'
 }
 
-export interface ResolvedExistingPath {
+interface ResolvedExistingPath {
   /** 词法解析后的绝对路径（未展开符号链接），写操作用它。 */
   absolute: string
   /** realpath 展开后的实际路径；`kind: 'directory'` 时已确认是目录。 */
   actual: string
 }
 
-export interface ResolvedCreatablePath {
+interface ResolvedCreatablePath {
   absolute: string
 }
 

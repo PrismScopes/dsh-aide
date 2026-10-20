@@ -23,17 +23,17 @@ export interface DshModelRoutes { default: string | null; routes: DshModelRoute[
  * 而不是在设置页上静默变成空下拉。运行时仍然逐个判断方法是否存在 —— 不同的 DSH 组合与
  * 适配器能力不同，缺方法不该等于报错。
  */
-export interface DshLlmCatalog {
+interface DshLlmCatalog {
   listProviders(): unknown[] | Promise<unknown[]>
   listModels(provider: string): unknown[] | Promise<unknown[]>
 }
 
 /** `ctx.get('agentDefaultModel')` 里本模块用到的部分。 */
-export interface DshDefaultModelCatalog {
+interface DshDefaultModelCatalog {
   currentSelection(): unknown
 }
 
-export interface CollectModelRoutesOptions {
+interface CollectModelRoutesOptions {
   /** 每次 listModels 的超时，默认 1500ms。 */
   timeoutMs?: number
   /** 返回的路由条数上限，默认 200 条。 */
@@ -41,7 +41,7 @@ export interface CollectModelRoutesOptions {
 }
 
 /** 端点所需的最小宿主能力：只用来登记一条路由，便于测试时替换。 */
-export interface ModelRouteHelpers {
+interface ModelRouteHelpers {
   /** 复用宿主 connection 服务的认证结果；返回 false 时已经写好 401/403 响应。 */
   authorize(req: IncomingMessage, res: ServerResponse): boolean
   send(res: ServerResponse, status: number, payload: unknown): void

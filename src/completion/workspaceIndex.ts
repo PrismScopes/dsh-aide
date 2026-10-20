@@ -22,13 +22,13 @@ interface LineRange {
 }
 
 /** 索引自身的产物与常见依赖/构建目录都排除在外。 */
-export const INDEX_IGNORED_DIRS = new Set([
+const INDEX_IGNORED_DIRS = new Set([
   '.git', '.dsh-workbench', 'node_modules', 'dist', 'out', 'build', 'lib', 'coverage', '.next', '.nuxt',
   '.venv', 'venv', '__pycache__', '.cache', 'tmp', 'target', 'vendor', '.idea', '.vscode-test',
 ])
 
 /** 参与索引的扩展名到语言标识的映射。没有映射的文件不参与索引。 */
-export const LANGUAGE_BY_EXTENSION = new Map<string, string>([
+const LANGUAGE_BY_EXTENSION = new Map<string, string>([
   ['.ts', 'typescript'], ['.tsx', 'typescriptreact'], ['.mts', 'typescript'], ['.cts', 'typescript'],
   ['.js', 'javascript'], ['.jsx', 'javascriptreact'], ['.mjs', 'javascript'], ['.cjs', 'javascript'],
   ['.py', 'python'], ['.rb', 'ruby'], ['.go', 'go'], ['.rs', 'rust'], ['.java', 'java'],
@@ -39,7 +39,7 @@ export const LANGUAGE_BY_EXTENSION = new Map<string, string>([
   ['.toml', 'toml'], ['.json', 'json'],
 ])
 
-export interface RefreshReport {
+interface RefreshReport {
   scanned: number
   indexed: number
   unchanged: number
@@ -48,7 +48,7 @@ export interface RefreshReport {
   durationMs: number
 }
 
-export interface WorkspaceIndexOptions {
+interface WorkspaceIndexOptions {
   root: string
   params: CompletionParams
   /** 覆盖索引文件位置；默认在工作区内。 */

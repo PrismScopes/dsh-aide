@@ -8,7 +8,7 @@ export interface WorkbenchWebServer {
   registerUpgrade(route: { path: string; handler(req: IncomingMessage, socket: Duplex, head: Buffer): void | Promise<void> }): () => void
 }
 /** DSH 0.2.1 起会话的工作目录由 workingDirectory 服务统一解析，header.cwd 不再是权威来源。 */
-export interface WorkbenchSessions { get(id: string): Session | undefined }
+interface WorkbenchSessions { get(id: string): Session | undefined }
 /** DSH 0.2.1 起连接认证由 connection 服务负责（含部署感知的 Host/Origin 防线）。 */
 export interface WorkbenchConnection { requestRejection(req: IncomingMessage): 401 | 403 | undefined }
 export type HostContext = CordisContext & {

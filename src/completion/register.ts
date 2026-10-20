@@ -23,9 +23,9 @@ import { appendFile } from 'node:fs/promises'
 import path from 'node:path'
 
 /** 只是把 cordis 的可选服务读取收窄到本模块需要的形状。 */
-export interface CompletionContextLike { get(name: string): unknown }
+interface CompletionContextLike { get(name: string): unknown }
 
-export interface ResolvedCompletionProvider {
+interface ResolvedCompletionProvider {
   provider: CompletionProvider
   profile: PromptProfile
   source: 'dsh' | 'local' | 'http'
@@ -112,7 +112,7 @@ function readRequest(body: unknown): CompletionRequest {
   }
 }
 
-export interface CompletionRouteHelpers {
+interface CompletionRouteHelpers {
   /** 复用宿主 connection 服务的认证结果；返回 false 时已经写好 401/403 响应。 */
   authorize(req: IncomingMessage, res: ServerResponse): boolean
   readBody(req: IncomingMessage): Promise<unknown>

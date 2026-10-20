@@ -10,7 +10,7 @@ import type { CompletionEvent, CompletionRequest } from './protocol.ts'
 import type { CompletionProvider } from './provider.ts'
 import { evaluateSecurity, rulesForRequest, type SecurityHit } from './security.ts'
 
-export interface CompletionServiceOptions {
+interface CompletionServiceOptions {
   provider: CompletionProvider
   params?: CompletionParams
   /** 不含时用 provider 自己的默认排布（由调用方按模型挑好）。 */

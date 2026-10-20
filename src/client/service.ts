@@ -30,7 +30,7 @@ export interface WorkbenchLayout {
   /** 底部面板高度（px）。 */
   bottomHeight: number
 }
-export const LAYOUT_LIMITS = { sideWidth: { min: 210, max: 640 }, chatWidth: { min: 400, max: 720 } } as const
+const LAYOUT_LIMITS = { sideWidth: { min: 210, max: 640 }, chatWidth: { min: 400, max: 720 } } as const
 /** 底部面板高度的边界与默认值；上限依赖视口高度，所以单独用函数算。 */
 export const BOTTOM_HEIGHT = { min: 120, default: 260, fallbackMax: 2000 } as const
 export const DEFAULT_LAYOUT: WorkbenchLayout = { primarySideVisible: true, chatVisible: true, sideWidth: 210, chatWidth: 420, bottomHeight: BOTTOM_HEIGHT.default }

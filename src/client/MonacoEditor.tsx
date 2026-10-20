@@ -523,8 +523,8 @@ export function MonacoDiffEditor(props: { uri: string; original: string; modifie
 export const MODEL_CACHE_LIMIT = 12
 
 /** 回收函数需要的最小模型接口（单测注入假模型，不碰真 Monaco）。 */
-export interface CachedModelHandle { uri: string; dispose(): void }
-export interface PruneModelsOptions {
+interface CachedModelHandle { uri: string; dispose(): void }
+interface PruneModelsOptions {
   /** 正在使用 + 仍打开的标签（URI 形式）。 */
   keep: ReadonlySet<string>
   /** 脏文件：无论上限如何都保留（调用方通常已把它们并进 keep，这里再兜一层）。 */

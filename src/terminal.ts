@@ -231,7 +231,7 @@ export interface ProfileProbe {
 }
 
 /** probe 的真实实现：读 PATH、查文件系统。 */
-export function systemProbe(env: NodeJS.ProcessEnv = process.env): ProfileProbe {
+function systemProbe(env: NodeJS.ProcessEnv = process.env): ProfileProbe {
   const path = env.PATH ?? ''
   return {
     exists: candidate => existsSync(candidate),
@@ -358,13 +358,13 @@ export function resolveTerminalDirectory(cwd: string, directory?: string): strin
 /** Own interactive terminals by their canonical workspace directory. */
 
 /** 交给 pty 的启动参数（抽成类型是为了让测试能注入假的 spawn）。 */
-export interface PtySpawnOptions { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }
-export type SpawnPty = (shell: string, args: string[], options: PtySpawnOptions) => IPty
+interface PtySpawnOptions { name: string; cols: number; rows: number; cwd: string; env: Record<string, string> }
+type SpawnPty = (shell: string, args: string[], options: PtySpawnOptions) => IPty
 
 const defaultSpawn: SpawnPty = (shell, args, options) => pty.spawn(shell, args, options)
 
 /** 预热 shell 最多留多久：没人来认领就杀掉，别让后台多出一个长期 shell。 */
-export const PREWARM_TTL_MS = 90_000
+const PREWARM_TTL_MS = 90_000
 
 /**
  * 是否启用终端预热。

@@ -51,7 +51,7 @@ const SESSION_RETRY_MS = 400
 const SESSION_RETRY_LIMIT = 12
 
 /** 宿主明确表示「会话还没就绪」——这是启动期的瞬时状态，可重试。 */
-export function sessionPending(error: unknown): boolean {
+function sessionPending(error: unknown): boolean {
   return error instanceof ApiError && error.code === 'session-unknown'
 }
 
@@ -90,7 +90,7 @@ async function readAnswer<T>(response: Response): Promise<T> {
 }
 
 /** 补全这一步最终由谁执行：DSH 的模型服务、本地兜底，还是自定义的 OpenAI 兼容端点。 */
-export type CompletionSource = 'dsh' | 'local' | 'http'
+type CompletionSource = 'dsh' | 'local' | 'http'
 /** 某一项设置的来源，同时也是优先级：环境变量 > 设置文件 > 插件配置 > 默认值。 */
 export type SettingsSource = 'env' | 'file' | 'config' | 'default'
 

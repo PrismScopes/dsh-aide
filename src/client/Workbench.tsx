@@ -178,7 +178,7 @@ export function directoryAffected(directory:string,changedPaths:string[]):boolea
 /** Return the basename shown in a tab while preserving its full internal path. */
 export function tabLabel(tab:Pick<Tab,'path'|'title'|'diffSourcePath'>):string{const path=tab.title??tab.diffSourcePath??tab.path.replace(/^diff:/,'');return path.split(/[\\/]/).at(-1)??path}
 /** 自动保存策略（纯函数）：设置页的 editorAutoSave 只在 afterDelay 时启用，延迟已由 preferences 夹到 500–10000。 */
-export interface AutoSaveSettings { enabled: boolean; delayMs: number }
+interface AutoSaveSettings { enabled: boolean; delayMs: number }
 export function autoSaveSettings(preferences: Pick<WorkbenchPreferences, 'editorAutoSave' | 'editorAutoSaveDelayMs'>): AutoSaveSettings {
   return { enabled: preferences.editorAutoSave === 'afterDelay', delayMs: preferences.editorAutoSaveDelayMs }
 }
