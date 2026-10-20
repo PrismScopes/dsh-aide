@@ -10,10 +10,40 @@ export interface TerminalConnection {
 
 export interface TerminalWorkspaceSnapshot { terminals: readonly TerminalInfo[]; loading: boolean; error?: string }
 
+/** 一次「新建终端」的请求：可带工作区相对目录（在终端中打开）与 shell 档位。 */
+export interface TerminalRequest { directory?: string; profile?: string; title?: string }
+
+/**
+ * 待处理的新建请求。
+ *
+ * 为什么需要排队：菜单里点「在终端中打开」时底部面板可能还没挂载（React 的状态更新是异步的），
+ * 同步派发的事件会落在空处，表现为「点了没反应」。队列让「请求」与「谁来执行」解耦：
+ * 面板挂载后先 drain 一次，之后的请求由事件唤醒。
+ */
+const pendingTerminalRequests: TerminalRequest[] = []
+
+/**
+ * 请求新建一个终端；面板不在时先排队，挂载后自动补建。
+ *
+ * 同时派发两个事件：
+ *   - `dvw-terminal-show`：让工作台把底部面板切到终端（这一层由 Workbench 负责，它持有 overlay 状态）；
+ *   - `dvw-terminal-new`：通知已挂载的终端面板去取队列。
+ * 分开是因为「把面板打开」与「建终端」在被调用方眼里是两件事：面板没挂载时，后一个事件没人听。
+ */
+export function requestTerminal(request: TerminalRequest = {}): void {
+  pendingTerminalRequests.push(request)
+  window.dispatchEvent(new Event('dvw-terminal-show'))
+  window.dispatchEvent(new Event('dvw-terminal-new'))
+}
+
+/** 取走当前排队的请求（由终端面板在挂载后与每次事件时调用）。 */
+export function takeTerminalRequests(): TerminalRequest[] { return pendingTerminalRequests.splice(0) }
+
 /** Browser client for the workbench's local terminal transport. */
 export interface TerminalWorkspace {
   refresh(): Promise<void>
-  create(options?: { title?: string; profile?: string }): Promise<TerminalInfo>
+  /** `directory` 是工作区相对路径：新的 shell 直接在该目录里启动（「在终端中打开」）。 */
+  create(options?: { title?: string; profile?: string; directory?: string }): Promise<TerminalInfo>
   close(id: string): Promise<void>
   rename(id: string, title: string): Promise<void>
   connect(id: string): TerminalConnection
@@ -112,7 +142,7 @@ export class TerminalWorkspaceController implements TerminalWorkspace {
     } catch (error) { this.set({ ...this.snapshot, loading: false, error: error instanceof Error ? error.message : String(error) }) }
   }
 
-  async create(options: { title?: string; profile?: string } = {}): Promise<TerminalInfo> { const answer = await request<TerminalInfo>('create', { sessionId: this.sessionId, ...(options.title === undefined ? {} : { title: options.title }), ...(options.profile === undefined ? {} : { profile: options.profile }) }); this.wsBase = answer.wsBase ?? this.wsBase; await this.refresh(); return answer.value }
+  async create(options: { title?: string; profile?: string; directory?: string } = {}): Promise<TerminalInfo> { const answer = await request<TerminalInfo>('create', { sessionId: this.sessionId, ...(options.title === undefined ? {} : { title: options.title }), ...(options.profile === undefined ? {} : { profile: options.profile }), ...(options.directory === undefined || options.directory === '' ? {} : { directory: options.directory }) }); this.wsBase = answer.wsBase ?? this.wsBase; await this.refresh(); return answer.value }
   async close(id: string): Promise<void> { await request('close', { sessionId: this.sessionId, id }); await this.refresh() }
   async rename(id: string, title: string): Promise<void> { await request('rename', { sessionId: this.sessionId, id, title }); await this.refresh() }
   connect(id: string): TerminalConnection { return new SocketConnection(this.sessionId, id, this.wsBase) }

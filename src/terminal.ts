@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, realpathSync } from 'node:fs'
-import { basename, delimiter, dirname, join } from 'node:path'
+import { existsSync, realpathSync, statSync } from 'node:fs'
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import * as pty from 'node-pty'
 import type { IPty } from 'node-pty'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { HostContext } from './context.ts'
-import { cwdFor } from './host.ts'
-import { authorize, readBody, send, sendError } from './wire.ts'
+import { cwdFor, inside } from './host.ts'
+import { authorize, readBody, send, sendError, WorkbenchError } from './wire.ts'
 
 export interface TerminalInfo { id: string; title: string; cwd: string; running: boolean; exitCode?: number; sequence: number }
 export interface TerminalOutput { sequence: number; data: string }
@@ -212,6 +212,33 @@ export function uniqueTerminalTitle(base: string, taken: Iterable<string>): stri
   return `${base} (${used.size})`
 }
 
+/**
+ * 解析「在终端中打开」给出的目录。
+ *
+ * 客户端传的是工作区**相对**路径（`''`/缺省表示工作区根）。终端会在这个目录里启动一个真正的
+ * shell，所以边界必须和文件 API 一样严：不接收绝对路径、解析后必须落在工作区内、不能借符号链接
+ * 跳出去、且必须是一个已存在的目录。任何一条不满足都抛 400 —— 这是调用方给了不能用的目录，
+ * 不是宿主内部错误；消息直接显示在终端面板里，所以要能看懂。
+ *
+ * 为什么在宿主侧再解析一次而不是信任客户端：相对路径可能带 `..`，而且符号链接只有宿主看得见；
+ * 只靠客户端校验等于把「能起 shell 的目录」交给页面决定。
+ */
+export function resolveTerminalDirectory(cwd: string, directory?: string): string {
+  const root = realpathSync(cwd)
+  if (directory === undefined || directory === '') return root
+  if (isAbsolute(directory)) throw new WorkbenchError('directory-invalid', '终端目录必须是工作区内的相对路径', 400)
+  const absolute = resolve(root, directory)
+  if (!inside(root, absolute)) throw new WorkbenchError('directory-outside', `终端目录超出了工作区：${directory}`, 400)
+  // realpath 既确认存在，也把符号链接展开 —— 越界可能只体现在展开之后的目标上。
+  let actual: string
+  try { actual = realpathSync(absolute) } catch { throw new WorkbenchError('directory-not-found', `终端目录不存在：${directory}`, 400) }
+  if (!inside(root, actual)) throw new WorkbenchError('directory-outside', `终端目录通过符号链接指向了工作区之外：${directory}`, 400)
+  let isDirectory: boolean
+  try { isDirectory = statSync(actual).isDirectory() } catch { throw new WorkbenchError('directory-not-found', `终端目录不存在：${directory}`, 400) }
+  if (!isDirectory) throw new WorkbenchError('directory-invalid', `终端目录不是文件夹：${directory}`, 400)
+  return actual
+}
+
 /** Own interactive terminals by their canonical workspace directory. */
 export class TerminalManager {
   private readonly workspaces = new Map<string, Map<string, TerminalHandle>>()
@@ -220,14 +247,21 @@ export class TerminalManager {
 
   list(cwd: string): TerminalInfo[] { return [...(this.workspaces.get(this.workspace(cwd))?.values() ?? [])].map(handle => ({ ...handle.info })) }
 
-  create(cwd: string, title?: string, profileId?: string): TerminalInfo {
+  /**
+   * 新建终端。`directory` 是工作区相对目录（「在终端中打开」），缺省为工作区根。
+   *
+   * pty 的 cwd 用解析后的绝对目录，`TerminalInfo.cwd` 记的也是它 —— 客户端据此显示
+   * 「这个终端实际在哪」，重连/排查时不必再猜一次。
+   */
+  create(cwd: string, title?: string, profileId?: string, directory?: string): TerminalInfo {
     const key = this.workspace(cwd)
+    const target = resolveTerminalDirectory(key, directory)
     const terminals = this.workspaces.get(key) ?? new Map<string, TerminalHandle>()
     this.workspaces.set(key, terminals)
     if (terminals.size >= MAX_TERMINALS) throw new Error(`terminal limit reached (${MAX_TERMINALS})`)
     const { shell, args } = terminalShell(profileId)
-    const child = pty.spawn(shell, args, { name: 'xterm-256color', cols: 80, rows: 24, cwd: key, env: sanitizedTerminalEnv(process.env) })
-    const info: TerminalInfo = { id: randomUUID(), title: title || uniqueTerminalTitle(terminalTitleBase(shell), [...terminals.values()].map(handle => handle.info.title)), cwd: key, running: true, sequence: 0 }
+    const child = pty.spawn(shell, args, { name: 'xterm-256color', cols: 80, rows: 24, cwd: target, env: sanitizedTerminalEnv(process.env) })
+    const info: TerminalInfo = { id: randomUUID(), title: title || uniqueTerminalTitle(terminalTitleBase(shell), [...terminals.values()].map(handle => handle.info.title)), cwd: target, running: true, sequence: 0 }
     const handle: TerminalHandle = { info, process: child, replay: new ReplayBuffer(), listeners: new Set() }
     terminals.set(info.id, handle)
     child.onData(data => {
@@ -317,7 +351,8 @@ export function installTerminal(ctx: HostContext): void {
       let value: unknown
       if (method === 'list') value = manager.list(cwd)
       else if (method === 'profiles') value = terminalProfiles()
-      else if (method === 'create') value = manager.create(cwd, typeof body.title === 'string' ? body.title : undefined, typeof body.profile === 'string' ? body.profile : undefined)
+      // `directory` 来自「在终端中打开」：工作区相对路径，由 resolveTerminalDirectory 校验后作为 pty 的 cwd。
+      else if (method === 'create') value = manager.create(cwd, typeof body.title === 'string' ? body.title : undefined, typeof body.profile === 'string' ? body.profile : undefined, typeof body.directory === 'string' ? body.directory : undefined)
       else if (method === 'close') { manager.close(cwd, typeof body.id === 'string' ? body.id : ''); value = manager.list(cwd) }
       else if (method === 'rename') value = manager.rename(cwd, typeof body.id === 'string' ? body.id : '', typeof body.title === 'string' ? body.title : '')
       else throw new Error('unknown terminal method')

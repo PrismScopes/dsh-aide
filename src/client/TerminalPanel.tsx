@@ -1,10 +1,15 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
+import { copyText, readClipboard } from './clipboard.ts'
+import { ContextMenu } from './ContextMenu.tsx'
+import type { MenuEntry } from './ContextMenu.tsx'
 import { Icon } from './Icon.tsx'
+import { terminalPaneMenuItems } from './menus.ts'
 import type { BottomPanelProps } from './service.ts'
-import { isTerminalProtocolReply, TerminalWorkspaceController } from './terminal.ts'
+import { isTerminalProtocolReply, takeTerminalRequests, TerminalWorkspaceController } from './terminal.ts'
+import type { TerminalRequest } from './terminal.ts'
 
 /** 终端配色接入 DSH 主题令牌（渲染期从 body 读；无 document 时回落到原固定值）。 */
 function terminalTheme(colorScheme: 'dark' | 'light') {
@@ -25,7 +30,26 @@ function terminalTheme(colorScheme: 'dark' | 'light') {
 /** 回放结束后解除输入抑制的等待时间。 */
 const REPLAY_SETTLE_MS = 250
 
-function XtermView({ workspace, id, colorScheme }: { workspace: TerminalWorkspaceController; id: string; colorScheme: 'dark' | 'light' }) {
+/** 右键菜单落在哪一类元素上。列表与标签的「重命名」分别落在自己的输入框里。 */
+interface TerminalMenuState { kind: 'tab' | 'list' | 'pane'; id: string; x: number; y: number }
+
+interface XtermViewProps {
+  workspace: TerminalWorkspaceController
+  id: string
+  colorScheme: 'dark' | 'light'
+  /**
+   * 把 xterm 实例交给父组件。
+   *
+   * 为什么由子组件上报而不是父层自己 new：实例的生命周期绑定在 DOM 挂载上，只有这里知道
+   * 什么时候创建、什么时候 dispose。父层只留一个 ref Map，供右键菜单的复制/粘贴/全选/清屏
+   * 找到当前实例 —— 不把 terminal 状态复制到父组件（那会立刻产生两份不同步的状态）。
+   */
+  onReady(id: string, terminal: Terminal | undefined): void
+  /** 内容区右键：只上报位置，菜单是面板级的一次性状态。 */
+  onContextMenu(id: string, position: { x: number; y: number }): void
+}
+
+function XtermView({ workspace, id, colorScheme, onReady, onContextMenu }: XtermViewProps) {
   const root = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal>()
   const replaying = useRef(false)
@@ -40,6 +64,7 @@ function XtermView({ workspace, id, colorScheme }: { workspace: TerminalWorkspac
     const fit = new FitAddon()
     terminal.loadAddon(fit)
     terminal.open(root.current)
+    onReady(id, terminal)
     const connection = workspace.connect(id)
     const output = connection.subscribe(value => {
       if (value.replay) {
@@ -66,10 +91,24 @@ function XtermView({ workspace, id, colorScheme }: { workspace: TerminalWorkspac
     // 用户打字完全没有反应，而提示符照常显示。
     try { fit.fit() } catch { /* 尺寸未就绪时允许失败，下一次 ResizeObserver 会重试。 */ }
     try { terminal.focus() } catch (exception) { setError(exception instanceof Error ? exception.message : String(exception)) }
-    return () => { terminalRef.current = undefined; clearTimeout(replayGuard.current); observer.disconnect(); input.dispose(); resize.dispose(); output(); connection.close(); terminal.dispose() }
-  }, [workspace, id])
+    return () => {
+      // 先注销实例再 dispose：菜单若在卸载期间还被打开，拿到的必须是「没有实例」而不是已销毁的实例。
+      onReady(id, undefined)
+      terminalRef.current = undefined
+      clearTimeout(replayGuard.current)
+      observer.disconnect()
+      input.dispose()
+      resize.dispose()
+      output()
+      connection.close()
+      terminal.dispose()
+    }
+  }, [workspace, id, onReady])
   useEffect(() => { if (terminalRef.current !== undefined) terminalRef.current.options.theme = terminalTheme(colorScheme) }, [colorScheme])
-  return error === undefined ? <div ref={root} className="dvw-terminal-host" /> : <div className="dvw-terminal-error">{error}</div>
+  if (error !== undefined) return <div className="dvw-terminal-error">{error}</div>
+  // 内容区右键：xterm 自己也会处理 contextmenu（默认弹出浏览器菜单），这里统一 preventDefault，
+  // 改由工作台的共享菜单接管。终端专属的复制/粘贴走菜单项，不再依赖浏览器原生菜单。
+  return <div ref={root} className="dvw-terminal-host" onContextMenu={event => { event.preventDefault(); onContextMenu(id, { x: event.clientX, y: event.clientY }) }} />
 }
 
 /** Render interactive terminal tabs in the workbench bottom panel. */
@@ -79,43 +118,100 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
   const workspace = workspaceRef.current.value
   const snapshot = useSyncExternalStore(workspace.subscribe.bind(workspace), workspace.getSnapshot.bind(workspace))
   const [active, setActive] = useState<string>()
-  const [context, setContext] = useState<{ id: string; x: number; y: number }>()
   // 改名可能从两个地方发起（顶部标签、右侧列表），输入框只在该处出现，所以记下 where。
   const [renaming, setRenaming] = useState<{ id: string; value: string; where: 'tab' | 'list' }>()
   const [split, setSplit] = useState<readonly string[]>()
   const [sideWidth, setSideWidth] = useState(220)
+  const [menu, setMenu] = useState<TerminalMenuState>()
+  const [actionError, setActionError] = useState<string>()
+  /** 已挂载的 xterm 实例，key 是终端 id；未显示的窗格不在里面（它没有被渲染，也就没有实例）。 */
+  const terminals = useRef(new Map<string, Terminal>())
+
+  const reportError = (error: unknown) => setActionError(error instanceof Error ? error.message : String(error))
+
+  /** 建终端（可能来自右键菜单、面板头按钮或队列）。directory/title/profile 原样透传给宿主。 */
+  const createTerminal = useCallback((request: TerminalRequest) => {
+    setActionError(undefined)
+    void workspace.create(request).then(value => setActive(value.id)).catch(reportError)
+  }, [workspace])
+
+  /**
+   * 取走排队的「新建终端」请求。
+   *
+   * requestTerminal 会同时入队并派发事件：面板没挂载时事件没人听、只能靠挂载时补一次 drain；
+   * 已挂载时事件立刻到达、队列里也就那一批。因此 drain 的返回值就是「这次事件有没有被队列消费」，
+   * 为 false 时才回落到旧行为（面板头分体按钮带 detail.profile 直接建一个）。
+   */
+  const drainRequests = useCallback(() => {
+    const requests = takeTerminalRequests()
+    if (requests.length === 0) return false
+    // 逐条建：同一个队列里的请求各自带 directory/profile/title，不能合并。
+    for (const request of requests) createTerminal(request)
+    return true
+  }, [createTerminal])
+
+  const registerTerminal = useCallback((id: string, terminal: Terminal | undefined) => {
+    if (terminal === undefined) terminals.current.delete(id)
+    else terminals.current.set(id, terminal)
+  }, [])
+
+  const openPaneMenu = useCallback((id: string, position: { x: number; y: number }) => {
+    setMenu({ kind: 'pane', id, x: position.x, y: position.y })
+  }, [])
+
+  const closeMenu = useCallback(() => setMenu(undefined), [])
+
   // 打开面板只把已有的终端列出来，不自动新建：启动时不该凭空多出一个 shell。
   // 当前终端由下面那条 effect 按列表挑，这里不需要自己设。
   useEffect(() => { void workspace.refresh() }, [workspace])
   useEffect(() => { if (snapshot.terminals.length > 0 && (!active || !snapshot.terminals.some(value => value.id === active))) setActive(snapshot.terminals[0]?.id) }, [snapshot.terminals, active])
-  // profile 从事件 detail 里拿：面板头部那个分体按钮选中某个 shell 时会带上它。
-  // 命令入口（terminal.new）派发的是不带 detail 的普通事件，走平台默认 shell。
+  // 挂载时先 drain：从资源管理器「在终端中打开」时面板可能还没挂载，那时事件没人听。
+  useEffect(() => { drainRequests() }, [drainRequests])
+  // 事件到达后先 drain；队列为空才走旧行为（面板头分体按钮的 detail.profile）。
   useEffect(() => {
     const create = (event: Event) => {
+      if (drainRequests()) return
       const profile = (event as CustomEvent<{ profile?: string }>).detail?.profile
-      void workspace.create(profile === undefined ? {} : { profile }).then(value => setActive(value.id))
+      createTerminal(profile === undefined ? {} : { profile })
     }
     window.addEventListener('dvw-terminal-new', create)
     return () => window.removeEventListener('dvw-terminal-new', create)
-  }, [workspace])
-  useEffect(() => {
-    if (context === undefined) return
-    const close = () => setContext(undefined)
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
-    window.addEventListener('pointerdown', close)
-    window.addEventListener('keydown', escape)
-    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', escape) }
-  }, [context])
+  }, [drainRequests, createTerminal])
   // 关掉终端后若 split 只剩空数组，要收回 undefined：留下空数组会让 `split ?? [active]` 一直选中
   // 那个空数组，之后新建的终端也不会渲染（面板整块空白）。
-  const closeTerminal = (id: string) => { setContext(undefined); setSplit(current => { const next = current?.filter(value => value !== id); return next === undefined || next.length === 0 ? undefined : next }); void workspace.close(id) }
-  const saveRename = (id: string) => { const title = renaming?.id === id ? renaming.value.trim() : ''; setRenaming(undefined); if (title) void workspace.rename(id, title) }
-  const splitTerminal = (first = active) => { if (first === undefined) return; void workspace.create().then(value => { setSplit(current => [...(current?.includes(first) ? current : [first]), value.id]); setActive(value.id) }) }
+  const closeTerminal = (id: string) => { setMenu(undefined); setSplit(current => { const next = current?.filter(value => value !== id); return next === undefined || next.length === 0 ? undefined : next }); void workspace.close(id).catch(reportError) }
+  const saveRename = (id: string) => { const title = renaming?.id === id ? renaming.value.trim() : ''; setRenaming(undefined); if (title) void workspace.rename(id, title).catch(reportError) }
+  const splitTerminal = (first = active) => {
+    if (first === undefined) return
+    setActionError(undefined)
+    void workspace.create().then(value => { setSplit(current => [...(current?.includes(first) ? current : [first]), value.id]); setActive(value.id) }).catch(reportError)
+  }
   // 兜底不变量：只要还有终端，就必须有一个窗格在渲染 —— 状态一旦错位，面板会整块空白。
   const panes = (split ?? (active === undefined ? [] : [active])).filter(id => snapshot.terminals.some(value => value.id === id))
   const shown = panes.length > 0 || snapshot.terminals.length === 0 ? panes : snapshot.terminals.slice(0, 1).map(value => value.id)
   const selectTerminal = (id: string) => { setActive(id); setSplit(current => current?.includes(id) ? current : [id]) }
   const startRename = (id: string, title: string, where: 'tab' | 'list') => setRenaming({ id, value: title, where })
+  /** 右键菜单的操作对象：菜单打开时记下的终端 id，动作再回到实例 Map / 列表里取。 */
+  const menuTerminal = (id: string) => terminals.current.get(id)
+  const openTabMenu = (id: string, kind: 'tab' | 'list', position: { x: number; y: number }) => {
+    setMenu({ kind, id, x: position.x, y: position.y })
+  }
+  // 菜单内容来自共享的 menus.ts（唯一一份终端菜单描述），这里只接动作。
+  // 标签/列表与内容区给的是同一份菜单：终端里没有别的入口发现复制、粘贴、清屏这些操作。
+  const menuEntries: MenuEntry[] = menu === undefined ? [] : terminalPaneMenuItems({
+    hasSelection: menuTerminal(menu.id)?.hasSelection() ?? false,
+    canSplit: snapshot.terminals.some(value => value.id === menu.id),
+    actions: {
+      newTerminal: () => createTerminal({}),
+      split: () => splitTerminal(menu.id),
+      rename: () => { const terminal = snapshot.terminals.find(value => value.id === menu.id); if (terminal !== undefined) startRename(terminal.id, terminal.title, menu.kind === 'list' ? 'list' : 'tab') },
+      kill: () => closeTerminal(menu.id),
+      copySelection: () => { const text = menuTerminal(menu.id)?.getSelection() ?? ''; if (text !== '') void copyText(text) },
+      paste: () => { void readClipboard().then(text => { if (text !== undefined) menuTerminal(menu.id)?.paste(text) }) },
+      selectAll: () => menuTerminal(menu.id)?.selectAll(),
+      clear: () => menuTerminal(menu.id)?.clear(),
+    },
+  })
   // 顶部标签栏。渲染进面板头里留给面板的那块容器（见 service.ts 的 BottomPanelProps.header）：
   // 标签状态属于终端面板，上提到 Workbench 只为了挪个位置会把职责弄乱。
   const renameInput = (id: string, className: string) => <input className={className} value={renaming?.value ?? ''} autoFocus aria-label="终端名称"
@@ -129,7 +225,7 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
         : <button type="button" role="tab" aria-selected={active === value.id} className="dvw-bottom-tab-label" title={value.title}
             onClick={() => selectTerminal(value.id)}
             onDoubleClick={() => startRename(value.id, value.title, 'tab')}
-            onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}>
+            onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); openTabMenu(value.id, 'tab', { x: event.clientX, y: event.clientY }) }}>
             <Icon name="terminal"/><span className="dvw-bottom-tab-name">{value.title}</span>
           </button>}
       <button type="button" className="dvw-bottom-tab-close" title="终止终端" aria-label={`终止 ${value.title}`} onClick={() => closeTerminal(value.id)}>
@@ -137,11 +233,12 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
       </button>
     </span>)}
   </div>
+  const error = snapshot.error ?? actionError
   return <div className="dvw-terminal-root">
     {header !== undefined && header !== null && createPortal(tabs, header)}
     <div className="dvw-terminal-main">
-      {snapshot.error !== undefined && <div className="dvw-terminal-error">{snapshot.error}</div>}
-      <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>{snapshot.terminals.length === 0 ? <div className="dvw-terminal-empty">没有找到终端</div> : shown.map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} />)}</div>
+      {error !== undefined && <div className="dvw-terminal-error">{error}</div>}
+      <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>{snapshot.terminals.length === 0 ? <div className="dvw-terminal-empty">没有找到终端</div> : shown.map(id => <XtermView key={id} workspace={workspace} id={id} colorScheme={colorScheme} onReady={registerTerminal} onContextMenu={openPaneMenu} />)}</div>
     </div>
     <div className="dvw-terminal-resizer" role="separator" aria-label="终端列表宽度" aria-orientation="vertical" onPointerDown={event => {
       if (event.button !== 0) return
@@ -154,8 +251,8 @@ export function TerminalPanel({ sessionId, colorScheme, header }: BottomPanelPro
       window.addEventListener('pointerup', up)
     }}/>
     <aside className="dvw-terminal-tabs" style={{ width: sideWidth }} aria-label="终端会话">
-      <div className="dvw-terminal-list">{snapshot.terminals.map(value => renaming?.id === value.id && renaming.where === 'list' ? <div key={value.id} className="dvw-terminal-entry" data-active><div className="dvw-terminal-tab"><Icon name="terminal"/>{renameInput(value.id, 'dvw-terminal-rename')}</div></div> : <div key={value.id} className="dvw-terminal-entry" data-active={active === value.id}><button className="dvw-terminal-tab" onClick={() => selectTerminal(value.id)} onDoubleClick={() => startRename(value.id, value.title, 'list')} onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); setContext({ id: value.id, x: event.clientX, y: event.clientY }) }}><Icon name="terminal"/>{value.title}</button><div className="dvw-terminal-entry-actions"><button title="拆分终端" onClick={() => splitTerminal(value.id)}><Icon name="split-horizontal"/></button><button title="终止终端" onClick={() => closeTerminal(value.id)}><Icon name="trash"/></button></div></div>)}</div>
-      {context !== undefined && <div className="dvw-terminal-menu" role="menu" style={{ left: context.x, top: context.y }} onPointerDown={event => event.stopPropagation()}><button role="menuitem" onClick={() => { const terminal = snapshot.terminals.find(value => value.id === context.id); setContext(undefined); if (terminal !== undefined) setRenaming({ id: terminal.id, value: terminal.title, where: 'list' }) }}>重命名</button><button className="dvw-terminal-menu-danger" role="menuitem" onClick={() => closeTerminal(context.id)}>终止终端</button></div>}
+      <div className="dvw-terminal-list">{snapshot.terminals.map(value => renaming?.id === value.id && renaming.where === 'list' ? <div key={value.id} className="dvw-terminal-entry" data-active><div className="dvw-terminal-tab"><Icon name="terminal"/>{renameInput(value.id, 'dvw-terminal-rename')}</div></div> : <div key={value.id} className="dvw-terminal-entry" data-active={active === value.id}><button className="dvw-terminal-tab" onClick={() => selectTerminal(value.id)} onDoubleClick={() => startRename(value.id, value.title, 'list')} onContextMenu={event => { event.preventDefault(); selectTerminal(value.id); openTabMenu(value.id, 'list', { x: event.clientX, y: event.clientY }) }}><Icon name="terminal"/>{value.title}</button><div className="dvw-terminal-entry-actions"><button title="拆分终端" onClick={() => splitTerminal(value.id)}><Icon name="split-horizontal"/></button><button title="终止终端" onClick={() => closeTerminal(value.id)}><Icon name="trash"/></button></div></div>)}</div>
     </aside>
+    {menu !== undefined && <ContextMenu position={{ x: menu.x, y: menu.y }} entries={menuEntries} label="终端操作" onClose={closeMenu}/>}
   </div>
 }

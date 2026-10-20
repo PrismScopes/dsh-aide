@@ -1,5 +1,5 @@
 import type { HostContext } from './context.ts'
-import { createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, readDocument, renameEntry, saveDocument, searchWorkspace, uploadFile, workspacePreviewFile } from './host.ts'
+import { copyEntry, createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, moveEntry, readDocument, renameEntry, saveDocument, searchWorkspace, uploadFile, workspacePreviewFile } from './host.ts'
 import type { SearchRequest } from './types.ts'
 import { DEFAULT_COMPLETION_PARAMS } from './completion/params.ts'
 import { completionIndexFor, completionTelemetry, resolveProvider } from './completion/register.ts'
@@ -58,6 +58,10 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
     case 'fs.create': return createEntry(cwd, stringField(body, 'path'), body.kind === 'directory' ? 'directory' : 'file').then(() => ({ ok: true }))
     case 'fs.rename': return renameEntry(cwd, stringField(body, 'path'), stringField(body, 'nextPath')).then(() => ({ ok: true }))
     case 'fs.delete': return deleteEntry(cwd, stringField(body, 'path')).then(() => ({ ok: true }))
+    // 资源管理器的「粘贴（复制）」：目标目录里保持原名，已存在则 409 由客户端提示。
+    case 'fs.copy': return copyEntry(cwd, stringField(body, 'path'), stringField(body, 'directory'))
+    // 「粘贴（剪切）」：同样是保持原名，只是成功后源条目消失（宿主用原子 rename 实现）。
+    case 'fs.move': return moveEntry(cwd, stringField(body, 'path'), stringField(body, 'directory'))
     case 'search': return searchWorkspace(cwd, body as unknown as SearchRequest, signal)
     case 'git.status': return gitStatus(cwd)
     case 'git.action': return gitAction(cwd, stringField(body, 'action'), typeof body.path === 'string' ? body.path : undefined, typeof body.value === 'string' ? body.value : undefined)

@@ -4,6 +4,18 @@ import lightPlus from '@shikijs/themes/light-plus'
 import { installTextMate } from './textmateHighlight.ts'
 import { attachInlineCompletion } from './inlineCompletion.ts'
 import { getPreferences, usePreferences } from './preferences.ts'
+import { ContextMenu } from './ContextMenu.tsx'
+import { copyText, readClipboard } from './clipboard.ts'
+import {
+  copyFallbackText,
+  diffMenuItems,
+  editorMenuItems,
+  menuPositionAtCursor,
+  pasteFallbackText,
+  type DiffMenuActions,
+  type EditorMenuContext,
+  type SelectionSnapshot,
+} from './editorMenus.ts'
 
 type Monaco = typeof import('monaco-editor')
 declare global { interface Window { require?: { (ids: string[], done: () => void): void; config(value: unknown): void }; monaco?: Monaco } }
@@ -214,21 +226,239 @@ export function loadMonaco(): Promise<Monaco> {
   return loading
 }
 
+type MonacoEditorInstance = import('monaco-editor').editor.IStandaloneCodeEditor
+type MonacoDiffInstance = import('monaco-editor').editor.IStandaloneDiffEditor
+type MonacoMouseEvent = import('monaco-editor').editor.IEditorMouseEvent
+
+/**
+ * 菜单里的动作优先交给 Monaco 的命令执行：撤销栈、多光标、格式化确认这些语义都在编辑器内部，
+ * 绕过它直接改模型会留下不一致的状态。命令不存在时 trigger 会抛错，吞掉并记日志即可。
+ */
+function runCommand(instance: MonacoEditorInstance, commandId: string): void {
+  try {
+    instance.trigger('dsh-menu', commandId, null)
+  } catch (failure) {
+    console.warn(`[dvw] 编辑器命令 ${commandId} 执行失败：`, failure)
+  }
+}
+
+/**
+ * 尝试执行 Monaco 的剪贴板动作，返回「是否已经由 Monaco 处理」。
+ *
+ * 为什么要回退：Monaco 的 clipboard 贡献在模块装载时就按环境能力决定这些动作**是否注册**
+ * （见 monaco 的 clipboard.js：`document.queryCommandSupported('copy')`、navigator.clipboard
+ * 是否存在）。桌面端 dsh-app:// 自定义协议下可能被判定为非安全上下文，动作直接不存在，
+ * 或者 run 时抛权限错误；这时用工作台的 copyText/readClipboard 自己读写剪贴板。
+ */
+async function runClipboardAction(instance: MonacoEditorInstance, actionId: string): Promise<boolean> {
+  const action = instance.getAction(actionId)
+  if (action === null || !action.isSupported()) return false
+  try {
+    await action.run()
+    return true
+  } catch (failure) {
+    console.warn(`[dvw] 剪贴板动作 ${actionId} 不可用，改用工作台回退：`, failure)
+    return false
+  }
+}
+
+/** 主选区快照；复制/剪切回退只认它（判定逻辑放在 editorMenus.ts，便于单测）。 */
+function selectionSnapshot(instance: MonacoEditorInstance): SelectionSnapshot {
+  const model = instance.getModel()
+  const selection = instance.getSelection()
+  if (model === null || selection === null) return { hasSelection: false, text: '' }
+  return { hasSelection: !selection.isEmpty(), text: model.getValueInRange(selection) }
+}
+
+/** 键盘打开菜单时的落点：光标处；取不到光标（滚出视口）时回退到编辑器中心。 */
+function cursorMenuPosition(instance: MonacoEditorInstance): { x: number; y: number } {
+  const position = instance.getPosition()
+  const visible = position === null ? null : instance.getScrolledVisiblePosition(position)
+  const rect = instance.getContainerDomNode().getBoundingClientRect()
+  return menuPositionAtCursor(visible, { left: rect.left, top: rect.top, width: rect.width, height: rect.height })
+}
+
+/**
+ * 剪切：Monaco 动作优先。动作不存在时先回退复制，**复制成功才删选区** ——
+ * 否则会出现「剪贴板没内容但文本已经没了」。
+ */
+async function cutSelection(instance: MonacoEditorInstance): Promise<void> {
+  if (await runClipboardAction(instance, 'editor.action.clipboardCutAction')) return
+  const selection = instance.getSelection()
+  const text = copyFallbackText(selectionSnapshot(instance))
+  if (selection === null || text === undefined) return
+  if (!(await copyText(text))) return
+  instance.pushUndoStop()
+  instance.executeEdits('dsh-menu', [{ range: selection, text: '' }])
+  instance.pushUndoStop()
+}
+
+/** 复制：Monaco 动作优先；动作不可用时直接读模型选区（差异编辑器的只读模型也适用）。 */
+async function copySelection(instance: MonacoEditorInstance): Promise<void> {
+  if (await runClipboardAction(instance, 'editor.action.clipboardCopyAction')) return
+  const text = copyFallbackText(selectionSnapshot(instance))
+  if (text !== undefined) await copyText(text)
+}
+
+/** 粘贴：Monaco 动作不可用时读剪贴板，再以一次可撤销的编辑插到主选区。 */
+async function pasteInto(instance: MonacoEditorInstance): Promise<void> {
+  if (await runClipboardAction(instance, 'editor.action.clipboardPasteAction')) return
+  const text = pasteFallbackText(await readClipboard())
+  const selection = instance.getSelection()
+  if (text === undefined || selection === null) return
+  instance.pushUndoStop()
+  instance.executeEdits('dsh-menu', [{ range: selection, text }])
+  instance.pushUndoStop()
+}
+
+/** 把编辑器实例翻译成菜单上下文：菜单数据本身不 import monaco，判定逻辑才好单测。 */
+function editorMenuContext(instance: MonacoEditorInstance, save: () => void): EditorMenuContext {
+  return {
+    readOnly: instance.getRawOptions().readOnly === true,
+    hasSelection: selectionSnapshot(instance).hasSelection,
+    // 有没有可用的格式化器只能问 Monaco：TS worker / 已注册的 DocumentFormattingEditProvider。
+    canFormat: instance.getAction('editor.action.formatDocument')?.isSupported() === true,
+    actions: {
+      undo: () => { runCommand(instance, 'undo') },
+      redo: () => { runCommand(instance, 'redo') },
+      cut: () => { void cutSelection(instance) },
+      copy: () => { void copySelection(instance) },
+      paste: () => { void pasteInto(instance) },
+      selectAll: () => { runCommand(instance, 'editor.action.selectAll') },
+      find: () => { runCommand(instance, 'actions.find') },
+      replace: () => { runCommand(instance, 'editor.action.startFindReplaceAction') },
+      gotoLine: () => { runCommand(instance, 'editor.action.gotoLine') },
+      commentLine: () => { runCommand(instance, 'editor.action.commentLine') },
+      format: () => { runCommand(instance, 'editor.action.formatDocument') },
+      fold: () => { runCommand(instance, 'editor.fold') },
+      unfold: () => { runCommand(instance, 'editor.unfold') },
+      save,
+    },
+  }
+}
+
+/** 差异编辑器里右键落在哪一侧；复制/全选只作用于该侧的只读模型。 */
+type DiffSide = 'original' | 'modified'
+
+function diffActions(instance: MonacoDiffInstance, side: DiffSide, toggleDisplay: () => void): DiffMenuActions {
+  const inner = side === 'original' ? instance.getOriginalEditor() : instance.getModifiedEditor()
+  return {
+    copy: () => { void copySelection(inner) },
+    selectAll: () => { runCommand(inner, 'editor.action.selectAll') },
+    toggleDisplay,
+  }
+}
+
+/**
+ * 差异编辑器本身没有 onContextMenu，菜单挂到它的两个子编辑器上。
+ * contextmenu:false 之后 Monaco 不再 preventDefault，浏览器原生（英文）菜单会冒出来，所以这里
+ * 自己拦住；overlay widget（如查找输入框）保留浏览器原生菜单，否则输入框里的复制粘贴就没了。
+ *
+ * 键盘入口也一并补上：`contextmenu:false` 同时让 Monaco 不再处理 Shift+F10 / ContextMenu 键，
+ * addCommand 的动态键位优先级高于内置的 editor.action.showContextMenu（后者现在不弹菜单）。
+ * 键盘打开时落在 modified 侧，位置取该侧的光标。
+ */
+function bindDiffContextMenu(monaco: Monaco, instance: MonacoDiffInstance, open: (side: DiffSide, x: number, y: number, keyboard: boolean) => void): void {
+  for (const side of ['original', 'modified'] as const) {
+    const inner = side === 'original' ? instance.getOriginalEditor() : instance.getModifiedEditor()
+    inner.onContextMenu((event: MonacoMouseEvent) => {
+      if (event.target.type === monaco.editor.MouseTargetType.OVERLAY_WIDGET) return
+      event.event.preventDefault()
+      event.event.stopPropagation()
+      open(side, event.event.browserEvent.clientX, event.event.browserEvent.clientY, false)
+    })
+  }
+  const modified = instance.getModifiedEditor()
+  const openAtCursor = () => {
+    // 动态键位是全局的（不随编辑器销毁），用焦点判断保证只有当前差异编辑器响应。
+    if (!instance.hasTextFocus()) return
+    const point = cursorMenuPosition(modified)
+    open('modified', point.x, point.y, true)
+  }
+  modified.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F10, openAtCursor)
+  modified.addCommand(monaco.KeyCode.ContextMenu, openAtCursor)
+}
+
 export function MonacoDiffEditor(props: { uri: string; original: string; modified: string; mode: 'inline' | 'split'; theme: 'dark' | 'light' }) {
-  const root=useRef<HTMLDivElement>(null);const editor=useRef<import('monaco-editor').editor.IStandaloneDiffEditor>();const models=useRef<{original:import('monaco-editor').editor.ITextModel;modified:import('monaco-editor').editor.ITextModel}>();const [error,setError]=useState<string>()
-  const preferences=usePreferences()
-  useEffect(()=>{let disposed=false;void loadMonaco().then(async monaco=>{if(disposed||root.current===null)return;const safe=props.uri.replace(/^\/+/, '');const original=monaco.editor.createModel(props.original,undefined,monaco.Uri.parse(`dvw-diff-original:///${safe}`));const modified=monaco.editor.createModel(props.modified,undefined,monaco.Uri.parse(`dvw-diff-modified:///${safe}`));models.current={original,modified};await installTextMate(monaco,[original.getLanguageId()]).catch(()=>undefined);if(disposed||root.current===null)return;const instance=monaco.editor.createDiffEditor(root.current,{automaticLayout:true,readOnly:true,renderSideBySide:props.mode==='split',theme:dshMonacoTheme(monaco,props.theme),...preferenceOptions(),...WORKBENCH_EDITOR_CHROME,originalEditable:false,ignoreTrimWhitespace:false});instance.setModel({original,modified});editor.current=instance}).catch(error=>setError(error instanceof Error?error.message:String(error)));return()=>{disposed=true;editor.current?.dispose();editor.current=undefined;models.current?.original.dispose();models.current?.modified.dispose();models.current=undefined}},[props.uri])
-  useEffect(()=>{const value=models.current;if(value===undefined)return;if(value.original.getValue()!==props.original)value.original.setValue(props.original);if(value.modified.getValue()!==props.modified)value.modified.setValue(props.modified)},[props.original,props.modified])
-  useEffect(()=>{editor.current?.updateOptions({renderSideBySide:props.mode==='split'})},[props.mode])
-  useEffect(()=>{if(window.monaco!==undefined)window.monaco.editor.setTheme(dshMonacoTheme(window.monaco,props.theme))},[props.theme])
+  const root = useRef<HTMLDivElement>(null)
+  const editor = useRef<MonacoDiffInstance>()
+  const models = useRef<{ original: import('monaco-editor').editor.ITextModel; modified: import('monaco-editor').editor.ITextModel }>()
+  const [error, setError] = useState<string>()
+  // 右键位置与它落在哪一侧；keyboard 标记用于关闭后把焦点还给编辑器（键盘用户不能丢焦点）。
+  const [menu, setMenu] = useState<{ x: number; y: number; side: DiffSide; keyboard: boolean } | undefined>(undefined)
+  // 显示方式的临时覆盖：菜单里的「切换并排/行内」只影响本组件，工作台的 mode 变化时再以它为准。
+  const [modeOverride, setModeOverride] = useState<'inline' | 'split' | undefined>(undefined)
+  const displayMode = modeOverride ?? props.mode
+  const preferences = usePreferences()
+  useEffect(() => {
+    let disposed = false
+    setMenu(undefined)
+    void loadMonaco().then(async (monaco) => {
+      if (disposed || root.current === null) return
+      const safe = props.uri.replace(/^\/+/, '')
+      const original = monaco.editor.createModel(props.original, undefined, monaco.Uri.parse(`dvw-diff-original:///${safe}`))
+      const modified = monaco.editor.createModel(props.modified, undefined, monaco.Uri.parse(`dvw-diff-modified:///${safe}`))
+      models.current = { original, modified }
+      await installTextMate(monaco, [original.getLanguageId()]).catch(() => undefined)
+      if (disposed || root.current === null) return
+      const instance = monaco.editor.createDiffEditor(root.current, {
+        automaticLayout: true,
+        readOnly: true,
+        renderSideBySide: props.mode === 'split',
+        theme: dshMonacoTheme(monaco, props.theme),
+        ...preferenceOptions(),
+        ...WORKBENCH_EDITOR_CHROME,
+        // 关掉 Monaco 内置的英文右键菜单，改用工作台统一的中文 ContextMenu（原因见 editorMenus.ts）。
+        contextmenu: false,
+        originalEditable: false,
+        ignoreTrimWhitespace: false,
+      })
+      instance.setModel({ original, modified })
+      editor.current = instance
+      bindDiffContextMenu(monaco, instance, (side, x, y, keyboard) => { if (!disposed) setMenu({ x, y, side, keyboard }) })
+    }).catch(error => setError(error instanceof Error ? error.message : String(error)))
+    return () => {
+      disposed = true
+      editor.current?.dispose()
+      editor.current = undefined
+      models.current?.original.dispose()
+      models.current?.modified.dispose()
+      models.current = undefined
+    }
+  }, [props.uri])
+  useEffect(() => {
+    const value = models.current
+    if (value === undefined) return
+    if (value.original.getValue() !== props.original) value.original.setValue(props.original)
+    if (value.modified.getValue() !== props.modified) value.modified.setValue(props.modified)
+  }, [props.original, props.modified])
+  // 菜单临时切过显示方式后，工作台自己的 mode 变化要以 props.mode 为准，清掉覆盖。
+  useEffect(() => { setModeOverride(undefined) }, [props.mode])
+  useEffect(() => { editor.current?.updateOptions({ renderSideBySide: displayMode === 'split' }) }, [displayMode])
+  useEffect(() => { if (window.monaco !== undefined) window.monaco.editor.setTheme(dshMonacoTheme(window.monaco, props.theme)) }, [props.theme])
   // 字号与换行改了就地更新：差异视图跟着设置页一起变，不必关掉再打开。
-  useEffect(()=>{editor.current?.updateOptions({fontSize:preferences.editorFontSize,wordWrap:preferences.editorWordWrap?'on':'off'})},[preferences.editorFontSize,preferences.editorWordWrap])
-  return error===undefined?<div className="dvw-diff dvw-monaco-diff" data-mode={props.mode} data-render-side-by-side={props.mode==='split'} ref={root}/>:<div className="dvw-error">{error}</div>
+  useEffect(() => { editor.current?.updateOptions({ fontSize: preferences.editorFontSize, wordWrap: preferences.editorWordWrap ? 'on' : 'off' }) }, [preferences.editorFontSize, preferences.editorWordWrap])
+  const entries = menu === undefined || editor.current === undefined ? undefined : diffMenuItems({
+    hasSelection: selectionSnapshot(menu.side === 'original' ? editor.current.getOriginalEditor() : editor.current.getModifiedEditor()).hasSelection,
+    mode: displayMode,
+    actions: diffActions(editor.current, menu.side, () => setModeOverride(displayMode === 'split' ? 'inline' : 'split')),
+  })
+  // 键盘打开的菜单关闭后把焦点还给编辑器；鼠标打开的不要抢 —— 用户可能是点在别处关闭的。
+  const closeMenu = () => {
+    setMenu(undefined)
+    if (menu?.keyboard === true) editor.current?.getModifiedEditor().focus()
+  }
+  return error === undefined
+    ? <>
+        <div className="dvw-diff dvw-monaco-diff" data-mode={displayMode} data-render-side-by-side={displayMode === 'split'} ref={root}/>
+        {menu !== undefined && entries !== undefined && <ContextMenu position={{ x: menu.x, y: menu.y }} label="差异编辑器操作" entries={entries} onClose={closeMenu}/>}
+      </>
+    : <div className="dvw-error">{error}</div>
 }
 
 export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' | 'light'; line?: number; column?: number; sessionId?: string; onChange(value: string): void; onSave(): void }) {
   const root = useRef<HTMLDivElement>(null)
-  const editor = useRef<import('monaco-editor').editor.IStandaloneCodeEditor>()
+  const editor = useRef<MonacoEditorInstance>()
   const callbacks = useRef({ onChange: props.onChange, onSave: props.onSave })
   callbacks.current = { onChange: props.onChange, onSave: props.onSave }
   const preferences = usePreferences()
@@ -237,8 +467,12 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
   const valueRef = useRef(props.value)
   valueRef.current = props.value
   const [error, setError] = useState<string>()
+  // 右键菜单的位置；keyboard 标记用于关闭后把焦点还给编辑器（键盘用户不能丢焦点）。
+  // 菜单项在渲染时按当时的选区现算。
+  const [menu, setMenu] = useState<{ x: number; y: number; keyboard: boolean } | undefined>(undefined)
   useEffect(() => {
     let disposed = false; let model: import('monaco-editor').editor.ITextModel | undefined
+    setMenu(undefined)
     void loadMonaco().then(async (monaco) => {
       if (disposed || root.current === null) return
       const uri = monaco.Uri.parse(`file:///${props.uri.replace(/^\/+/, '')}`)
@@ -251,10 +485,35 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       if (disposed || root.current === null) return
       if (model.getValue() !== valueRef.current) model.setValue(valueRef.current)
       // 偏好取当前值而不是本次渲染的闭包值：这个 effect 不随偏好重跑（重跑会重建编辑器）。
-      const instance = monaco.editor.create(root.current, { ...WORKBENCH_EDITOR_CHROME, ...preferenceOptions(), model, automaticLayout: true, theme: dshMonacoTheme(monaco, props.theme) })
+      const instance = monaco.editor.create(root.current, {
+        ...WORKBENCH_EDITOR_CHROME,
+        ...preferenceOptions(),
+        model,
+        automaticLayout: true,
+        theme: dshMonacoTheme(monaco, props.theme),
+        // 关掉 Monaco 内置的英文右键菜单，改用工作台统一的中文 ContextMenu（原因见 editorMenus.ts）。
+        contextmenu: false,
+      })
       editor.current = instance
       const change = instance.onDidChangeModelContent(() => callbacks.current.onChange(instance.getValue()))
       instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => callbacks.current.onSave())
+      // contextmenu:false 之后 Monaco 不再 preventDefault，浏览器原生菜单会冒出来，这里自己拦住；
+      // overlay widget（查找框等）保留原生菜单，否则里面的输入框没有复制粘贴。
+      instance.onContextMenu((event: MonacoMouseEvent) => {
+        if (event.target.type === monaco.editor.MouseTargetType.OVERLAY_WIDGET) return
+        event.event.preventDefault()
+        event.event.stopPropagation()
+        if (!disposed) setMenu({ x: event.event.browserEvent.clientX, y: event.event.browserEvent.clientY, keyboard: false })
+      })
+      // 键盘入口：contextmenu:false 同时让 Monaco 不再处理 Shift+F10 / ContextMenu 键，所以自己注册。
+      // addCommand 的动态键位优先级高于内置的 editor.action.showContextMenu（后者现在不弹菜单）；
+      // 动态键位是全局的（不随编辑器销毁），用 disposed + 焦点判断保证只有当前编辑器响应。
+      const openMenuAtCursor = () => {
+        if (disposed || !instance.hasTextFocus()) return
+        setMenu({ ...cursorMenuPosition(instance), keyboard: true })
+      }
+      instance.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F10, openMenuAtCursor)
+      instance.addCommand(monaco.KeyCode.ContextMenu, openMenuAtCursor)
       if (props.line !== undefined) { instance.setPosition({ lineNumber: props.line, column: props.column ?? 1 }); instance.revealLineInCenter(props.line); instance.focus() }
       // 行内补全跟着编辑器实例走：没有 sessionId（比如预览场景）就不接。
       const detachCompletion = props.sessionId === undefined ? undefined : attachInlineCompletion(monaco, instance, { sessionId: props.sessionId })
@@ -270,5 +529,18 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
   useEffect(() => { editor.current?.updateOptions({ fontSize: preferences.editorFontSize }) }, [preferences.editorFontSize])
   useEffect(() => { editor.current?.updateOptions({ wordWrap: preferences.editorWordWrap ? 'on' : 'off' }) }, [preferences.editorWordWrap])
   useEffect(() => { editor.current?.updateOptions({ minimap: { enabled: preferences.editorMinimap } }) }, [preferences.editorMinimap])
-  return error === undefined ? <div ref={root} style={{ position: 'absolute', inset: 0 }} /> : <div className="dvw-error">{error}</div>
+  const entries = menu === undefined || editor.current === undefined
+    ? undefined
+    : editorMenuItems(editorMenuContext(editor.current, () => callbacks.current.onSave()))
+  // 键盘打开的菜单关闭后把焦点还给编辑器；鼠标打开的不要抢 —— 用户可能是点在别处关闭的。
+  const closeMenu = () => {
+    setMenu(undefined)
+    if (menu?.keyboard === true) editor.current?.focus()
+  }
+  return error === undefined
+    ? <>
+        <div ref={root} style={{ position: 'absolute', inset: 0 }} />
+        {menu !== undefined && entries !== undefined && <ContextMenu position={{ x: menu.x, y: menu.y }} label="编辑器操作" entries={entries} onClose={closeMenu}/>}
+      </>
+    : <div className="dvw-error">{error}</div>
 }

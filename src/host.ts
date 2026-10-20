@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
-import { access, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import type { HostContext } from './context.ts'
 import type { FileDocument, FileEntry, GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus, SearchMatch, SearchRequest } from './types.ts'
@@ -137,6 +137,55 @@ export async function deleteEntry(cwd: string, path: string): Promise<void> {
   if (path === '') throw new WorkbenchError('root-delete', 'cannot delete workspace root', 403)
   const { absolute } = await workspacePath(cwd, path)
   await rm(absolute, { recursive: true, force: false })
+}
+
+/**
+ * 把工作区里的文件或目录复制到另一个目录下（保持原名）。
+ *
+ * 三个约束，都是为了「粘错了还能救」：
+ *   - 目标已存在就报 409，绝不覆盖 —— 这里没有撤销，覆盖等于静默毁掉对方的文件；
+ *   - 目录不能粘进自己的子目录（否则 node 的 cp 会无限递归，或留下半份副本）；
+ *   - 目标目录必须已存在（workspacePath 的 create 分支会校验父目录），不替用户顺手建目录。
+ */
+export async function copyEntry(cwd: string, source: string, directory: string): Promise<FileEntry> {
+  if (source === '') throw new WorkbenchError('path-invalid', 'source path is required')
+  const from = await workspacePath(cwd, source)
+  const name = basename(source)
+  const targetPath = directory === '' ? name : `${directory}/${name}`
+  const to = await workspacePath(cwd, targetPath, true)
+  if (from.absolute === to.absolute || inside(from.absolute, to.absolute)) throw new WorkbenchError('copy-into-self', 'cannot copy a directory into itself', 400)
+  await access(to.absolute, constants.F_OK).then(
+    () => { throw new WorkbenchError('target-exists', 'destination already exists', 409) },
+    () => undefined,
+  )
+  await cp(from.absolute, to.absolute, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true })
+  const info = await stat(to.absolute)
+  return { name, path: relativePath(to.root, to.absolute), kind: info.isDirectory() ? 'directory' : 'file', size: info.size, mtimeMs: info.mtimeMs }
+}
+
+/**
+ * 把工作区里的文件或目录移动到另一个目录下（保持原名），即资源管理器的「剪切 → 粘贴」。
+ *
+ * 约束与 copyEntry 一致（不覆盖、不移入自身、目标目录必须已存在），另外这里用 `rename` 而不是
+ * 「复制再删除」：同一块盘上的 rename 是原子的，中途失败不会留下「源已删、目标只有一半」的状态。
+ * 跨盘时 rename 会抛 EXDEV，宁可把错误报给用户，也不静默退化成慢且非原子的复制。
+ */
+export async function moveEntry(cwd: string, source: string, directory: string): Promise<FileEntry> {
+  if (source === '') throw new WorkbenchError('path-invalid', 'source path is required')
+  const from = await workspacePath(cwd, source)
+  const name = basename(source)
+  const targetPath = directory === '' ? name : `${directory}/${name}`
+  const to = await workspacePath(cwd, targetPath, true)
+  // 先判「目标已存在」再判「移入自身」：剪切后粘回原目录时，目标就是源文件本身，
+  // 报「目标已存在」比报「不能把目录移进自己」准确（后者对文件更是误导）。
+  await access(to.absolute, constants.F_OK).then(
+    () => { throw new WorkbenchError('target-exists', 'destination already exists', 409) },
+    () => undefined,
+  )
+  if (from.absolute === to.absolute || inside(from.absolute, to.absolute)) throw new WorkbenchError('copy-into-self', 'cannot move a directory into itself', 400)
+  await rename(from.absolute, to.absolute)
+  const info = await stat(to.absolute)
+  return { name, path: relativePath(to.root, to.absolute), kind: info.isDirectory() ? 'directory' : 'file', size: info.size, mtimeMs: info.mtimeMs }
 }
 
 const IMAGE_TYPES:Record<string,string>={'.avif':'image/avif','.bmp':'image/bmp','.gif':'image/gif','.ico':'image/x-icon','.jpeg':'image/jpeg','.jpg':'image/jpeg','.png':'image/png','.svg':'image/svg+xml','.webp':'image/webp'}

@@ -41,6 +41,7 @@
 - **Terminal**: `node-pty` and xterm with up to eight sessions, rename, a right-side switcher, splits, ANSI output, and Ctrl+C.
 - **Layout and DSH**: the primary view, terminal panel, and DSH conversation sidebar can be shown and resized independently; widths are dragged and double-clicked back to default in place, so they are not duplicated as settings.
 - **Settings page**: the "VS Code Workbench" page under DSH settings manages AI completion (master switch, model route, failure fallback, plus the model actually in use and the last failure) and the editor (font size, word wrap, minimap), with a shortcut reference.
+- **Localized context menus**: the explorer, tabs, code editor, terminal, and source control all have VS Code-style menus in Chinese — new/upload/cut/copy/paste/rename/delete, copy relative or absolute path, open in terminal, tab close-others/right/saved, editor undo-redo and find-replace, terminal copy/paste and clear, Git stage/unstage/discard/copy commit hash. Monaco's built-in English menu is disabled (`contextmenu:false`); menu contents are pure data (unit-tested) over one shared shell.
 - **Inline completion**: ghost-text suggestions at the cursor, served by a real model or a local fallback;
   cycle through candidates and accept by block, by line, or by word. Context comes from the current file
   and a local retrieval index that never leaves the workspace directory.
