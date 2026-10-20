@@ -12,6 +12,7 @@ import { localBase } from './terminal.ts'
 import { dispatch } from './api.ts'
 import { completionTelemetry, registerCompletionRoute, resolveProvider } from './completion/register.ts'
 import { completionSettingsView, SettingsWriteError, updateCompletionSettings, type CompletionSettingsPatch } from './completion/settings.ts'
+import { registerModelRoutes } from './modelRoutes.ts'
 
 /**
  * 宿主侧的全部 HTTP / WebSocket 路由。
@@ -177,6 +178,10 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
       }
     },
   }), 'dsh-vscode-workbench: settings')
+
+  // 设置页的模型下拉：DSH 当前可用的 provider/model。和 settings 一样不依赖会话，
+  // 也不受补全设置影响 —— 它读的是 DSH 自己的模型目录（llm / agentDefaultModel 服务）。
+  registerModelRoutes(ctx, { authorize: (req, res) => authorize(req, res, ctx.connection), send, sendError })
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/upload', handler: async (req, res) => {

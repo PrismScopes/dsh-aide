@@ -4,6 +4,7 @@ import lightPlus from '@shikijs/themes/light-plus'
 import { installTextMate } from './textmateHighlight.ts'
 import { attachInlineCompletion } from './inlineCompletion.ts'
 import { getPreferences, usePreferences } from './preferences.ts'
+import { editorChrome, editorModelOptions, editorOptions, highlightThemeColors } from './editorOptions.ts'
 import { ContextMenu } from './ContextMenu.tsx'
 import { copyText, readClipboard } from './clipboard.ts'
 import {
@@ -20,28 +21,6 @@ import {
 type Monaco = typeof import('monaco-editor')
 declare global { interface Window { require?: { (ids: string[], done: () => void): void; config(value: unknown): void }; monaco?: Monaco } }
 let loading: Promise<Monaco> | undefined
-/**
- * 两个编辑器共用的固定外框。
- *
- * 缩略图与字号**不在这里**：它们是用户偏好（见 preferences.ts），随设置变化，属于创建参数与
- * updateOptions 的范畴；这里只留工作台的既定观感 —— 窄滚动条、不要概览标尺。
- */
-export const WORKBENCH_EDITOR_CHROME = {
-  renderOverviewRuler: false,
-  overviewRulerLanes: 0,
-  hideCursorInOverviewRuler: true,
-  scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
-} as const
-
-/** 把用户偏好翻成 Monaco 的选项；创建与后续更新都用它，两处不会漂。 */
-function preferenceOptions(): { fontSize: number; wordWrap: 'on' | 'off'; minimap: { enabled: boolean } } {
-  const preferences = getPreferences()
-  return {
-    fontSize: preferences.editorFontSize,
-    wordWrap: preferences.editorWordWrap ? 'on' : 'off',
-    minimap: { enabled: preferences.editorMinimap },
-  }
-}
 
 /** 读 DSH 主题令牌（渲染期从 body 上的 CSS 变量取值；无 document 时回落）。 */
 function tokenOf(name: string, fallback: string): string {
@@ -122,7 +101,9 @@ function themeRules(theme: { tokenColors?: ThemeTokenColor[] }): { token: string
 export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string {
   const dark = theme === 'dark'
   const name = dark ? 'dsh-dark' : 'dsh-light'
-  const color = (token: string, fallback: string): string => monacoColor(tokenOf(token, fallback), fallback)
+  const color = (token: string, fallback: string): string =>
+    // 空 token 表示这条配色没有对应的 DSH 令牌（高亮色需要保持 VS Code 的半透明蓝），直接走兜底。
+    token === '' ? monacoColor(fallback, fallback) : monacoColor(tokenOf(token, fallback), fallback)
   try {
     // semanticHighlighting 是运行时支持的字段（editor.semanticHighlighting.enabled 的取值
     // configuredByTheme 就是读它），但没进 IStandaloneThemeData 的类型声明，用交叉类型补上，
@@ -151,7 +132,11 @@ export function dshMonacoTheme(monaco: Monaco, theme: 'dark' | 'light'): string 
         'editorWidget.background': color('--dsw-alias-bg-layer-2', dark ? '#2c2c2e' : '#ffffff'),
         'editorWidget.border': color('--dsw-alias-border-l2', dark ? '#ffffff1f' : '#0000001a'),
         'scrollbarSlider.background': color('--dsw-alias-scrollbar-bg-l1', dark ? '#3c3c3d' : '#e5e5e5'),
-        'scrollbarSlider.hoverBackground': color('--dsw-alias-scrollbar-bg-l2', dark ? '#545557' : '#e5e5e5')
+        'scrollbarSlider.hoverBackground': color('--dsw-alias-scrollbar-bg-l2', dark ? '#545557' : '#e5e5e5'),
+        // 划词高亮与概览标尺的标记色。没有这几项时，选中一个词后其余同类词虽然被 Monaco
+        // 算出来了却没有可见颜色（等于没高亮），概览标尺上也不会出现选区/同类词的标记。
+        // 配色是纯数据（editorOptions.ts 的 EDITOR_HIGHLIGHT_COLORS），单测可断言。
+        ...highlightThemeColors(dark, color)
       }
     }
     monaco.editor.defineTheme(name, theme)
@@ -401,19 +386,26 @@ export function MonacoDiffEditor(props: { uri: string; original: string; modifie
       models.current = { original, modified }
       await installTextMate(monaco, [original.getLanguageId()]).catch(() => undefined)
       if (disposed || root.current === null) return
+      // 偏好取当前值而不是本次渲染的闭包值：这个 effect 只依赖 uri，不随偏好重跑（重跑会重建编辑器）。
+      // 差异编辑器的创建选项不接受 tabSize/insertSpaces（它们属于模型），所以先拆出来。
+      const editorPreferences = getPreferences()
+      const { tabSize: _tabSize, insertSpaces: _insertSpaces, ...editorLayerOptions } = editorOptions(editorPreferences)
       const instance = monaco.editor.createDiffEditor(root.current, {
         automaticLayout: true,
         readOnly: true,
         renderSideBySide: props.mode === 'split',
         theme: dshMonacoTheme(monaco, props.theme),
-        ...preferenceOptions(),
-        ...WORKBENCH_EDITOR_CHROME,
+        ...editorChrome(editorPreferences),
+        ...editorLayerOptions,
         // 关掉 Monaco 内置的英文右键菜单，改用工作台统一的中文 ContextMenu（原因见 editorMenus.ts）。
         contextmenu: false,
         originalEditable: false,
         ignoreTrimWhitespace: false,
       })
       instance.setModel({ original, modified })
+      const modelOptions = editorModelOptions(editorPreferences)
+      original.updateOptions(modelOptions)
+      modified.updateOptions(modelOptions)
       editor.current = instance
       bindDiffContextMenu(monaco, instance, (side, x, y, keyboard) => { if (!disposed) setMenu({ x, y, side, keyboard }) })
     }).catch(error => setError(error instanceof Error ? error.message : String(error)))
@@ -436,8 +428,16 @@ export function MonacoDiffEditor(props: { uri: string; original: string; modifie
   useEffect(() => { setModeOverride(undefined) }, [props.mode])
   useEffect(() => { editor.current?.updateOptions({ renderSideBySide: displayMode === 'split' }) }, [displayMode])
   useEffect(() => { if (window.monaco !== undefined) window.monaco.editor.setTheme(dshMonacoTheme(window.monaco, props.theme)) }, [props.theme])
-  // 字号与换行改了就地更新：差异视图跟着设置页一起变，不必关掉再打开。
-  useEffect(() => { editor.current?.updateOptions({ fontSize: preferences.editorFontSize, wordWrap: preferences.editorWordWrap ? 'on' : 'off' }) }, [preferences.editorFontSize, preferences.editorWordWrap])
+  // 偏好变了就地同步：差异视图跟着设置页一起变，不必关掉再打开。
+  // 外框（概览标尺开关）与编辑器选项都要重算；tabSize/insertSpaces 走模型的 updateOptions。
+  useEffect(() => {
+    const instance = editor.current
+    if (instance === undefined) return
+    instance.updateOptions({ ...editorChrome(preferences), ...editorOptions(preferences) })
+    const modelOptions = editorModelOptions(preferences)
+    models.current?.original.updateOptions(modelOptions)
+    models.current?.modified.updateOptions(modelOptions)
+  }, [preferences])
   const entries = menu === undefined || editor.current === undefined ? undefined : diffMenuItems({
     hasSelection: selectionSnapshot(menu.side === 'original' ? editor.current.getOriginalEditor() : editor.current.getModifiedEditor()).hasSelection,
     mode: displayMode,
@@ -485,15 +485,18 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       if (disposed || root.current === null) return
       if (model.getValue() !== valueRef.current) model.setValue(valueRef.current)
       // 偏好取当前值而不是本次渲染的闭包值：这个 effect 不随偏好重跑（重跑会重建编辑器）。
+      const editorPreferences = getPreferences()
       const instance = monaco.editor.create(root.current, {
-        ...WORKBENCH_EDITOR_CHROME,
-        ...preferenceOptions(),
+        ...editorChrome(editorPreferences),
+        ...editorOptions(editorPreferences),
         model,
         automaticLayout: true,
         theme: dshMonacoTheme(monaco, props.theme),
         // 关掉 Monaco 内置的英文右键菜单，改用工作台统一的中文 ContextMenu（原因见 editorMenus.ts）。
         contextmenu: false,
       })
+      // tabSize / insertSpaces 是模型级选项：创建参数里的值不保证落到已有模型上，显式写一次。
+      model.updateOptions(editorModelOptions(editorPreferences))
       editor.current = instance
       const change = instance.onDidChangeModelContent(() => callbacks.current.onChange(instance.getValue()))
       instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => callbacks.current.onSave())
@@ -525,10 +528,15 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
     const model = editor.current?.getModel(); if (model !== null && model !== undefined && model.getValue() !== props.value) model.setValue(props.value)
   }, [props.value])
   useEffect(() => { if (window.monaco !== undefined) window.monaco.editor.setTheme(dshMonacoTheme(window.monaco, props.theme)) }, [props.theme])
-  // 三项偏好各自就地更新，改设置时不影响编辑器里已有的滚动位置与选择。
-  useEffect(() => { editor.current?.updateOptions({ fontSize: preferences.editorFontSize }) }, [preferences.editorFontSize])
-  useEffect(() => { editor.current?.updateOptions({ wordWrap: preferences.editorWordWrap ? 'on' : 'off' }) }, [preferences.editorWordWrap])
-  useEffect(() => { editor.current?.updateOptions({ minimap: { enabled: preferences.editorMinimap } }) }, [preferences.editorMinimap])
+  // 偏好变了就地同步，改设置不影响编辑器里已有的滚动位置与选择。
+  // 外框（概览标尺开关）与编辑器选项都重算；创建与更新共用同一套映射，两条路径不会漂。
+  // tabSize/insertSpaces 是模型级选项，走 model.updateOptions。
+  useEffect(() => {
+    const instance = editor.current
+    if (instance === undefined) return
+    instance.updateOptions({ ...editorChrome(preferences), ...editorOptions(preferences) })
+    instance.getModel()?.updateOptions(editorModelOptions(preferences))
+  }, [preferences])
   const entries = menu === undefined || editor.current === undefined
     ? undefined
     : editorMenuItems(editorMenuContext(editor.current, () => callbacks.current.onSave()))

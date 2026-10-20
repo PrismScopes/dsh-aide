@@ -96,6 +96,49 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-set-info[data-tone=error] .dvw-set-info-value{color:var(--dsw-alias-state-error-primary,#f48771)}
 .dvw-set-keycap{display:inline-block;min-width:22px;padding:1px 6px;border:1px solid var(--dsw-alias-border-l2);border-bottom-width:2px;border-radius:6px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:center}
 .dvw-set-footnote{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6}
+/* ===== 设置页 v2：页面内左侧分类子菜单 + 右侧分组 =====
+   用容器查询而不是媒体查询来决定「窄」：这一页渲染在 DSH 设置面板的内容列里，
+   视口很宽时内容列也可能只有 400px 出头。窄于 520px 时导航从左侧竖列退化成顶部横向标签。
+   （末尾另有一条按视口宽度的兜底，给不支持容器查询的宿主用。） */
+.dvw-settings-panel{display:flex;flex-direction:column;gap:18px;padding:4px 2px 20px;container-type:inline-size}
+.dvw-set-layout{display:flex;align-items:flex-start;gap:20px;min-width:0}
+.dvw-set-nav{position:sticky;top:8px;flex:none;width:152px;display:flex;flex-direction:column;gap:2px;padding:4px;border:1px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
+.dvw-set-tab{height:34px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;text-align:left;white-space:nowrap;cursor:pointer}
+.dvw-set-tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+/* 选中态只用 DSH 令牌：主色做 14% 底色 + 左侧 2px 内阴影竖条，深浅色都由宿主切换。 */
+.dvw-set-tab[aria-selected=true]{background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#3b82f6) 14%,transparent);box-shadow:inset 2px 0 0 var(--dsw-alias-state-business-primary,#3b82f6);color:var(--dsw-alias-label-primary);font-weight:600}
+.dvw-set-tab:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary,#3b82f6);outline-offset:-1px}
+.dvw-set-content{flex:1;min-width:0;display:flex;flex-direction:column}
+.dvw-set-content:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary,#3b82f6);outline-offset:2px;border-radius:8px}
+/* 下拉选择：与输入框同一套令牌；宽度随内容，最长 240px。 */
+.dvw-set-select{height:36px;max-width:240px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;outline:none}
+.dvw-set-select:focus{border-color:var(--dsw-alias-state-business-primary)}
+.dvw-set-select:disabled{opacity:.5;cursor:not-allowed}
+/* 设置页里的按钮：恢复默认设置及其二次确认。 */
+.dvw-set-button{height:32px;padding:0 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;white-space:nowrap;cursor:pointer}
+.dvw-set-button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dvw-set-button:focus-visible{outline:1px solid var(--dsw-alias-state-business-primary,#3b82f6);outline-offset:1px}
+.dvw-set-button-secondary{background:transparent;color:var(--dsw-alias-label-secondary)}
+.dvw-set-button-danger{border-color:var(--dsw-alias-state-error-primary,#f48771);background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f48771) 16%,transparent);color:var(--dsw-alias-state-error-primary,#f48771)}
+.dvw-set-button-danger:hover{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f48771) 26%,transparent)}
+/* 模式不匹配时被禁用的步进器（换行列宽、自动保存延迟）。 */
+.dvw-set-stepper[data-disabled=true]{opacity:.5}
+/* 窄容器：导航变顶部横向标签、内容单列。 */
+@container (max-width:520px){
+  .dvw-set-layout{flex-direction:column;gap:12px}
+  .dvw-set-nav{position:static;width:100%;flex-direction:row;gap:2px;overflow-x:auto;scrollbar-width:none}
+  .dvw-set-nav::-webkit-scrollbar{display:none}
+  .dvw-set-tab{flex:none;text-align:center}
+  .dvw-set-tab[aria-selected=true]{box-shadow:inset 0 -2px 0 var(--dsw-alias-state-business-primary,#3b82f6)}
+  .dvw-set-content{width:100%}
+}
+/* 不支持容器查询的宿主按视口宽度兜底。 */
+@media(max-width:640px){
+  .dvw-set-layout{flex-direction:column;gap:12px}
+  .dvw-set-nav{position:static;width:100%;flex-direction:row;gap:2px;overflow-x:auto;scrollbar-width:none}
+  .dvw-set-tab{flex:none;text-align:center}
+  .dvw-set-content{width:100%}
+}
 /* 侧栏面板行：图标占一个正常 flex 位，命中层另用绝对定位铺满整行并在冒泡阶段吃掉点击，
    避免 DSH 把主区域切到空面板（那会卸载整个会话视图，是打开工作台时整屏卡顿的来源）。 */
 .dvw-panel-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px}

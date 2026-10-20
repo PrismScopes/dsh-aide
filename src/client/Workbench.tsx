@@ -16,6 +16,9 @@ import { resetWorkspaceDocuments, WorkspaceRequestScope } from './workspaceState
 import { useDshDarkTheme } from './theme.ts'
 import { Git } from './GitPanel.tsx'
 import { useDebouncedCallback } from './hooks.ts'
+import { usePreferences } from './preferences.ts'
+import type { WorkbenchPreferences } from './preferences.ts'
+import { ClosePrompt, dirtyCloseTabs, needsClosePrompt } from './ClosePrompt.tsx'
 import { preloadTextMate } from './textmateHighlight.ts'
 // 资源管理器与标签页共用同一套右键菜单：菜单内容在 menus.ts（纯数据，可单测），画法在 ContextMenu.tsx。
 import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
@@ -28,6 +31,8 @@ export { graphRows, graphTrackPath } from './GitPanel.tsx'
 export type { GraphRow, GraphTrack } from './GitPanel.tsx'
 
 interface Tab extends FileDocument { dirty: boolean; draft: string; loaded?: boolean; line?: number; column?: number; external?: boolean; preview?: boolean; title?: string; diff?: GitDiff; diffMode?: 'inline' | 'split'; diffSourcePath?:string; imageUrl?:string; documentPreview?:DocumentPreviewKind; documentUrl?:string; pinned?: boolean }
+/** 一次待确认的关闭：要关哪些标签、其中哪些真的脏，以及决定之后是关标签还是返回 DSH。 */
+interface PendingClose { action: 'close' | 'hide'; paths: string[]; dirtyPaths: string[] }
 // 工作台不提供配色选项，配色始终由 DSH 主题决定（见 useDshDarkTheme）。
 interface TreeProps {
   sessionId: string
@@ -137,6 +142,11 @@ export function directoryAffected(directory:string,changedPaths:string[]):boolea
 
 /** Return the basename shown in a tab while preserving its full internal path. */
 export function tabLabel(tab:Pick<Tab,'path'|'title'|'diffSourcePath'>):string{const path=tab.title??tab.diffSourcePath??tab.path.replace(/^diff:/,'');return path.split(/[\\/]/).at(-1)??path}
+/** 自动保存策略（纯函数）：设置页的 editorAutoSave 只在 afterDelay 时启用，延迟已由 preferences 夹到 500–10000。 */
+export interface AutoSaveSettings { enabled: boolean; delayMs: number }
+export function autoSaveSettings(preferences: Pick<WorkbenchPreferences, 'editorAutoSave' | 'editorAutoSaveDelayMs'>): AutoSaveSettings {
+  return { enabled: preferences.editorAutoSave === 'afterDelay', delayMs: preferences.editorAutoSaveDelayMs }
+}
 /**
  * 缩进参考线。
  *
@@ -445,6 +455,10 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const setChatWidth = (value: number) => service.setLayout({ chatWidth: value })
   // 会话与工作目录由 Overlay 统一从主视图会话解析后传入（0.2.1 不再提供 state.current）。
   const [workspace,setWorkspace]=useState<{cwd:string;name:string}>(); const [tabs,setTabs]=useState<Tab[]>([]); const [active,setActive]=useState<string>(); const [error,setError]=useState<string>(); const [panelHeight,setPanelHeight]=useState(260);const [outlineVisible,setOutlineVisible]=useState(()=>localStorage.getItem('dvw:outline')!=='closed');const [headerHost,setHeaderHost]=useState<HTMLDivElement|null>(null);const [tabMenu,setTabMenu]=useState<{path:string;x:number;y:number}>()
+  /** 关闭确认框：标签路径算好之后再弹，决定交给 resolvePendingClose。 */
+  const [pendingClose,setPendingClose]=useState<PendingClose>()
+  // 自动保存读的是可订阅的偏好：设置页一改，这里立刻重排/清理定时器，不用刷新页面。
+  const preferences=usePreferences()
   const tabsRef=useRef(tabs);tabsRef.current=tabs
   const workspaceRequests=useRef(new WorkspaceRequestScope());const loadingTabs=useRef(new Set<string>())
   const dshDark = useDshDarkTheme()
@@ -518,30 +532,117 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   useEffect(()=>{if(sessionId===undefined||active===undefined)return;const tab=tabsRef.current.find(row=>row.path===active);if(tab===undefined||tab.loaded!==false||loadingTabs.current.has(active))return;const epoch=workspaceRequests.current.current();loadingTabs.current.add(active);const documentPreview=documentPreviewKind(active);if(documentPreview!==undefined){const documentUrl=`/dsh-vscode/file?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(active)}`;setTabs(rows=>rows.map(row=>row.path===active?{...row,loaded:true,documentPreview,documentUrl}:row));loadingTabs.current.delete(active);return}if(/\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(active)){const imageUrl=`/dsh-vscode/file?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(active)}`;setTabs(rows=>rows.map(row=>row.path===active?{...row,loaded:true,imageUrl}:row));loadingTabs.current.delete(active);return}void api<FileDocument>('fs.read',{sessionId,path:active}).then(doc=>{if(!workspaceRequests.current.isCurrent(epoch))return;if(doc.binary){setTabs(rows=>rows.filter(row=>row.path!==active));setActive(current=>current===active?undefined:current);setError('二进制文件不能在文本编辑器中打开');return}if(doc.tooLarge){setTabs(rows=>rows.map(row=>row.path===active?{...row,tooLarge:true,size:doc.size,loaded:true}:row));return}setTabs(rows=>rows.map(row=>row.path===active?{...row,...doc,draft:doc.content,loaded:true}:row))}).catch(error=>{if(workspaceRequests.current.isCurrent(epoch))setError(String(error))}).finally(()=>loadingTabs.current.delete(active))},[active,sessionId,tabs])
   const open=(path:string,line?:number,column?:number,pin?:boolean)=>{if(sessionId!==undefined)openForWorkspace(path,line,column,pin)}
   useEffect(()=>{const listener=(event:Event)=>void open((event as CustomEvent<string>).detail);window.addEventListener('dvw-open-workspace-path',listener);return()=>window.removeEventListener('dvw-open-workspace-path',listener)},[sessionId,tabs])
-  const save=async(tab:Tab)=>{if(sessionId===undefined||!tab.dirty)return;try{const doc=await api<FileDocument>('fs.save',{sessionId,path:tab.path,content:tab.draft,revision:tab.revision});setTabs(rows=>rows.map(row=>row.path===tab.path?{...row,...doc,draft:doc.content,dirty:false,external:false}:row))}catch(error){setError(String(error))}}
+  /**
+   * 保存一个脏标签，返回是否成功。
+   *
+   * 关闭确认框需要知道「保存成功才关标签」，所以这里把结果返回给调用方；失败原因仍然走原有
+   * 的错误栏（例如磁盘上的 revision 已变，宿主拒绝覆盖，草稿与 revision 都保持原样）。
+   */
+  const save=async(tab:Tab):Promise<boolean>=>{if(sessionId===undefined||!tab.dirty)return true;try{const doc=await api<FileDocument>('fs.save',{sessionId,path:tab.path,content:tab.draft,revision:tab.revision});setTabs(rows=>rows.map(row=>row.path===tab.path?{...row,...doc,draft:doc.content,dirty:false,external:false}:row));return true}catch(error){setError(String(error));return false}}
+  /**
+   * 自动保存（设置页的 editorAutoSave === 'afterDelay'）。
+   *
+   * 定时器按标签路径记录「排程时的草稿」：同一个标签继续输入就清掉旧定时器重新计时 —— 这正是
+   * 「最后一次改动静默 N 毫秒」的语义。标签变干净、被关掉、偏好被关掉或工作台隐藏时都清理：
+   * 隐藏后仍写盘会把用户明确选择的「不保存」偷偷保存掉。真正的写盘仍然走上面的 save()。
+   */
+  const saveRef=useRef(save);saveRef.current=save
+  const autoSaveTimers=useRef(new Map<string,{timer:ReturnType<typeof setTimeout>;draft:string;delayMs:number}>())
+  const autoSave=autoSaveSettings(preferences)
+  useEffect(()=>{
+    const timers=autoSaveTimers.current
+    const stopAll=()=>{for(const entry of timers.values())clearTimeout(entry.timer);timers.clear()}
+    if(!snapshot.visible||!autoSave.enabled){stopAll();return}
+    const dirty=new Map(dirtyCloseTabs(tabs).map(tab=>[tab.path,tab]))
+    for(const [path,entry] of [...timers]){
+      const tab=dirty.get(path)
+      if(tab!==undefined&&tab.draft===entry.draft&&entry.delayMs===autoSave.delayMs)continue
+      clearTimeout(entry.timer);timers.delete(path)
+    }
+    for(const [path,tab] of dirty){
+      if(timers.has(path))continue
+      const timer=setTimeout(()=>{timers.delete(path);const latest=tabsRef.current.find(row=>row.path===path);if(latest!==undefined&&latest.dirty)void saveRef.current(latest)},autoSave.delayMs)
+      timers.set(path,{timer,draft:tab.draft,delayMs:autoSave.delayMs})
+    }
+  },[autoSave.enabled,autoSave.delayMs,snapshot.visible,tabs])
+  // 卸载时清掉未触发的自动保存，避免组件消失后还去写盘。
+  useEffect(()=>()=>{for(const entry of autoSaveTimers.current.values())clearTimeout(entry.timer);autoSaveTimers.current.clear()},[])
   // 超过宿主上限的文件默认不读；用户在编辑器里确认后带上 force 再读一次。
   const forceLoad=async(path:string)=>{if(sessionId===undefined)return;try{const doc=await api<FileDocument>('fs.read',{sessionId,path,force:true});setTabs(rows=>rows.map(row=>row.path===path?{...row,...doc,draft:doc.content,tooLarge:false,loaded:true}:row))}catch(error){setError(String(error))}}
-  const close=(tab:Tab)=>{if(tab.dirty&&!confirm(`${tab.path} 有未保存更改，确定关闭？`))return;setTabs(rows=>rows.filter(row=>row.path!==tab.path));if(active===tab.path)setActive(tabs.filter(row=>row.path!==tab.path).at(-1)?.path)}
-  const closeAll=()=>{const dirty=tabs.filter(tab=>tab.dirty);if(dirty.length>0&&!confirm(`有 ${dirty.length} 个文件包含未保存更改，确定全部关闭？`))return;setTabs([]);setActive(undefined)}
   /**
-   * 标签页右键菜单的批量关闭：范围不同（其他 / 右侧 / 已保存），但「有未保存改动先确认」的逻辑一致。
-   * 全部从 tabsRef 读当前标签：菜单打开后被别处的异步操作改过标签列表时，状态闭包会过期。
+   * 关闭一批标签。
+   *
+   * 所有关闭入口（× 按钮、右键菜单的关闭/关闭其他/关闭右侧/关闭已保存、全部关闭）都先算出
+   * 「实际要关哪些标签」，再交给这里：没有脏文件就直接关；有脏文件则统一弹同一个 ClosePrompt
+   * —— 单个显示 保存/不保存/取消，多个显示 全部保存/不保存全部/取消。保存仍走上面的 save()。
+   *
+   * 菜单动作全部从 tabsRef 读当前标签：菜单打开后被别处的异步操作改过标签列表时，状态闭包会过期。
    */
-  const closeTabByPath=(path:string)=>{const tab=tabsRef.current.find(row=>row.path===path);if(tab!==undefined)close(tab)}
-  const closeOtherTabs=(path:string)=>{const others=tabsRef.current.filter(tab=>tab.path!==path);const dirty=others.filter(tab=>tab.dirty).length;if(dirty>0&&!confirm(`有 ${dirty} 个文件包含未保存更改，确定关闭其他标签？`))return;setTabs(rows=>rows.filter(tab=>tab.path===path));setActive(path)}
-  const closeRightTabs=(path:string)=>{const index=tabsRef.current.findIndex(tab=>tab.path===path);if(index<0)return;const dirty=tabsRef.current.slice(index+1).filter(tab=>tab.dirty).length;if(dirty>0&&!confirm(`右侧有 ${dirty} 个文件包含未保存更改，确定关闭？`))return;const keep=new Set(tabsRef.current.slice(0,index+1).map(tab=>tab.path));setTabs(rows=>rows.filter(tab=>keep.has(tab.path)));if(active!==undefined&&!keep.has(active))setActive(path)}
-  const closeSavedTabs=()=>{const remaining=tabsRef.current.filter(tab=>tab.dirty);if(remaining.length===tabsRef.current.length)return;setTabs(remaining);if(active!==undefined&&!remaining.some(tab=>tab.path===active))setActive(remaining.at(-1)?.path)}
+  const applyClose=(paths:readonly string[])=>{
+    const closing=new Set(paths)
+    const current=tabsRef.current
+    setTabs(rows=>rows.filter(tab=>!closing.has(tab.path)))
+    // 关掉的是当前标签时，优先激活左侧最近的一个，其次右侧，都没有则回到空编辑器。
+    setActive(currentActive=>{
+      if(currentActive===undefined||!closing.has(currentActive))return currentActive
+      const index=current.findIndex(tab=>tab.path===currentActive)
+      for(let cursor=index-1;cursor>=0;cursor--){const tab=current[cursor];if(tab!==undefined&&!closing.has(tab.path))return tab.path}
+      for(let cursor=index+1;cursor<current.length;cursor++){const tab=current[cursor];if(tab!==undefined&&!closing.has(tab.path))return tab.path}
+      return undefined
+    })
+  }
+  const requestCloseTabs=(paths:readonly string[])=>{
+    const requested=new Set(paths)
+    const targets=tabsRef.current.filter(tab=>requested.has(tab.path))
+    if(targets.length===0)return
+    if(!needsClosePrompt(targets)){applyClose(targets.map(tab=>tab.path));return}
+    setPendingClose({action:'close',paths:targets.map(tab=>tab.path),dirtyPaths:dirtyCloseTabs(targets).map(tab=>tab.path)})
+  }
+  /** 返回 DSH：有脏文件先弹确认；全部保存成功才真的 hide，取消则留在工作台。 */
+  const hideWorkbench=()=>{
+    const dirtyPaths=dirtyCloseTabs(tabsRef.current).map(tab=>tab.path)
+    if(dirtyPaths.length===0){service.hide();return}
+    setPendingClose({action:'hide',paths:tabsRef.current.map(tab=>tab.path),dirtyPaths})
+  }
+  /**
+   * 对话框的决定。
+   *
+   * 保存失败（如磁盘冲突）时标签留在原地、错误走原有错误栏；批量关闭只关保存成功的那些，
+   * 失败的继续开着；返回 DSH 时只要有失败就不隐藏 —— 宁可留在工作台，也不要静默丢掉改动。
+   */
+  const resolvingClose=useRef(false)
+  const resolvePendingClose=async(decision:'save'|'discard')=>{
+    // 保存多个文件要逐个 await：期间对话框已经卸载，但连点仍可能进第二次，这里挡一下。
+    if(resolvingClose.current)return
+    const pending=pendingClose
+    if(pending===undefined)return
+    resolvingClose.current=true
+    setPendingClose(undefined)
+    try{
+      if(decision==='discard'){if(pending.action==='hide')service.hide();else applyClose(pending.paths);return}
+      // 保存时重新读当前标签：对话框开着的时候自动保存可能已经把某些标签保存干净了。
+      const mustSave=new Set(pending.dirtyPaths)
+      const failed=new Set<string>()
+      for(const tab of tabsRef.current.filter(row=>row.dirty&&mustSave.has(row.path))){if(!await save(tab))failed.add(tab.path)}
+      if(pending.action==='hide'){if(failed.size===0)service.hide();return}
+      applyClose(pending.paths.filter(path=>!failed.has(path)))
+    }finally{resolvingClose.current=false}
+  }
+  const closeAll=()=>requestCloseTabs(tabsRef.current.map(tab=>tab.path))
+  const closeOtherTabs=(path:string)=>requestCloseTabs(tabsRef.current.filter(tab=>tab.path!==path).map(tab=>tab.path))
+  const closeRightTabs=(path:string)=>{const index=tabsRef.current.findIndex(tab=>tab.path===path);if(index<0)return;requestCloseTabs(tabsRef.current.slice(index+1).map(tab=>tab.path))}
+  const closeSavedTabs=()=>requestCloseTabs(tabsRef.current.filter(tab=>!tab.dirty).map(tab=>tab.path))
   const togglePinTab=(path:string)=>setTabs(rows=>rows.map(tab=>tab.path===path?{...tab,pinned:tab.pinned===true?undefined:true}:tab))
   /** 复制标签路径。diff: 标签没有真实文件路径（菜单已把路径项禁用），这里再兜一层。 */
   const copyTabPath=(path:string,absolute:boolean)=>{if(path.startsWith('diff:'))return;const text=absolute&&workspace!==undefined?workspaceAbsolutePath(workspace.cwd,path):path;void copyText(text).then(ok=>{if(!ok)setError('无法写入剪贴板')})}
   /** 按当前标签集合生成菜单项：关闭类项是否禁用取决于「其他/右侧/已保存」有没有东西可关。 */
-  const tabMenuEntries=(menu:{path:string}):MenuEntry[]=>{const tab=tabs.find(row=>row.path===menu.path);const index=tabs.findIndex(row=>row.path===menu.path);return tabMenuItems({path:menu.path,pinned:tab?.pinned===true,dirty:tab?.dirty===true,others:tabs.length>1,right:index>=0&&index<tabs.length-1,saved:tabs.some(row=>row.path!==menu.path&&!row.dirty),...(workspace===undefined?{}:{absolute:workspace.cwd}),actions:{close:()=>closeTabByPath(menu.path),closeOthers:()=>closeOtherTabs(menu.path),closeRight:()=>closeRightTabs(menu.path),closeSaved:closeSavedTabs,togglePin:()=>togglePinTab(menu.path),copyPath:absolute=>copyTabPath(menu.path,absolute),openTerminal:()=>requestTerminal({directory:parentDirectory(menu.path)})}})}
+  const tabMenuEntries=(menu:{path:string}):MenuEntry[]=>{const tab=tabs.find(row=>row.path===menu.path);const index=tabs.findIndex(row=>row.path===menu.path);return tabMenuItems({path:menu.path,pinned:tab?.pinned===true,dirty:tab?.dirty===true,others:tabs.length>1,right:index>=0&&index<tabs.length-1,saved:tabs.some(row=>row.path!==menu.path&&!row.dirty),...(workspace===undefined?{}:{absolute:workspace.cwd}),actions:{close:()=>requestCloseTabs([menu.path]),closeOthers:()=>closeOtherTabs(menu.path),closeRight:()=>closeRightTabs(menu.path),closeSaved:closeSavedTabs,togglePin:()=>togglePinTab(menu.path),copyPath:absolute=>copyTabPath(menu.path,absolute),openTerminal:()=>requestTerminal({directory:parentDirectory(menu.path)})}})}
   const activeTab=tabs.find(tab=>tab.path===active); const Panel=panels.find(panel=>panel.id===snapshot.bottomPanel)?.component; const terminalAvailable=panels.some(panel=>panel.id==='terminal')
   const selectView=(view:WorkbenchView)=>{if(snapshot.view===view&&primarySideVisible){setPrimarySideVisible(false);return}setPrimarySideVisible(true);service.show(view)}
   const selectHeading=(index:number)=>{if(activeTab===undefined)return;setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab));window.setTimeout(()=>window.dispatchEvent(new CustomEvent('dvw-markdown-heading',{detail:index})),50)}
   const suppressAttachmentDrop=(event:DragEvent)=>{if(!event.dataTransfer.types.includes('Files'))return;const target=event.target;const insideTree=target instanceof Element&&target.closest('.dvw-tree')!==null;if(!insideTree){event.preventDefault();event.stopPropagation()}}
   if(!snapshot.visible)return null
-  if(sessionId===undefined)return <div className="dvw-overlay"><div className="dvw-empty" style={{gridColumn:'1/4'}}><div>请先选择或创建一个 DSH 会话。<br/><button onClick={()=>service.hide()}>返回 DSH</button></div></div></div>
+  if(sessionId===undefined)return <div className="dvw-overlay"><div className="dvw-empty" style={{gridColumn:'1/4'}}><div>请先选择或创建一个 DSH 会话。<br/><button onClick={()=>hideWorkbench()}>返回 DSH</button></div></div></div>
   const markdown=activeTab!==undefined&&!activeTab.path.startsWith('diff:')&&/\.md$/i.test(activeTab.path)
   const diffMarkdown=activeTab?.diff!==undefined&&/\.md$/i.test(activeTab.diffSourcePath??'')
   const markdownPreview=markdown||(diffMarkdown&&activeTab?.preview===true)
@@ -549,11 +650,12 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   return <div className="dvw-overlay" data-dvw-chat={chatVisible||undefined} data-dvw-primary-side={primarySideVisible||undefined} style={{'--dvw-side-width':`${sideWidth}px`,'--dvw-chat-width':`${chatWidth}px`} as CSSProperties} role="dialog" aria-label="VS Code 工作台" onDragEnterCapture={suppressAttachmentDrop} onDragOverCapture={suppressAttachmentDrop} onDropCapture={suppressAttachmentDrop}>
     <DshConversationPanel visible={chatVisible} width={chatWidth}/>
     {chatVisible&&<aside className="dvw-chat"><PanelResizer className="dvw-chat-resizer" label="拖动调整 DSH 对话栏宽度" width={chatWidth} min={400} max={720} defaultWidth={420} direction={-1} onWidth={setChatWidth}/><header className="dvw-chat-head"><span><DshMark/> DSH</span><button className="dvw-icon" title="关闭 DSH 对话栏" onClick={()=>setChatVisible(false)}><Icon name="close"/></button></header><div className="dvw-chat-body"/></aside>}
-    <nav className="dvw-activity"><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='explorer'} title="资源管理器" onClick={()=>selectView('explorer')}><Icon name="files"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='search'} title="搜索" onClick={()=>selectView('search')}><Icon name="search"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='git'} title="源代码管理" onClick={()=>selectView('git')}><Icon name="source-control"/></button><button className="dvw-act" data-active={snapshot.bottomPanel==='terminal'} disabled={!terminalAvailable} title={terminalAvailable?(snapshot.bottomPanel==='terminal'?'隐藏终端':'显示终端'):'终端适配器未安装'} onClick={()=>toggleTerminal(service)}><Icon name="terminal"/></button><button className="dvw-act dsh" title="返回 DSH" onClick={()=>service.hide()}><Icon name="home"/></button><button className="dvw-act dvw-settings-button" title="在 DSH 设置中管理工作台选项" onClick={()=>service.openDshSettings()}><Icon name="settings"/></button></nav>
+    <nav className="dvw-activity"><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='explorer'} title="资源管理器" onClick={()=>selectView('explorer')}><Icon name="files"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='search'} title="搜索" onClick={()=>selectView('search')}><Icon name="search"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='git'} title="源代码管理" onClick={()=>selectView('git')}><Icon name="source-control"/></button><button className="dvw-act" data-active={snapshot.bottomPanel==='terminal'} disabled={!terminalAvailable} title={terminalAvailable?(snapshot.bottomPanel==='terminal'?'隐藏终端':'显示终端'):'终端适配器未安装'} onClick={()=>toggleTerminal(service)}><Icon name="terminal"/></button><button className="dvw-act dsh" title="返回 DSH" onClick={()=>hideWorkbench()}><Icon name="home"/></button><button className="dvw-act dvw-settings-button" title="在 DSH 设置中管理工作台选项" onClick={()=>service.openDshSettings()}><Icon name="settings"/></button></nav>
     <aside className="dvw-side" data-side-width={sideWidth}>{snapshot.view==='explorer'&&<Explorer sessionId={sessionId} cwd={workspace?.cwd} selected={active} dirty={new Set(tabs.filter(tab=>tab.dirty).map(tab=>tab.path))} onOpen={(path,pin)=>void open(path,undefined,undefined,pin)}/>} {snapshot.view==='search'&&<Search sessionId={sessionId} onOpen={(path,line,column)=>void open(path,line,column)}/>} {snapshot.view==='git'&&<Git sessionId={sessionId} absoluteRoot={workspace?.cwd} onDiff={(path,diff,title,diffSourcePath)=>{const key=`diff:${path}`;setTabs(rows=>[...rows.filter(row=>row.path!==key),{path:key,title,content:diff.diff,draft:diff.diff,revision:'',size:diff.diff.length,binary:false,tooLarge:false,dirty:false,pinned:true,diff,diffMode:'inline',diffSourcePath}]);setActive(key)}}/>}</aside>
     <PanelResizer className="dvw-side-resizer" label="拖动调整源码管理侧边栏宽度" width={sideWidth} min={210} max={640} defaultWidth={210} direction={1} onWidth={setSideWidth}/>
-    <main className="dvw-main"><div className="dvw-tabs"><div className="dvw-tab-list">{tabs.map(tab=><button className="dvw-tab" data-active={tab.path===active} data-pinned={tab.pinned===true||undefined} key={tab.path} title={tab.diffSourcePath??tab.path} onClick={()=>setActive(tab.path)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setTabMenu({path:tab.path,x:event.clientX,y:event.clientY})}}><span className="dvw-tab-name">{tab.dirty?'● ':''}{tabLabel(tab)}</span><span onClick={event=>{event.stopPropagation();close(tab)}}><Icon name="close"/></span></button>)}</div>{tabMenu!==undefined&&<ContextMenu position={{x:tabMenu.x,y:tabMenu.y}} label="标签页操作" entries={tabMenuEntries(tabMenu)} onClose={()=>setTabMenu(undefined)}/>}<div className="dvw-tab-actions">{tabs.length>0&&<button className="dvw-icon dvw-close-all" title="全部关闭" onClick={closeAll}><Icon name="close-all"/></button>}<button className="dvw-icon dvw-chat-action" data-active={chatVisible||undefined} title={chatVisible?'隐藏 DSH 对话栏 (Ctrl+Alt+B)':'显示 DSH 对话栏 (Ctrl+Alt+B)'} aria-pressed={chatVisible} onClick={()=>setChatVisible(value=>!value)}><Icon name={chatVisible?'layout-sidebar-right':'layout-sidebar-right-off'}/></button></div></div><div className="dvw-editor" data-outline={markdownPreview&&outlineVisible&&headings.length>0}>{error&&<div className="dvw-error"><button className="dvw-icon" onClick={()=>setError(undefined)}><Icon name="close"/></button>{error}</div>}{markdownPreview&&outlineVisible&&headings.length>0&&<MarkdownOutline headings={headings} onClose={()=>setOutlineVisible(false)} onHeading={selectHeading}/>} {markdown&&activeTab&&<div className="dvw-editor-toolbar"><button className="dvw-icon dvw-outline-toggle" data-active={outlineVisible} title={outlineVisible?'关闭 Markdown 大纲':'显示 Markdown 大纲'} onClick={()=>setOutlineVisible(value=>!value)}><Icon name="list-tree"/></button><button className="dvw-mode-button" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="code"/> 源码</button><button className="dvw-mode-button" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{activeTab?.diff&&<div className="dvw-editor-toolbar dvw-diff-toolbar">{diffMarkdown&&<div className="dvw-diff-preview-switch"><button className="dvw-mode-button" data-diff-view="diff" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="diff"/> 差异</button><button className="dvw-mode-button" data-diff-view="preview" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{!activeTab.preview&&<><button className="dvw-mode-button dvw-diff-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button className="dvw-mode-button dvw-diff-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button></>}</div>}<div className="dvw-editor-body" data-toolbar={markdown||activeTab?.diff!==undefined}>{activeTab?.tooLarge===true?<div className="dvw-editor-prompt"><strong>文件超过 5 MiB，是否加载此文件？</strong><span>{activeTab.path}（{Math.round(activeTab.size/1048576)} MiB）</span><span className="dvw-editor-prompt-note">大文件会让编辑器变慢，也会占用较多内存。</span><button type="button" className="dvw-mode-button" onClick={()=>void forceLoad(activeTab.path)}>加载此文件</button></div>:activeTab===undefined?<div className="dvw-empty"><div><strong>DSH Workbench</strong><br/>从资源管理器或搜索结果打开文件</div></div>:activeTab.diff?diffMarkdown&&activeTab.preview?<MarkdownPreview source={activeTab.diff.modified} sessionId={sessionId} path={activeTab.diffSourcePath??''}/>:<MonacoDiffEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} original={activeTab.diff.original} modified={activeTab.diff.modified} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.imageUrl?<div className="dvw-image-preview"><img src={activeTab.imageUrl} alt={activeTab.path}/><span>{activeTab.path}</span></div>:activeTab.documentPreview&&activeTab.documentUrl?<DocumentPreview kind={activeTab.documentPreview} src={activeTab.documentUrl} path={activeTab.path}/>:markdown&&activeTab.preview?<MarkdownPreview source={activeTab.draft} sessionId={sessionId} path={activeTab.path}/>:<MonacoEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} onChange={draft=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,draft,dirty:draft!==tab.content}:tab))} onSave={()=>void save(activeTab)}/>}</div></div></main>
+    <main className="dvw-main"><div className="dvw-tabs"><div className="dvw-tab-list">{tabs.map(tab=><button className="dvw-tab" data-active={tab.path===active} data-pinned={tab.pinned===true||undefined} key={tab.path} title={tab.diffSourcePath??tab.path} onClick={()=>setActive(tab.path)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setTabMenu({path:tab.path,x:event.clientX,y:event.clientY})}}><span className="dvw-tab-name">{tab.dirty?'● ':''}{tabLabel(tab)}</span><span onClick={event=>{event.stopPropagation();requestCloseTabs([tab.path])}}><Icon name="close"/></span></button>)}</div>{tabMenu!==undefined&&<ContextMenu position={{x:tabMenu.x,y:tabMenu.y}} label="标签页操作" entries={tabMenuEntries(tabMenu)} onClose={()=>setTabMenu(undefined)}/>}<div className="dvw-tab-actions">{tabs.length>0&&<button className="dvw-icon dvw-close-all" title="全部关闭" onClick={closeAll}><Icon name="close-all"/></button>}<button className="dvw-icon dvw-chat-action" data-active={chatVisible||undefined} title={chatVisible?'隐藏 DSH 对话栏 (Ctrl+Alt+B)':'显示 DSH 对话栏 (Ctrl+Alt+B)'} aria-pressed={chatVisible} onClick={()=>setChatVisible(value=>!value)}><Icon name={chatVisible?'layout-sidebar-right':'layout-sidebar-right-off'}/></button></div></div><div className="dvw-editor" data-outline={markdownPreview&&outlineVisible&&headings.length>0}>{error&&<div className="dvw-error"><button className="dvw-icon" onClick={()=>setError(undefined)}><Icon name="close"/></button>{error}</div>}{markdownPreview&&outlineVisible&&headings.length>0&&<MarkdownOutline headings={headings} onClose={()=>setOutlineVisible(false)} onHeading={selectHeading}/>} {markdown&&activeTab&&<div className="dvw-editor-toolbar"><button className="dvw-icon dvw-outline-toggle" data-active={outlineVisible} title={outlineVisible?'关闭 Markdown 大纲':'显示 Markdown 大纲'} onClick={()=>setOutlineVisible(value=>!value)}><Icon name="list-tree"/></button><button className="dvw-mode-button" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="code"/> 源码</button><button className="dvw-mode-button" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{activeTab?.diff&&<div className="dvw-editor-toolbar dvw-diff-toolbar">{diffMarkdown&&<div className="dvw-diff-preview-switch"><button className="dvw-mode-button" data-diff-view="diff" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="diff"/> 差异</button><button className="dvw-mode-button" data-diff-view="preview" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{!activeTab.preview&&<><button className="dvw-mode-button dvw-diff-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button className="dvw-mode-button dvw-diff-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button></>}</div>}<div className="dvw-editor-body" data-toolbar={markdown||activeTab?.diff!==undefined}>{activeTab?.tooLarge===true?<div className="dvw-editor-prompt"><strong>文件超过 5 MiB，是否加载此文件？</strong><span>{activeTab.path}（{Math.round(activeTab.size/1048576)} MiB）</span><span className="dvw-editor-prompt-note">大文件会让编辑器变慢，也会占用较多内存。</span><button type="button" className="dvw-mode-button" onClick={()=>void forceLoad(activeTab.path)}>加载此文件</button></div>:activeTab===undefined?<div className="dvw-empty"><div><strong>DSH Workbench</strong><br/>从资源管理器或搜索结果打开文件</div></div>:activeTab.diff?diffMarkdown&&activeTab.preview?<MarkdownPreview source={activeTab.diff.modified} sessionId={sessionId} path={activeTab.diffSourcePath??''}/>:<MonacoDiffEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} original={activeTab.diff.original} modified={activeTab.diff.modified} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.imageUrl?<div className="dvw-image-preview"><img src={activeTab.imageUrl} alt={activeTab.path}/><span>{activeTab.path}</span></div>:activeTab.documentPreview&&activeTab.documentUrl?<DocumentPreview kind={activeTab.documentPreview} src={activeTab.documentUrl} path={activeTab.path}/>:markdown&&activeTab.preview?<MarkdownPreview source={activeTab.draft} sessionId={sessionId} path={activeTab.path}/>:<MonacoEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} onChange={draft=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,draft,dirty:draft!==tab.content}:tab))} onSave={()=>void save(activeTab)}/>}</div></div></main>
     {snapshot.bottomPanel&&<section className="dvw-bottom" style={{height:panelHeight}}><div style={{height:4,cursor:'ns-resize'}} onPointerDown={event=>{const startY=event.clientY,startHeight=panelHeight;const move=(e:PointerEvent)=>setPanelHeight(Math.max(120,Math.min(window.innerHeight-160,startHeight+startY-e.clientY)));const up=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up)};window.addEventListener('pointermove',move);window.addEventListener('pointerup',up)}}/><div className="dvw-bottom-head"><div className="dvw-bottom-headslot" ref={setHeaderHost}/>{snapshot.bottomPanel==='terminal'&&sessionId!==undefined&&<TerminalNewButton sessionId={sessionId}/>}<button className="dvw-icon" style={{marginLeft:'auto'}} onClick={()=>service.toggleBottomPanel(snapshot.bottomPanel!)}><Icon name="close"/></button></div><div className="dvw-bottom-body">{Panel&&cwd&&<Panel sessionId={sessionId} cwd={cwd} visible colorScheme={colorScheme} header={headerHost}/>}</div></section>}
-    <footer className="dvw-status"><span><Icon name="git-branch"/> 工作区</span><span>{workspace?.cwd??cwd??''}</span>{activeTab?.external&&<span>磁盘文件已变化</span>}<button className="dvw-icon" style={{color:'white',marginLeft:'auto'}} onClick={()=>service.hide()}>返回 DSH</button></footer>
+    <footer className="dvw-status"><span><Icon name="git-branch"/> 工作区</span><span>{workspace?.cwd??cwd??''}</span>{activeTab?.external&&<span>磁盘文件已变化</span>}<button className="dvw-icon" style={{color:'white',marginLeft:'auto'}} onClick={()=>hideWorkbench()}>返回 DSH</button></footer>
+    {pendingClose!==undefined&&<ClosePrompt paths={pendingClose.dirtyPaths} onSave={()=>void resolvePendingClose('save')} onDiscard={()=>void resolvePendingClose('discard')} onCancel={()=>setPendingClose(undefined)}/>}
   </div>
 }

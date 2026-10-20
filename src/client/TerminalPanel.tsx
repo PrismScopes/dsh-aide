@@ -6,6 +6,7 @@ import { copyText, readClipboard } from './clipboard.ts'
 import { ContextMenu } from './ContextMenu.tsx'
 import type { MenuEntry } from './ContextMenu.tsx'
 import { Icon } from './Icon.tsx'
+import { getPreferences, usePreferences } from './preferences.ts'
 import { terminalPaneMenuItems } from './menus.ts'
 import type { BottomPanelProps } from './service.ts'
 import { isTerminalProtocolReply, takeTerminalRequests, TerminalWorkspaceController } from './terminal.ts'
@@ -52,16 +53,20 @@ interface XtermViewProps {
 function XtermView({ workspace, id, colorScheme, onReady, onContextMenu }: XtermViewProps) {
   const root = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal>()
+  // 字号是设置页里的偏好（默认 13）；实例建立后改设置也要立刻生效，所以要留 fit 的引用重新适配。
+  const fitRef = useRef<FitAddon>()
   const replaying = useRef(false)
   const replayGuard = useRef<ReturnType<typeof setTimeout>>()
   const [error, setError] = useState<string>()
+  const preferences = usePreferences()
   useEffect(() => {
     if (root.current === null) return
     // scrollback 写明确：宿主回放时按这个行数裁剪（见 src/terminal.ts 的 REPLAY_LINES），
     // 两处必须一致，否则要么白送字节、要么回放不够铺满。
-    const terminal = new Terminal({ convertEol: false, cursorBlink: true, scrollback: 1000, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 13, theme: terminalTheme(colorScheme) })
+    const terminal = new Terminal({ convertEol: false, cursorBlink: true, scrollback: 1000, fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: getPreferences().terminalFontSize, theme: terminalTheme(colorScheme) })
     terminalRef.current = terminal
     const fit = new FitAddon()
+    fitRef.current = fit
     terminal.loadAddon(fit)
     terminal.open(root.current)
     onReady(id, terminal)
@@ -105,6 +110,13 @@ function XtermView({ workspace, id, colorScheme, onReady, onContextMenu }: Xterm
     }
   }, [workspace, id, onReady])
   useEffect(() => { if (terminalRef.current !== undefined) terminalRef.current.options.theme = terminalTheme(colorScheme) }, [colorScheme])
+  // 字号来自设置页：xterm 实例常驻，改 options 后重新 fit 即可，不必重开终端（重开会丢回放缓冲）。
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (terminal === undefined) return
+    terminal.options.fontSize = preferences.terminalFontSize
+    try { fitRef.current?.fit() } catch { /* 面板隐藏时尺寸为 0，下一次 ResizeObserver 会再适配 */ }
+  }, [preferences.terminalFontSize])
   if (error !== undefined) return <div className="dvw-terminal-error">{error}</div>
   // 内容区右键：xterm 自己也会处理 contextmenu（默认弹出浏览器菜单），这里统一 preventDefault，
   // 改由工作台的共享菜单接管。终端专属的复制/粘贴走菜单项，不再依赖浏览器原生菜单。

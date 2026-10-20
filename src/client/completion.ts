@@ -161,7 +161,7 @@ export class CompletionClient {
     const requestedAt = this.now()
     const body: CompletionRequest = {
       sessionId: this.options.sessionId,
-      environment: { ideVersion: 'dsh-workbench', extensionVersion: '0.2.1', region: '', channel: 'desktop', repository: '', ...(this.options.environment ?? {}) },
+      environment: { ideVersion: 'dsh-workbench', extensionVersion: '0.2.2', region: '', channel: 'desktop', repository: '', ...(this.options.environment ?? {}) },
       language: input.language,
       trigger: 'inline',
       edits: input.edits ?? [],

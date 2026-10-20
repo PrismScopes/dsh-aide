@@ -215,7 +215,14 @@ export class InlineCompletionController {
   }
 
   private paramsOf(): CompletionParams {
-    return this.paramsOverride ?? this.options.params ?? DEFAULT_COMPLETION_PARAMS
+    const base = this.paramsOverride ?? this.options.params ?? DEFAULT_COMPLETION_PARAMS
+    // 设置页里的「触发延迟」优先于服务端下发值：它是用户刚改的，应当立刻可见。
+    // 两档（快/慢语言）统一成同一个值 —— 设置页只暴露一个数字，若按语言分档，界面上写 120
+    // 实际行为却因文件类型不同而不一致，用户无从理解。
+    const debounce = getPreferences().completionDebounceMs
+    return base.debounceFastMs === debounce && base.debounceSlowMs === debounce
+      ? base
+      : { ...base, debounceFastMs: debounce, debounceSlowMs: debounce }
   }
 
   private languageOf(): string {
