@@ -204,14 +204,8 @@ describe('candidate filtering', () => {
     expect(dropReason('sixchr', state)).toBeUndefined()
   })
 
-  it('drops the cancelled suggestion and the rollback edit', () => {
-    expect(dropReason('suggested', baseState({ cancelledSuggestion: 'suggested' }))).toBe('repeats-cancelled-suggestion')
+  it('drops the rollback edit', () => {
     expect(dropReason('before', baseState({ document: 'xxxxxzzz', offset: 5, lastEdit: { before: 'before', after: 'after' } }))).toBe('rollback-edit')
-  })
-
-  it('drops a deletion offered right after the line grew', () => {
-    const state = baseState({ document: 'let value = computeSomething()', offset: 29, previousLineText: 'let value = com' })
-    expect(dropReason('x', state)).toBe('deletion-after-growth')
   })
 
   it('reports a reason per candidate while keeping the survivors', () => {

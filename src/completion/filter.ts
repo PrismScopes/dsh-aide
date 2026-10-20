@@ -4,8 +4,8 @@
  * 全部是纯函数：输入候选文本与一份「判定所需的状态」，输出保留或丢弃。这样这一层可以脱离编辑器
  * 单测，也不会因为编辑器状态变化而被绕过。
  *
- * 有两条判定的语义依赖「候选是一段替换」的模型（例如「跨行删除」）。当前实现是插入式补全
- * （FIM 生成的是要插入的文本），所以这两条按插入式能表达的方式落地，并在注释里写明是哪一条被简化了。
+ * 有一条判定的语义依赖「候选是一段替换」的模型（「跨行删除」）。当前实现是插入式补全
+ * （FIM 生成的是要插入的文本），所以这条按插入式能表达的方式落地，并在注释里写明它是被简化了的。
  */
 
 /** 一次采纳留下的区间记录，供「与上次采纳区间」两条判定使用。 */
@@ -27,10 +27,6 @@ export interface FilterState {
   language: string
   lastAccepted?: AcceptedRange
   lastEdit?: { before: string; after: string }
-  /** 因选择变化而取消的那次建议文本（判定 4）。 */
-  cancelledSuggestion?: string
-  /** 光标所在行的上一版本文本（判定 3 要比长度）。 */
-  previousLineText?: string
 }
 
 export interface FilterOptions {
@@ -54,8 +50,6 @@ export const DEFAULT_FILTER_OPTIONS: FilterOptions = {
 export type DropReason =
   | 'same-line-as-last-accept'
   | 'overlaps-last-inline-accept'
-  | 'deletion-after-growth'
-  | 'repeats-cancelled-suggestion'
   | 'identical-to-document'
   | 'rollback-edit'
   | 'multi-line-deletion'
@@ -68,13 +62,6 @@ export type DropReason =
 
 export interface FilteredCandidate { text: string; dropped?: DropReason }
 
-/** 光标所在行的文本（不含换行）。 */
-export function lineAt(document: string, offset: number): string {
-  const start = document.lastIndexOf('\n', Math.max(0, offset - 1)) + 1
-  const end = document.indexOf('\n', offset)
-  return document.slice(start, end === -1 ? document.length : end)
-}
-
 /** 候选插入位置之后的原文（用于比对「与编辑器内容无差异」）。 */
 function textAfterCursor(document: string, offset: number, length: number): string {
   return document.slice(offset, offset + length)
@@ -82,7 +69,14 @@ function textAfterCursor(document: string, offset: number, length: number): stri
 
 const IMPORT_PATTERN = /^\s*(?:import\s|export\s+.*from\s|from\s+\S+\s+import\s|const\s+\S+\s*=\s*require\(|#include\s|using\s+\S+\s*=|package\s+\S+$)/
 
-/** 判定 1 到 8 逐条实现；命中任一条即返回丢弃原因。 */
+/**
+ * 文档 4.5 的判定逐条实现（编号沿用文档）；命中任一条即返回丢弃原因。
+ *
+ * 文档判定 3（刚编辑却建议删除）与判定 4（重复已取消的建议）**不再实现**：判定 4 的唯一状态生产者
+ * `recordCancel` 已在 748790f 删除，没有任何地方会填 `cancelledSuggestion`；判定 3 需要「光标所在行
+ * 的上一版本」，插进请求要先给协议加字段，而插入式模型里「建议删除」只能靠长度差猜 —— 语义拿不准，
+ * 与其留一条永远不触发的死判定，不如删掉（记录在 docs/inline-completion.md 的已知局限里）。
+ */
 export function dropReason(candidate: string, state: FilterState, options: FilterOptions = DEFAULT_FILTER_OPTIONS): DropReason | undefined {
   const { lastAccepted, lastEdit, document, offset } = state
 
@@ -103,17 +97,6 @@ export function dropReason(candidate: string, state: FilterState, options: Filte
 
   // 6. 回滚编辑：候选把最近一次编辑改回去。
   if (lastEdit !== undefined && candidate === lastEdit.before && textAfterCursor(document, offset, lastEdit.after.length) !== lastEdit.after) return 'rollback-edit'
-
-  // 3. 刚编辑却建议删除：光标所在行比上一版本更长，而候选是删除。
-  //    插入式模型里「删除」表现为空候选或纯空白，上面第 8 条已经拦掉；这里补一层：行变长了却给出
-  //    比上一行更短的内容，也算建议删除。
-  if (state.previousLineText !== undefined) {
-    const current = lineAt(document, offset)
-    if (current.length > state.previousLineText.length && candidate.length < current.length - state.previousLineText.length) return 'deletion-after-growth'
-  }
-
-  // 4. 刚建议过但未采纳：与因选择变化取消的那次完全相同。
-  if (state.cancelledSuggestion !== undefined && candidate === state.cancelledSuggestion) return 'repeats-cancelled-suggestion'
 
   // 7. 多行删除：候选造成跨行删除。插入式模型下把「候选为空且替换范围跨行」视为跨行删除；
   //    由于插入式不产生替换范围，这里以「候选去掉换行后为空、而光标之后跨行有内容」为界。

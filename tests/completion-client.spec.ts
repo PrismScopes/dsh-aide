@@ -3,7 +3,8 @@ import { applyEvent, CompletionClient, contextFingerprint, triggerPlan } from '.
 import type * as monaco from 'monaco-editor'
 import { ACCEPT_COMMAND_ID, buildInlineCompletionItems, InlineCompletionController, nextLineOf } from '../src/client/inlineCompletion.ts'
 import { encodeSseEvent, type CompletionEvent } from '../src/completion/protocol.ts'
-import { DEFAULT_COMPLETION_PARAMS } from '../src/completion/params.ts'
+import { DEFAULT_COMPLETION_PARAMS, debounceFor, type CompletionParams } from '../src/completion/params.ts'
+import { DEFAULT_PREFERENCES, preferences } from '../src/client/preferences.ts'
 
 /** 用给定的分块拼一个流式响应，分块边界故意切在 SSE 记录中间，检验跨块解析。 */
 function streamResponse(chunks: string[], init: { status?: number; onCancel?: () => void } = {}): Response {
@@ -33,6 +34,47 @@ describe('completion trigger plan', () => {
     expect(triggerPlan({ isNewLine: true }, 'rust')).toEqual({ immediate: true, delayMs: 0 })
     expect(triggerPlan({ isNewLine: false }, 'typescript')).toEqual({ immediate: false, delayMs: DEFAULT_COMPLETION_PARAMS.debounceFastMs })
     expect(triggerPlan({ isNewLine: false }, 'rust')).toEqual({ immediate: false, delayMs: DEFAULT_COMPLETION_PARAMS.debounceSlowMs })
+  })
+})
+
+describe('completion debounce parameters', () => {
+  // paramsOf 是私有方法：这里按仓库既有的写法（直接读私有字段）钉住参数优先级。
+  const paramsOf = (controller: InlineCompletionController): CompletionParams => (controller as unknown as { paramsOf(): CompletionParams }).paramsOf()
+  const controllerWith = (params?: CompletionParams): InlineCompletionController => new InlineCompletionController({
+    client: { recordAccept: () => undefined } as unknown as CompletionClient,
+    kinds: { automatic: 0 as unknown as monaco.languages.InlineCompletionTriggerKind, explicit: 1 as unknown as monaco.languages.InlineCompletionTriggerKind },
+    emptyRangeAt: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } as unknown as monaco.Range),
+    editor: { getModel: () => null } as unknown as monaco.editor.IStandaloneCodeEditor,
+    controllerId: 'debounce-test',
+    ...(params === undefined ? {} : { params }),
+  })
+  /** 只替换偏好读取，不改任何生产全局状态；跑完恢复。 */
+  const withDebouncePreference = <T>(debounceMs: number, run: () => T): T => {
+    const get = vi.spyOn(preferences, 'get').mockReturnValue({ ...DEFAULT_PREFERENCES, completionDebounceMs: debounceMs })
+    try { return run() } finally { get.mockRestore() }
+  }
+
+  it('keeps the server/experiment tiers while the user preference is untouched', () => {
+    // 用户没改过触发延迟（偏好值等于默认值）时，不能拿它覆盖实验分组下发的快/慢档，
+    // 否则 params.ts 的 usesFastDebounce/debounceFor 在生产里恒等于同一个值（审计 B-4）。
+    withDebouncePreference(DEFAULT_PREFERENCES.completionDebounceMs, () => {
+      const params = paramsOf(controllerWith({ ...DEFAULT_COMPLETION_PARAMS, debounceFastMs: 70, debounceSlowMs: 110 }))
+      expect(params).toMatchObject({ debounceFastMs: 70, debounceSlowMs: 110 })
+      expect(debounceFor('typescript', params)).toBe(70)
+      expect(debounceFor('rust', params)).toBe(110)
+      expect(triggerPlan({ isNewLine: false }, 'typescript', params)).toEqual({ immediate: false, delayMs: 70 })
+      expect(triggerPlan({ isNewLine: false }, 'rust', params)).toEqual({ immediate: false, delayMs: 110 })
+    })
+  })
+
+  it('lets an explicitly changed preference override both tiers', () => {
+    // 用户真的改成 150 之后，两档统一成 150：设置页只有一个数字，行为不该因语言而异。
+    withDebouncePreference(150, () => {
+      const params = paramsOf(controllerWith({ ...DEFAULT_COMPLETION_PARAMS, debounceFastMs: 70, debounceSlowMs: 110 }))
+      expect(params).toMatchObject({ debounceFastMs: 150, debounceSlowMs: 150 })
+      expect(debounceFor('typescript', params)).toBe(150)
+      expect(debounceFor('rust', params)).toBe(150)
+    })
   })
 })
 
@@ -391,6 +433,26 @@ describe('completion client', () => {
     // 文档在光标之后是空的，所以候选 'ate' 通过；'x' 太短被丢；'call(a' 补上右括号。
     const result = await client.suggest(input({ document: 'const value = useSt' }))
     expect(result.candidates).toEqual(['ate', 'call(a)'])
+  })
+
+  it('wires lastEdit into the filter so a rollback candidate is dropped', async () => {
+    // 宿主已经把「改前/改后」送进 suggest()，这里钉住它真的被组装进 filter state ——
+    // 不接线的话 filter.ts 的 rollback-edit 判定在生产链路永远不会触发（审计 B-1）。
+    const fetchImpl = vi.fn(async () => streamResponse(events(
+      { type: 'output', candidates: [{ index: 0, text: 'before', finishReason: '', elapsedMs: 1 }] },
+      { type: 'done' },
+    )))
+    // 最近一次编辑是把 'before' 改成 'after'；现在光标处是 'zzz'（看不到 'after'），
+    // 模型又把 'before' 建议回来 —— 这是「回滚」，应当丢弃。
+    const rollback = await new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl }).suggest(
+      input({ document: 'xxxxxzzz', rewriteAt: { line: 1, column: 6 }, lastEdit: { before: 'before', after: 'after' } }),
+    )
+    expect(rollback.candidates).toEqual([])
+    // 同一候选、同一文档，只是不带 lastEdit 就必须保留：证明丢弃来自新接的线，而不是别的规则。
+    const plain = await new CompletionClient({ endpoint: '/c', sessionId: 's', fetchImpl }).suggest(
+      input({ document: 'xxxxxzzz', rewriteAt: { line: 1, column: 6 } }),
+    )
+    expect(plain.candidates).toEqual(['before'])
   })
 
   it('drops a candidate identical to the text after the cursor', async () => {

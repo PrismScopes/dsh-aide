@@ -244,6 +244,8 @@ export class CompletionClient {
       offset: this.offsetOf(input),
       language: input.language,
       ...(this.lastAccepted === undefined ? {} : { lastAccepted: this.lastAccepted }),
+      // 宿主在编辑后把「改前/改后」传进来；不填的话 filter.ts 的 rollback-edit 判定永远不会触发。
+      ...(input.lastEdit === undefined ? {} : { lastEdit: input.lastEdit }),
     }
   }
 }

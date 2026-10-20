@@ -12,7 +12,7 @@ import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from '../completion/
 import { evaluateSecurity, type SecurityRule } from '../completion/security.ts'
 import { triggerPlan } from './completion.ts'
 import { api } from './api.ts'
-import { getPreferences } from './preferences.ts'
+import { DEFAULT_PREFERENCES, getPreferences } from './preferences.ts'
 import { CompletionClient, type CompletionResponse } from './completion.ts'
 
 /** 最近一次内容变更是否包含换行。换行意味着语句或块结束，按文档跳过防抖。 */
@@ -216,13 +216,14 @@ export class InlineCompletionController {
 
   private paramsOf(): CompletionParams {
     const base = this.paramsOverride ?? this.options.params ?? DEFAULT_COMPLETION_PARAMS
-    // 设置页里的「触发延迟」优先于服务端下发值：它是用户刚改的，应当立刻可见。
-    // 两档（快/慢语言）统一成同一个值 —— 设置页只暴露一个数字，若按语言分档，界面上写 120
-    // 实际行为却因文件类型不同而不一致，用户无从理解。
+    // 防抖值的优先级：用户显式改过偏好 > 实验/服务端下发值 > 参数默认。
+    //
+    // 设置页只有一个「触发延迟」数字。它等于默认值时说明用户没动过，应当让实验分组下发的
+    // 快/慢档（以及参数默认值）生效；只有用户真的改成别的数字，才两档统一成那个值 —— 设置页
+    // 只暴露一个数字，按语言分档后界面上写 120 实际行为却因文件类型不同而不一致，用户无从理解。
     const debounce = getPreferences().completionDebounceMs
-    return base.debounceFastMs === debounce && base.debounceSlowMs === debounce
-      ? base
-      : { ...base, debounceFastMs: debounce, debounceSlowMs: debounce }
+    if (debounce === DEFAULT_PREFERENCES.completionDebounceMs) return base
+    return { ...base, debounceFastMs: debounce, debounceSlowMs: debounce }
   }
 
   private languageOf(): string {
