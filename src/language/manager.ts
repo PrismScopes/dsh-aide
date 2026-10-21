@@ -90,6 +90,13 @@ export class LanguageManager {
   private readonly providers = new Set<LanguageProvider>()
   private readonly providerByLanguage = new Map<string, LanguageProvider | null>()
   private readonly startedServers = new Map<string, LanguageProvider>()
+  /**
+   * 正在创建中的 provider。
+   *
+   * 打开文件与「跳转/悬停」可能同时到达：没有这层锁时两条并发路径会各建一个 TypeScript 语言服务
+   * （两份项目程序、双倍内存），外部服务器的 `initialize` 也会被并发触发。按 provider 归类去重。
+   */
+  private readonly creating = new Map<string, Promise<LanguageProvider | undefined>>()
   private readonly diagnosticsTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private discovered: { available: DetectedServer[]; missing: ExternalServerDefinition[] } | undefined
   private scanState: LanguageScanState | undefined
@@ -371,6 +378,21 @@ export class LanguageManager {
     if (cached !== undefined) return cached ?? undefined
     const settings = languageSettings(undefined, this.env)
     if (!settings.enabled) return undefined
+    // 内置 TS 的所有语言共用一份 provider；外部服务器按语言去重（同一服务器负责多语言时，
+    // createProvider 里还会再按 server.id 复用一次）。
+    const key = isTypeScriptLanguage(languageId) ? 'builtin-typescript' : `external:${languageId}`
+    const pending = this.creating.get(key)
+    if (pending !== undefined) return pending
+    const promise = this.createProvider(languageId, settings)
+    this.creating.set(key, promise)
+    try { return await promise } finally { this.creating.delete(key) }
+  }
+
+  private async createProvider(languageId: string, settings: ReturnType<typeof languageSettings>): Promise<LanguageProvider | undefined> {
+    // 等锁期间可能已被另一条路径建好，重新查一次缓存。
+    const cached = this.providerByLanguage.get(languageId)
+    if (cached !== undefined) return cached ?? undefined
+    if (this.disposed) return undefined
     if (isTypeScriptLanguage(languageId)) {
       if (!settings.builtinTypescript) { this.providerByLanguage.set(languageId, null); return undefined }
       const provider = this.registerProvider(createTypeScriptProvider({
@@ -386,6 +408,12 @@ export class LanguageManager {
     const discovered = await this.discover()
     const server = serverForLanguage(languageId, discovered.available)
     if (server === undefined) { this.providerByLanguage.set(languageId, null); return undefined }
+    // 同一个服务器定义可能负责多个语言：已经在跑就直接复用，别起第二个进程。
+    const running = this.startedServers.get(server.id)
+    if (running !== undefined) {
+      for (const language of running.info.languages) this.providerByLanguage.set(language, running)
+      return running
+    }
     try {
       const provider = this.registerProvider(createExternalProvider({
         workspace: this.workspace,
