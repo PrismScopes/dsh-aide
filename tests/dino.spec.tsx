@@ -69,6 +69,22 @@ describe('小恐龙彩蛋（复用 react-chrome-dino）', () => {
     expect(source).toContain("export const DINO_PATH = 'dino:game'")
   })
 
+  it('follows the DSH theme: light chrome, dark chrome with an inverted canvas', () => {
+    const game = read('../src/client/DinoGame.tsx')
+    expect(game).toContain("theme: 'dark' | 'light'")
+    expect(game).toContain('data-theme={theme}')
+    const workbench = read('../src/client/Workbench.tsx')
+    expect(workbench).toContain('<DinoGame theme={colorScheme}/>')
+    const styles = read('../src/client/styles.ts')
+    const dark = /\.dvw-dino\[data-theme=dark\]\{([^}]*)\}/.exec(styles)
+    expect(dark?.[1]).toContain('background:var(--dvw-base)')
+    // 上游 0.1.3 没有深色精灵图：深色下靠反相透明的画布把深灰画成浅灰。
+    expect(styles).toContain('.dvw-dino[data-theme=dark] .runner-canvas{filter:invert(1)}')
+    // 浅色保持 Chrome 离线页原样（白底）。
+    const light = /\.dvw-dino\{([^}]*)\}/.exec(styles)
+    expect(light?.[1]).toContain('background:#fff')
+  })
+
   it('opens as a virtual editor tab, not as a separate window over the empty state', () => {
     const workbench = read('../src/client/Workbench.tsx')
     // 空状态里只有那一行小字是入口，点击开标签页。
@@ -76,7 +92,7 @@ describe('小恐龙彩蛋（复用 react-chrome-dino）', () => {
     expect(workbench).toContain('className="dvw-dino-teaser" onClick={()=>openDino()}')
     // 虚拟标签：与提交图/Git 输出同一套语义。
     expect(workbench).toContain("title:'小恐龙'")
-    expect(workbench).toContain('activeTab.path===DINO_PATH?<DinoGame/>')
+    expect(workbench).toContain('activeTab.path===DINO_PATH?<DinoGame theme={colorScheme}/>')
     // 不再有「整块空状态换成游戏」的独立窗口分支。
     expect(workbench).not.toContain('setDino(')
     expect(workbench).not.toContain('<DinoGame onExit')

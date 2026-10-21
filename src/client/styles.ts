@@ -315,8 +315,13 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-dino-teaser{display:block;margin:10px auto 0;padding:2px 8px;border:0;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text-3);font:inherit;font-size:12px;cursor:pointer}
 /* 悬停只换文字颜色：不要底色块，空状态里那行小字应当始终是「一行小字」。 */
 .dvw-dino-teaser:hover{color:var(--dvw-accent)}
-/* 铺满编辑器面板，底色与字色照 Chrome 离线页（白底灰字）。 */
+/* 铺满编辑器面板。浅色照 Chrome 离线页（白底灰字）；深色跟随 DSH 主题（见下两行）。 */
 .dvw-dino{position:absolute;inset:0;overflow:auto;background:#fff;color:#535353}
+/* 深色适配：底色换成工作台自己的深色，画布反相。上游精灵图是深灰、画在**透明**画布上
+   （clearRect，不填底色），所以 invert(1) 只把深灰精灵变成浅灰，不会反转出一块白底；
+   游戏文字/重开图标也是同一批精灵，一起变浅。 */
+.dvw-dino[data-theme=dark]{background:var(--dvw-base);color:var(--dvw-text-2)}
+.dvw-dino[data-theme=dark] .runner-canvas{filter:invert(1)}
 /* 注意：这里必须是块级布局，不能 display:flex —— 上游组件的根 div 是自动宽度的
    块，里面 .interstitial-wrapper 用 width:100% 撑开；一旦父级变成 flex，
    「flex 项自动宽度 ← 子项 100%」会互相依赖并塌成 0，画布宽度就是 0（游戏等于看不见）。 */
