@@ -5,7 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, reso
 import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import type { HostContext } from './context.ts'
-import type { FileDocument, FileEntry, GitBranchList, GitChange, GitCommit, GitCommitDetail, GitCommitFile, GitCommitFileDetail, GitDiff, GitStash, GitStatus, GitTag, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
+import type { FileDocument, FileEntry, GitBranchList, GitChange, GitCommit, GitCommitDetail, GitCommitFile, GitCommitFileDetail, GitDiff, GitRemote, GitStash, GitStatus, GitTag, GitTagDetail, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
 import { inside, resolveCreatableWorkspacePath, resolveExistingWorkspacePath, type WorkspacePathErrors } from './paths.ts'
 import { WorkbenchError } from './wire.ts'
 
@@ -712,6 +712,47 @@ async function compareFiles(repository: string, from: string, to: string, runner
   return numstatFiles(runGit, ['diff', '--numstat', '-z', '-M', from, to], files)
 }
 
+/** `git remote -v` → 远程名与 URL（取 fetch 行；只有 push 行的裸远程才用 push 行兜底）。 */
+async function gitRemoteList(runGit: (args: string[]) => Promise<ProcessResult>): Promise<GitRemote[]> {
+  const result = await runGit(['remote', '-v'])
+  if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr, 500)
+  const remotes: GitRemote[] = []
+  const seen = new Set<string>()
+  for (const kind of ['fetch', 'push'] as const) {
+    const pattern = new RegExp('^(\\S+)\\s+(\\S+)\\s+\\(' + kind + '\\)$')
+    for (const line of result.stdout.split('\n')) {
+      const match = pattern.exec(line.trim())
+      if (match === null) continue
+      const name = match[1] ?? ''
+      const url = match[2] ?? ''
+      if (name === '' || seen.has(name)) continue
+      seen.add(name)
+      remotes.push({ name, url })
+    }
+  }
+  return remotes
+}
+
+/** 标签详情：附注标签能拿到打标签人、日期与说明；轻量标签只有 commit。 */
+async function tagDetail(runGit: (args: string[]) => Promise<ProcessResult>, name: string): Promise<GitTagDetail> {
+  const result = await runGit(['for-each-ref', '--format=%(refname:short)%1f%(objecttype)%1f%(objectname)%1f%(taggername)%1f%(taggeremail)%1f%(taggerdate:iso-strict)%1f%(contents:subject)%1f%(contents:body)', 'refs/tags/' + name])
+  if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 500)
+  // 只有一个 ref 命中：整段输出就是这条记录（body 里可能有多行，不能按行切）。
+  const record = result.stdout.replace(/\r?\n$/, '')
+  if (record === '') throw new WorkbenchError('not-found', 'tag does not exist', 404)
+  const [shortName = name, objectType = 'commit', commit = '', tagger = '', email = '', date = '', subject = '', body = ''] = record.split('\x1f')
+  const message = [subject, body].filter(part => part !== '').join('\n\n')
+  return {
+    name: shortName.trim() || name,
+    objectType: objectType.trim(),
+    commit: commit.trim(),
+    ...(tagger.trim() === '' ? {} : { tagger: tagger.trim() }),
+    ...(email.trim() === '' ? {} : { email: email.replace(/^<|>$/g, '').trim() }),
+    ...(date.trim() === '' ? {} : { date: date.trim() }),
+    message,
+  }
+}
+
 export async function gitAction(cwd: string, action: string, path?: string, value?: string, runner: ProcessRunner = run): Promise<unknown> {
   // clone 必须在 gitRoot 之前：这是唯一能把「非仓库工作区」变成仓库的动作。
   if (action === 'clone') return cloneRepository(cwd, path, value, runner)
@@ -816,11 +857,24 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       })
     }
     case 'tag.create': {
-      const name = validateTagName(value)
-      // 轻量标签：不传 path 就钉在 HEAD，传了就钉在指定提交上。
-      args = path === undefined || path === '' ? ['tag', name] : ['tag', name, validateCommitHash(path)]
+      // 兼容两种调用：纯标签名（轻量标签）或 JSON {name, hash?, message?}（有 message 时建附注标签）。
+      const raw = value ?? ''
+      let name: string
+      let hash: string | undefined
+      let message: string | undefined
+      if (raw.trim().startsWith('{')) {
+        let parsed: { name?: unknown; hash?: unknown; message?: unknown }
+        try { parsed = JSON.parse(raw) as typeof parsed } catch { throw new WorkbenchError('bad-request', 'tag payload must be valid JSON') }
+        if (typeof parsed.name !== 'string') throw new WorkbenchError('bad-request', 'tag name is required')
+        name = validateTagName(parsed.name)
+        if (typeof parsed.hash === 'string' && parsed.hash !== '') hash = validateCommitHash(parsed.hash)
+        if (typeof parsed.message === 'string' && parsed.message.trim() !== '') message = parsed.message
+      } else name = validateTagName(raw)
+      const target = hash ?? (path === undefined || path === '' ? undefined : validateCommitHash(path))
+      args = ['tag', ...(message === undefined ? [] : ['-a']), name, ...(message === undefined ? [] : ['-m', message]), ...(target === undefined ? [] : [target])]
       break
     }
+    case 'tag.detail': return tagDetail(runGit, validateTagName(value))
     case 'tag.delete': args = ['tag', '-d', validateTagName(value)]; break
     case 'tag.push': {
       // 空串表示推送全部标签；空值不进 args，否则会被统一的「空参数」检查误判成 bad-request。
@@ -841,6 +895,29 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       const removed = await runGit(['remote', 'remove', value])
       if (removed.code !== 0) throw new WorkbenchError('git-failed', removed.stderr || removed.stdout, 409)
       return gitRemoteNames(runGit)
+    }
+    case 'remote.list': return gitRemoteList(runGit)
+    case 'remote.set': {
+      const name = (path ?? '').trim()
+      if (name === '' || /\s/.test(name)) throw new WorkbenchError('bad-request', 'remote name is required')
+      const url = (value ?? '').trim()
+      if (url === '') throw new WorkbenchError('bad-request', 'remote url is required')
+      const existing = await gitRemoteNames(runGit)
+      const result = existing.includes(name) ? await runGit(['remote', 'set-url', name, url]) : await runGit(['remote', 'add', name, url])
+      if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 409)
+      return gitRemoteList(runGit)
+    }
+    case 'remote.fetch': {
+      const name = (path ?? '').trim()
+      if (name.startsWith('-')) throw new WorkbenchError('bad-request', 'remote name is invalid')
+      args = name === '' ? ['fetch', '--all', '--prune'] : ['fetch', '--prune', name]
+      break
+    }
+    case 'remote.prune': {
+      const name = (path ?? '').trim()
+      if (name === '' || name.startsWith('-')) throw new WorkbenchError('bad-request', 'remote name is required')
+      args = ['remote', 'prune', name]
+      break
     }
     case 'branches': {
       const result = await runGit(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])
@@ -890,6 +967,21 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
     case 'commit.branch': args = ['switch', '-c', validateBranchName(path), validateCommitHash(value)]; break
     case 'commit.cherrypick': args = ['cherry-pick', validateCommitHash(value)]; break
     case 'commit.revert': args = ['revert', '--no-edit', validateCommitHash(value)]; break
+    case 'commit.reset': {
+      const mode = path ?? ''
+      if (mode !== 'soft' && mode !== 'mixed' && mode !== 'hard') throw new WorkbenchError('bad-request', 'reset mode must be soft, mixed or hard')
+      args = ['reset', '--' + mode, validateCommitHash(value)]
+      break
+    }
+    case 'commit.drop': {
+      // 用 rebase --onto 把提交从当前分支摘掉（对任意提交都成立；HEAD 的情况也能处理）。
+      const hash = validateCommitHash(value)
+      const parent = await runGit(['rev-parse', '--verify', hash + '^1'])
+      if (parent.code !== 0) throw new WorkbenchError('bad-request', '不能丢弃第一个提交')
+      args = ['rebase', '--onto', parent.stdout.trim(), hash]
+      break
+    }
+
     // 远程动作：`run()` 给 git 带了 GIT_TERMINAL_PROMPT=0，缺凭据时立刻报错而不是等满超时。
     case 'fetch': args = ['fetch', '--all', '--prune', '--quiet']; break
     case 'pull': args = ['pull']; break

@@ -8,6 +8,7 @@ const CSS = String.raw`
 .codicon-case-sensitive:before{content:"\eab1"}.codicon-whole-word:before{content:"\eb7e"}.codicon-regex:before{content:"\eb38"}.codicon-preserve-case:before{content:"\eb2e"}.codicon-replace:before{content:"\eb3d"}.codicon-replace-all:before{content:"\eb3c"}.codicon-ellipsis:before{content:"\ea7c"}.codicon-collapse-all:before{content:"\eac5"}.codicon-expand-all:before{content:"\eb95"}
 /* 提交图 / 存储 / 标记相关字形（Git 面板与 Git 输出标签页）。 */
 .codicon-graph:before{content:"\eb03"}.codicon-git-commit:before{content:"\eafc"}.codicon-git-merge:before{content:"\eafe"}.codicon-tag:before{content:"\ea66"}.codicon-archive:before{content:"\ea98"}.codicon-history:before{content:"\ea82"}
+.codicon-repo:before{content:"\ea62"}
 /* 工作台显示期间，把 DSH 侧栏底部那个账户/设置入口整行收起来。
    那一行在 (10, 948)–(270, 990)，伸进工作台活动栏（x 0–48）；被 overlay 盖住后既收不到点击
    （命中测试落在活动栏上），里面的图标又会从接缝里透出来，看起来就是「两个图标重叠」。
@@ -281,6 +282,35 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-uncommitted-files{padding:0 10px 6px 30px;display:flex;flex-direction:column;gap:2px}
 .dvw-uncommitted-file{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dvw-text-2)}
 .dvw-stash-dot{width:10px;height:10px;margin:0 8px 0 4px;flex:none;border-radius:50%;border:2px dashed var(--dvw-text-3)}
+
+/* ---- 提交图列布局 / 代码审查 / 仓库设置对话框 ---- */
+.dvw-graph-header{display:flex;align-items:center;gap:6px;padding:2px 8px;position:sticky;top:0;z-index:1;background:var(--dvw-surface-1);border-bottom:1px solid var(--dvw-border-soft);font-size:11px;color:var(--dvw-text-3)}
+.dvw-graph-header-subject{flex:1;min-width:0}
+.dvw-graph-header-col{position:relative;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:6px}
+.dvw-col-resize{position:absolute;right:-2px;top:0;bottom:0;width:6px;cursor:col-resize}
+.dvw-col-resize:hover{background:var(--dvw-accent)}
+.dvw-graph-col{flex:none;padding-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--dvw-text-3);text-align:left}
+.dvw-graph-hash{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.dvw-review-progress{flex:none;font-size:11px;color:var(--dvw-success)}
+.dvw-review-toggle{flex:none;width:18px;height:18px;border:0;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text-3);display:grid;place-items:center;cursor:pointer}
+.dvw-review-toggle:hover{background:var(--dvw-hover)}
+.dvw-review-toggle[aria-pressed=true]{color:var(--dvw-success)}
+.dvw-git-detail-file{display:flex;align-items:center;gap:2px}
+.dvw-git-detail-open{flex:1;min-width:0;border:0;background:transparent;color:var(--dvw-text);display:flex;align-items:center;gap:6px;padding:4px 6px;text-align:left;font:inherit;cursor:pointer;border-radius:var(--dvw-radius-xs)}
+.dvw-git-detail-open:hover{background:var(--dvw-hover)}
+.dvw-git-detail-open .dvw-graph-subject{flex:1;min-width:0}
+.dvw-git-issue-link{color:var(--dvw-accent);text-decoration:none}
+.dvw-git-issue-link:hover{text-decoration:underline}
+.dvw-git-dialog{width:min(560px,92vw)}
+.dvw-git-dialog-head{display:flex;align-items:center;gap:6px;font-weight:600}
+.dvw-git-dialog-head span{flex:1}
+.dvw-git-dialog-section{margin-top:4px;font-size:12px;font-weight:600;color:var(--dvw-text-2)}
+.dvw-git-dialog-row{display:flex;align-items:center;gap:6px}
+.dvw-git-dialog-row .dvw-input{flex:1;min-width:0}
+.dvw-git-dialog-name{flex:none;width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dvw-text-2)}
+.dvw-git-dialog-add .dvw-input{flex:1}
+.dvw-git-dialog-empty{font-size:12px;color:var(--dvw-text-3);padding:2px 0}
+.dvw-git-dialog-note{font-size:11px;color:var(--dvw-text-3)}
 
 `
 

@@ -547,6 +547,82 @@ describe('commit detail and comparison', () => {
     await expect(gitAction(root, 'range.file.diff', 'a.txt', 'bad..hash')).rejects.toMatchObject({ code: 'bad-request' })
   })
 })
+describe('git graph parity actions', () => {
+  it('creates lightweight and annotated tags and reads tag details', async () => {
+    const { root, first } = await gitFixture()
+    await gitAction(root, 'tag.create', undefined, 'v-light')
+    const light = (await gitAction(root, 'tag.detail', undefined, 'v-light')) as { name: string; objectType: string; commit: string; message: string }
+    expect(light).toMatchObject({ name: 'v-light', objectType: 'commit', commit: first })
+    expect(light.message).toBe('first')
+    await gitAction(root, 'tag.create', undefined, JSON.stringify({ name: 'v-annotated', message: '附注说明' }))
+    const annotated = (await gitAction(root, 'tag.detail', undefined, 'v-annotated')) as { objectType: string; tagger?: string; email?: string; date?: string; message: string }
+    expect(annotated.objectType).toBe('tag')
+    expect(annotated.tagger).toBe('Test')
+    expect(annotated.email).toBe('test@example.com')
+    expect(annotated.date).toBeTypeOf('string')
+    expect(annotated.message).toContain('附注说明')
+    await expect(gitAction(root, 'tag.detail', undefined, 'missing-tag')).rejects.toMatchObject({ code: 'not-found' })
+  })
+
+  it('resets to a commit in soft, mixed and hard modes', async () => {
+    const { root, first } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'second')
+    await gitAction(root, 'commit.reset', 'soft', first)
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('two\n')
+    // soft 重置后改动留在暂存区
+    expect((await gitStatus(root)).changes.some(change => change.staged)).toBe(true)
+    await gitAction(root, 'commit.reset', 'hard', first)
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('one\n')
+    expect((await gitStatus(root)).changes).toEqual([])
+    await expect(gitAction(root, 'commit.reset', 'bogus', first)).rejects.toMatchObject({ code: 'bad-request' })
+  })
+
+  it('drops a middle commit and refuses to drop the root commit', async () => {
+    const { root, first } = await gitFixture()
+    await writeFile(join(root, 'b.txt'), 'b\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'second')
+    const second = ((await gitAction(root, 'log')) as Array<{ hash: string }>)[0]!.hash
+    await writeFile(join(root, 'c.txt'), 'c\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'third')
+    await gitAction(root, 'commit.drop', undefined, second)
+    const subjects = ((await gitAction(root, 'log')) as Array<{ subject: string }>).map(commit => commit.subject)
+    expect(subjects).toEqual(['third', 'first'])
+    await expect(gitAction(root, 'commit.drop', undefined, first)).rejects.toMatchObject({ code: 'bad-request' })
+  })
+
+  it('manages remotes: add, change url, fetch and prune', async () => {
+    const { root } = await gitFixture()
+    // 用一个真实本地仓库当远程，fetch/prune 才有东西可抓。
+    const source = await temp()
+    const { execFile } = await import('node:child_process')
+    const shell = (args: string[]) => new Promise<void>((resolve, reject) => execFile('git', args, { cwd: source }, error => error ? reject(error) : resolve()))
+    await shell(['init'])
+    await shell(['config', 'user.email', 'test@example.com'])
+    await shell(['config', 'user.name', 'Test'])
+    await writeFile(join(source, 'x.txt'), 'x\n')
+    await shell(['add', '-A'])
+    await shell(['commit', '-m', 'source'])
+    const added = (await gitAction(root, 'remote.set', 'origin', source)) as Array<{ name: string; url: string }>
+    expect(added.map(remote => remote.name)).toEqual(['origin'])
+    expect(added[0]?.url).toBe(source)
+    await gitAction(root, 'remote.set', 'upstream', source)
+    expect(((await gitAction(root, 'remote.list')) as Array<{ name: string }>).map(remote => remote.name).sort()).toEqual(['origin', 'upstream'])
+    await gitAction(root, 'remote.set', 'origin', source + '/.git')
+    expect(((await gitAction(root, 'remote.list')) as Array<{ name: string; url: string }>).find(remote => remote.name === 'origin')?.url).toBe(source + '/.git')
+    await expect(gitAction(root, 'remote.fetch', 'origin')).resolves.toBeDefined()
+    await expect(gitAction(root, 'remote.prune', 'origin')).resolves.toBeDefined()
+    await gitAction(root, 'remote.remove', undefined, 'upstream')
+    expect(((await gitAction(root, 'remote.list')) as Array<{ name: string }>).map(remote => remote.name)).toEqual(['origin'])
+    await expect(gitAction(root, 'remote.set', '', source)).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'remote.set', 'origin', '')).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'remote.fetch', 'missing-remote')).rejects.toMatchObject({ code: 'git-failed' })
+  })
+})
+
 describe('client assets',()=>{it('resolves the VS Code Codicon font',()=>{expect(codiconAsset()).toMatchObject({type:'font/ttf'});expect(codiconAsset().path).toMatch(/codicon\.ttf$/)});it('resolves the PDF.js module worker',()=>{expect(pdfWorkerAsset()).toMatchObject({type:'text/javascript; charset=utf-8'});expect(pdfWorkerAsset().path).toMatch(/pdf\.worker\.min\.mjs$/)})})
 
 /**

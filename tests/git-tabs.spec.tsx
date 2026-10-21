@@ -67,6 +67,32 @@ describe('提交图标签页的 Git Graph 对齐项', () => {
     expect(source).toContain('Ctrl+F')
   })
 })
+describe('提交图的 Git Graph 剩余项', () => {
+  const source = readFileSync(new URL('../src/client/GitGraphTab.tsx', import.meta.url), 'utf8')
+  const settings = readFileSync(new URL('../src/client/GitRepositorySettings.tsx', import.meta.url), 'utf8')
+
+  it('renders configurable columns and resizable headers', () => {
+    expect(source).toContain('dvw-graph-header')
+    expect(source).toContain('dvw-col-resize')
+    expect(source).toContain('parseGitViewSettings')
+    expect(source).toContain('gitViewStorageKey')
+  })
+
+  it('persists code-review marks and shows progress', () => {
+    expect(source).toContain('dvw-review-toggle')
+    expect(source).toContain('reviewScopeKey')
+    expect(source).toContain('reviewProgress')
+  })
+
+  it('loads tag details, remotes and the repository settings dialog', () => {
+    expect(source).toContain("action: 'tag.detail'")
+    expect(source).toContain("action: 'remote.list'")
+    expect(source).toContain('GitRepositorySettings')
+    expect(settings).toContain('onFetchRemote')
+    expect(settings).toContain('onPruneRemote')
+    expect(settings).toContain('导出视图配置')
+  })
+})
 describe('Git 输出标签页', () => {
   beforeEach(() => clearGitOutput())
 

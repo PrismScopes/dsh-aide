@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { GitBranchList, GitChange, GitCommit, GitCommitDetail, GitCommitFileDetail, GitDiff, GitStash, GitStatus } from '../types.ts'
+import type { GitBranchList, GitChange, GitCommit, GitCommitDetail, GitCommitFileDetail, GitDiff, GitRemote, GitStash, GitStatus, GitTag, GitTagDetail } from '../types.ts'
 import { ApiError, api } from './api.ts'
 import { GraphTracks, graphRows } from './GitPanel.tsx'
+import { GitRepositorySettings } from './GitRepositorySettings.tsx'
 import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
 import { copyText } from './clipboard.ts'
 import { useGitCommands } from './gitCommands.tsx'
 import { buildGraphList, branchTips, filterCommits, graphSubtitle, reachableCommits, refKind, refLabel, shortHash } from './gitGraph.ts'
 import { groupMenuItems, stashMenuItems } from './gitMenus.ts'
 import { recordGitCommand } from './gitOutput.ts'
+import { gitViewStorageKey, parseGitViewSettings, type GitGraphViewSettings } from './gitView.ts'
+import { issueSegments, parseRemoteUrl, replaceEmojiShortcodes, type IssueProvider } from './gitText.ts'
+import { isReviewed, markReviewed, parseReviewStore, pruneReviewStore, reviewProgress, reviewScopeKey, reviewStorageKey, type ReviewStore } from './gitReview.ts'
 import { QuickPick, type QuickPickItem } from './quickPick.tsx'
 import { Icon } from './Icon.tsx'
 import { useDebouncedCallback } from './hooks.ts'
@@ -15,19 +19,24 @@ import { useDebouncedCallback } from './hooks.ts'
 /** 编辑器里提交图标签页的内部路径。 */
 export const GIT_GRAPH_PATH = 'git:graph'
 
+function readStorage(key: string): string | null { try { return localStorage.getItem(key) } catch { return null } }
+function writeStorage(key: string, value: string | null): void { try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value) } catch { /* 隐私模式下内存状态仍然可用 */ } }
+
 /**
  * 提交图标签页。
  *
- * 按 VS Code Git Graph 扩展的整页视图组织：顶部工具条（分支、ahead/behind、范围、查找框、分支过滤、刷新、`...`），
- * 中间是提交列表（未提交更改 / 贮藏 / 提交），右侧是「提交详情 / 提交对比」面板。
- * 交互对齐原版：单击提交看详情、Ctrl(⌘)+单击另一个提交进入对比、Ctrl+F 查找、Ctrl+H 回到 HEAD、
- * Ctrl+R 刷新、↑/↓ 在提交间移动、Esc 关闭详情。
+ * 按 VS Code Git Graph 扩展的整页视图组织：顶部工具条（分支、ahead/behind、范围、查找、分支过滤、仓库设置、刷新、`...`），
+ * 中间是提交列表（未提交更改 / 贮藏 / 提交；作者/日期/哈希列可显示隐藏并拖动列宽），
+ * 右侧是「提交详情 / 提交对比」面板（带代码审查的已读标记）。
+ * 交互对齐原版：单击提交看详情、Ctrl(⌘)+单击另一个提交对比、Ctrl+F 查找、Ctrl+H 回到 HEAD、
+ * Ctrl+R 刷新、↑/↓ 移动、Esc 关闭；图内快捷键在输入框里不拦截。
  */
 export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff }: { sessionId: string; initialAllBranches?: boolean; onOpenDiff(key: string, diff: GitDiff, title?: string, sourcePath?: string): void }) {
   const [status, setStatus] = useState<GitStatus>()
   const [commits, setCommits] = useState<GitCommit[]>([])
   const [stashes, setStashes] = useState<GitStash[]>([])
   const [remotes, setRemotes] = useState<string[]>([])
+  const [remoteList, setRemoteList] = useState<GitRemote[]>([])
   const [allCommits, setAllCommits] = useState(initialAllBranches)
   const [logLimit, setLogLimit] = useState(200)
   const [busy, setBusy] = useState(false)
@@ -50,24 +59,55 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
   const [compare, setCompare] = useState<GitCommitFileDetail[]>()
   const [uncommittedOpen, setUncommittedOpen] = useState(false)
   const [activeHash, setActiveHash] = useState<string>()
+  // 视图设置 / 代码审查 / 标签详情 / 仓库设置。
+  const [view, setView] = useState<GitGraphViewSettings>(() => parseGitViewSettings(null))
+  const [reviews, setReviews] = useState<ReviewStore>({})
+  const [tagPicker, setTagPicker] = useState<GitTag[]>()
+  const [tagDetail, setTagDetail] = useState<GitTagDetail>()
+  const [repoSettings, setRepoSettings] = useState(false)
+  const drag = useRef<{ column: 'authorWidth' | 'dateWidth' | 'hashWidth'; startX: number; startWidth: number }>()
   const findInput = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const onOpenDiffRef = useRef(onOpenDiff); onOpenDiffRef.current = onOpenDiff
+  const repository = status?.repository ?? ''
 
   const loadLog = useCallback(() => api<GitCommit[]>('git.action', { sessionId, action: allCommits ? 'log.all' : 'log', value: String(logLimit) }), [sessionId, allCommits, logLimit])
   const loadStashes = useCallback(() => api<GitStash[]>('git.action', { sessionId, action: 'stash.list' }).catch(() => [] as GitStash[]), [sessionId])
+  const loadRemotes = useCallback(() => api<GitRemote[]>('git.action', { sessionId, action: 'remote.list' }).then(list => { setRemoteList(list); setRemotes(list.map(remote => remote.name)) }).catch(() => { setRemoteList([]); setRemotes([]) }), [sessionId])
   const refresh = useCallback(() => {
     void Promise.all([api<GitStatus>('git.status', { sessionId }), loadLog(), loadStashes()]).then(([nextStatus, nextCommits, nextStashes]) => {
       setStatus(nextStatus); setCommits(nextCommits); setStashes(nextStashes); setError(undefined)
+      void loadRemotes()
     }).catch(cause => {
       setError(cause instanceof ApiError && cause.code === 'not-repository' ? '当前工作区不是 Git 仓库' : String(cause))
     })
-  }, [sessionId, loadLog, loadStashes])
+  }, [sessionId, loadLog, loadStashes, loadRemotes])
   useEffect(refresh, [refresh])
-  useEffect(() => { void api<string[]>('git.action', { sessionId, action: 'remotes' }).then(setRemotes).catch(() => setRemotes([])) }, [sessionId])
+  // 视图设置与审查记录按仓库持久化：仓库一变就重读，换仓库不会串。
+  useEffect(() => {
+    if (repository === '') return
+    setView(parseGitViewSettings(readStorage(gitViewStorageKey(repository))))
+    setReviews(pruneReviewStore(parseReviewStore(readStorage(reviewStorageKey(repository))), Date.now()))
+  }, [repository])
+  useEffect(() => { if (repository !== '') writeStorage(gitViewStorageKey(repository), JSON.stringify(view)) }, [repository, view])
+  useEffect(() => { if (repository !== '') writeStorage(reviewStorageKey(repository), Object.keys(reviews).length === 0 ? null : JSON.stringify(reviews)) }, [repository, reviews])
   // 文件变化（保存、外部改动、agent 写文件）后刷新；`.git` 不在 watcher 的忽略列表里。
   const refreshDebounced = useDebouncedCallback(() => void refresh(), 600)
   useEffect(() => { window.addEventListener('dvw-files-changed', refreshDebounced); return () => window.removeEventListener('dvw-files-changed', refreshDebounced) }, [refreshDebounced])
+  // 列宽拖动：pointermove 只改状态，松手后由持久化 effect 写回。
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      const state = drag.current
+      if (state === undefined) return
+      const next = Math.max(40, Math.min(320, Math.round(state.startWidth + event.clientX - state.startX)))
+      setView(current => ({ ...current, [state.column]: next }))
+    }
+    const up = () => { drag.current = undefined }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up) }
+  }, [])
 
   /** 执行一个 git 动作：失败也刷新（例如 pull 冲突时工作区已经变了）。 */
   const run = async (name: string, path?: string, value?: string) => {
@@ -76,7 +116,7 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
       const result = await api<unknown>('git.action', { sessionId, action: name, path, value })
       recordGitCommand({ action: name, path, value, ok: true })
       if (result !== null && typeof result === 'object' && Array.isArray((result as GitStatus).changes)) setStatus(result as GitStatus)
-      if (name.startsWith('remote.') || name === 'clone') { void api<string[]>('git.action', { sessionId, action: 'remotes' }).then(setRemotes).catch(() => undefined) }
+      if (name.startsWith('remote.') || name === 'clone') void loadRemotes()
       void loadLog().then(setCommits).catch(() => undefined)
       void loadStashes().then(setStashes).catch(() => undefined)
     } catch (cause) {
@@ -100,6 +140,13 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     catch (cause) { setError(String(cause)) } finally { setBusy(false) }
   }, [selected, sessionId])
 
+  const scope = selected === undefined ? undefined : selected.kind === 'commit' ? reviewScopeKey({ kind: 'commit', hash: selected.hash }) : reviewScopeKey({ kind: 'compare', from: selected.from, to: selected.to })
+  const reviewPaths = useMemo(() => (selected?.kind === 'commit' ? detail?.files ?? [] : compare ?? []).map(file => file.path), [selected, detail, compare])
+  const progress = scope === undefined ? { reviewed: 0, total: 0 } : reviewProgress(reviews, scope, reviewPaths)
+  const toggleReviewed = (path: string) => {
+    if (scope === undefined) return
+    setReviews(current => markReviewed(current, scope, path, !isReviewed(current, scope, path), Date.now()))
+  }
   const openFileDiff = useCallback(async (file: GitCommitFileDetail, target: { kind: 'commit'; hash: string } | { kind: 'compare'; from: string; to: string }) => {
     setBusy(true)
     try {
@@ -107,6 +154,9 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
         ? await api<GitDiff>('git.action', { sessionId, action: 'commit.file.diff', path: file.path, value: target.hash })
         : await api<GitDiff>('git.action', { sessionId, action: 'range.file.diff', path: file.path, value: `${target.from}..${target.to}` })
       const key = target.kind === 'commit' ? `commit:${target.hash}:${file.path}` : `compare:${target.from}..${target.to}:${file.path}`
+      // 打开 diff 即视为「已读」（与 Git Graph 的代码审查默认行为一致）。
+      const fileScope = target.kind === 'commit' ? reviewScopeKey({ kind: 'commit', hash: target.hash }) : reviewScopeKey({ kind: 'compare', from: target.from, to: target.to })
+      setReviews(current => markReviewed(current, fileScope, file.path, true, Date.now()))
       onOpenDiffRef.current(key, result, file.path.split('/').at(-1) ?? file.path, file.path)
     } catch (cause) { setError(String(cause)) } finally { setBusy(false) }
   }, [sessionId])
@@ -126,6 +176,9 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
   const rowIndex = useMemo(() => new Map(rows.map((row, index) => [row.commit.hash, index] as const)), [rows])
   const hasUncommitted = (status?.changes.length ?? 0) > 0
   const graphList = useMemo(() => buildGraphList({ commitCount: rows.length, stashCount: stashes.length, hasUncommitted }), [rows.length, stashes.length, hasUncommitted])
+  const originRemote = remoteList.find(remote => remote.name === 'origin') ?? remoteList[0]
+  const provider: IssueProvider = parseRemoteUrl(originRemote?.url ?? '')?.provider ?? 'none'
+  const repoUrl = parseRemoteUrl(originRemote?.url ?? '')?.repoUrl
 
   const openFilterPicker = useCallback(async () => {
     if (branches === undefined) {
@@ -134,6 +187,10 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     }
     setFilterPicker(true)
   }, [branches, sessionId])
+  const openTagPicker = useCallback(async () => {
+    try { setTagPicker(await api<GitTag[]>('git.action', { sessionId, action: 'tag.list' })) }
+    catch (cause) { setError(String(cause)) }
+  }, [sessionId])
   const commands = useGitCommands({
     sessionId, busy, status, remotes,
     run: (action, path, value) => run(action, path, value),
@@ -147,6 +204,10 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     openBranchFilter: () => { void openFilterPicker() },
     clearBranchFilter: () => setBranchFilter(new Set()),
     filteredBranches: [...branchFilter],
+    view, updateView: patch => setView(current => ({ ...current, ...patch })),
+    showTagDetail: () => void openTagPicker(),
+    clearReviews: () => setReviews({}),
+    openRepoSettings: () => setRepoSettings(true),
   })
   const filterItems: QuickPickItem[] = useMemo(() => {
     const names = [...(branches?.local ?? []), ...(branches?.remote ?? [])]
@@ -215,6 +276,14 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
   }
   const menuLabel = menu === undefined ? '' : menu.kind === 'toolbar' ? '提交图操作' : menu.kind === 'commit' ? '提交操作' : menu.kind === 'stash' ? '贮藏操作' : '未提交更改操作'
 
+  /** 提交说明：可选的 emoji 替换 + Issue 链接（托管方由远程 URL 自动推断）。 */
+  const renderMessage = (text: string, emoji: boolean) => {
+    const segments = issueSegments(emoji ? replaceEmojiShortcodes(text) : text, provider, repoUrl)
+    return segments.map((segment, index) => segment.url === undefined
+      ? <span key={index}>{segment.text}</span>
+      : <a className="dvw-git-issue-link" key={index} href={segment.url} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{segment.text}</a>)
+  }
+
   const renderUncommitted = () => <div className="dvw-git-uncommitted" key="uncommitted">
     <button className="dvw-graph-row dvw-uncommitted-row" aria-expanded={uncommittedOpen} onClick={() => setUncommittedOpen(value => !value)}
       onContextMenu={event => { event.preventDefault(); setMenu({ kind: 'uncommitted', x: event.clientX, y: event.clientY }) }}>
@@ -245,30 +314,39 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
       onClick={event => { setMenu(undefined); void selectCommit(row.commit.hash, event.ctrlKey || event.metaKey ? 'compare' : 'detail') }}
       onContextMenu={event => { event.preventDefault(); setMenu({ kind: 'commit', x: event.clientX, y: event.clientY, commit: row.commit }) }}>
       <GraphTracks row={row}/>
-      <span className="dvw-graph-copy"><span className="dvw-graph-subject">{row.commit.subject}</span><span className="dvw-graph-meta">{graphSubtitle(row.commit)} · {new Date(row.commit.date).toLocaleDateString()}</span></span>
+      <span className="dvw-graph-copy"><span className="dvw-graph-subject">{renderMessage(row.commit.subject, view.emoji)}</span><span className="dvw-graph-meta">{graphSubtitle(row.commit)}</span></span>
       {row.commit.refs.slice(0, 3).map(ref => <span className="dvw-ref" data-kind={refKind(ref, remotes)} key={ref}>{refLabel(ref)}</span>)}
+      {view.showAuthor && <span className="dvw-graph-col" style={{ width: view.authorWidth }} title={row.commit.author}>{row.commit.author}</span>}
+      {view.showDate && <span className="dvw-graph-col" style={{ width: view.dateWidth }} title={row.commit.date}>{new Date(row.commit.date).toLocaleDateString()}</span>}
+      {view.showHash && <span className="dvw-graph-col dvw-graph-hash" style={{ width: view.hashWidth }} title={row.commit.hash}>{shortHash(row.commit.hash)}</span>}
     </button>
+  }
+
+  const reviewBadge = progress.total === 0 ? undefined : <span className="dvw-review-progress">已读 {progress.reviewed}/{progress.total}</span>
+  const fileRow = (file: GitCommitFileDetail, target: { kind: 'commit'; hash: string } | { kind: 'compare'; from: string; to: string }) => {
+    const reviewed = scope !== undefined && isReviewed(reviews, scope, file.path)
+    return <div className="dvw-git-detail-file" key={file.path}>
+      <button className="dvw-review-toggle" title={reviewed ? '标记为未读' : '标记为已读'} aria-label={reviewed ? '标记为未读' : '标记为已读'} aria-pressed={reviewed} onClick={() => toggleReviewed(file.path)}><Icon name={reviewed ? 'check' : 'preview'}/></button>
+      <button className="dvw-git-detail-open" onClick={() => void openFileDiff(file, target)}>
+        <span className="dvw-badge">{file.status}</span><span className="dvw-graph-subject">{file.path}</span>
+        <span className="dvw-file-stat">{file.binary ? <span className="dvw-stat-add">二进制</span> : <><span className="dvw-stat-add">+{file.additions}</span><span className="dvw-stat-del">−{file.deletions}</span></>}</span>
+      </button>
+    </div>
   }
 
   const details = selected?.kind === 'compare'
     ? <div className="dvw-git-detail">
-        <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">比较 <code>{shortHash(selected.from)}</code> → <code>{shortHash(selected.to)}</code></span><button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={() => setSelected(undefined)}><Icon name="close"/></button></div>
+        <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">比较 <code>{shortHash(selected.from)}</code> → <code>{shortHash(selected.to)}</code></span>{reviewBadge}<button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={() => setSelected(undefined)}><Icon name="close"/></button></div>
         <div className="dvw-git-detail-meta">{compare?.length ?? 0} 个文件发生变化</div>
-        <div className="dvw-git-detail-files">{compare?.length === 0 && <div className="dvw-git-detail-empty">两个提交之间没有文件差异</div>}{(compare ?? []).map(file => <button className="dvw-git-detail-file" key={file.path} onClick={() => void openFileDiff(file, selected)}>
-          <span className="dvw-badge">{file.status}</span><span className="dvw-graph-subject">{file.path}</span>
-          <span className="dvw-file-stat"><span className="dvw-stat-add">+{file.additions}</span><span className="dvw-stat-del">−{file.deletions}</span></span>
-        </button>)}</div>
+        <div className="dvw-git-detail-files">{compare?.length === 0 && <div className="dvw-git-detail-empty">两个提交之间没有文件差异</div>}{(compare ?? []).map(file => fileRow(file, selected))}</div>
       </div>
     : detail === undefined
       ? undefined
       : <div className="dvw-git-detail">
-          <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">{detail.subject}</span><button className="dvw-icon" title="更多操作" aria-label="更多操作" onClick={event => { const row = rows.find(entry => entry.commit.hash === detail.hash); if (row !== undefined) setMenu({ kind: 'commit', x: event.clientX, y: event.clientY, commit: row.commit }) }}><Icon name="ellipsis"/></button><button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={() => setSelected(undefined)}><Icon name="close"/></button></div>
+          <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">{renderMessage(detail.subject, view.emoji)}</span>{reviewBadge}<button className="dvw-icon" title="更多操作" aria-label="更多操作" onClick={event => { const row = rows.find(entry => entry.commit.hash === detail.hash); if (row !== undefined) setMenu({ kind: 'commit', x: event.clientX, y: event.clientY, commit: row.commit }) }}><Icon name="ellipsis"/></button><button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={() => setSelected(undefined)}><Icon name="close"/></button></div>
           <div className="dvw-git-detail-meta"><code title={detail.hash}>{shortHash(detail.hash)}</code> · {detail.author} &lt;{detail.email}&gt; · {new Date(detail.date).toLocaleString()}</div>
-          {detail.body !== '' && <pre className="dvw-git-detail-body">{detail.body}</pre>}
-          <div className="dvw-git-detail-files">{detail.files.length === 0 && <div className="dvw-git-detail-empty">这次提交没有文件变化</div>}{detail.files.map(file => <button className="dvw-git-detail-file" key={file.path} onClick={() => void openFileDiff(file, { kind: 'commit', hash: detail.hash })}>
-            <span className="dvw-badge">{file.status}</span><span className="dvw-graph-subject">{file.path}</span>
-            <span className="dvw-file-stat">{file.binary ? <span className="dvw-stat-add">二进制</span> : <><span className="dvw-stat-add">+{file.additions}</span><span className="dvw-stat-del">−{file.deletions}</span></>}</span>
-          </button>)}</div>
+          {detail.body !== '' && <pre className="dvw-git-detail-body">{renderMessage(detail.body, view.emoji)}</pre>}
+          <div className="dvw-git-detail-files">{detail.files.length === 0 && <div className="dvw-git-detail-empty">这次提交没有文件变化</div>}{detail.files.map(file => fileRow(file, { kind: 'commit', hash: detail.hash }))}</div>
         </div>
 
   return <div className="dvw-gittab">
@@ -281,6 +359,7 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
         <button className="dvw-icon" data-active={findOpen || undefined} title="查找提交 (Ctrl+F)" aria-label="查找提交" onClick={() => { setFindOpen(value => !value); window.setTimeout(() => findInput.current?.focus(), 0) }}><Icon name="search"/></button>
         <button className="dvw-icon" data-active={branchFilter.size > 0 || undefined} title={branchFilter.size > 0 ? `分支过滤（已选 ${branchFilter.size} 个）` : '分支过滤'} aria-label="分支过滤" onClick={() => void openFilterPicker()}><Icon name="git-branch"/></button>
         <button className="dvw-icon" data-active={allCommits || undefined} title={allCommits ? '仅显示当前分支' : '显示全部分支'} aria-label={allCommits ? '仅显示当前分支' : '显示全部分支'} aria-pressed={allCommits} onClick={() => setAllCommits(value => !value)}><Icon name="graph"/></button>
+        <button className="dvw-icon" title="仓库设置" aria-label="仓库设置" onClick={() => setRepoSettings(true)}><Icon name="settings"/></button>
         <button className="dvw-icon" title="刷新提交图" aria-label="刷新提交图" disabled={busy} onClick={() => void refresh()}><Icon name="refresh"/></button>
         <button className="dvw-icon" title="更多操作" aria-label="更多操作" aria-haspopup="menu" onClick={event => setMenu({ kind: 'toolbar', x: event.clientX, y: event.clientY })}><Icon name="ellipsis"/></button>
       </div>
@@ -289,6 +368,12 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     {busy && <div className="dvw-search-progress" role="progressbar" aria-label="正在执行 git 操作"/>}
     <div className="dvw-gitgraph-body">
       <div className="dvw-gitgraph-list dvw-graph-list" ref={listRef} aria-label="提交列表">
+        <div className="dvw-graph-header">
+          <span className="dvw-graph-header-subject">提交</span>
+          {view.showAuthor && <span className="dvw-graph-header-col" style={{ width: view.authorWidth }}>作者<span className="dvw-col-resize" title="拖动调整列宽" onPointerDown={event => { event.preventDefault(); drag.current = { column: 'authorWidth', startX: event.clientX, startWidth: view.authorWidth } }}/></span>}
+          {view.showDate && <span className="dvw-graph-header-col" style={{ width: view.dateWidth }}>日期<span className="dvw-col-resize" title="拖动调整列宽" onPointerDown={event => { event.preventDefault(); drag.current = { column: 'dateWidth', startX: event.clientX, startWidth: view.dateWidth } }}/></span>}
+          {view.showHash && <span className="dvw-graph-header-col dvw-graph-hash" style={{ width: view.hashWidth }}>哈希<span className="dvw-col-resize" title="拖动调整列宽" onPointerDown={event => { event.preventDefault(); drag.current = { column: 'hashWidth', startX: event.clientX, startWidth: view.hashWidth } }}/></span>}
+        </div>
         {graphList.length === 0 ? <div className="dvw-gittab-empty">{commits.length === 0 ? '还没有提交' : '没有匹配的提交'}</div> : graphList.map(entry => {
           if (entry.kind === 'uncommitted') return renderUncommitted()
           if (entry.kind === 'stash') { const stash = stashes[entry.index]; return stash === undefined ? null : renderStash(stash) }
@@ -302,5 +387,23 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     {filterPicker && <QuickPick title="分支过滤" placeholder="搜索分支（点一行勾选/取消）" items={filterItems}
       selectedIds={[...branchFilter]} onToggle={item => setBranchFilter(current => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })}
       emptyText="没有分支" onClose={() => setFilterPicker(false)}/>}
+    {tagPicker !== undefined && <QuickPick title="标签详情" placeholder="搜索标签" items={tagPicker.map(tag => ({ id: tag.name, label: tag.name, detail: tag.hash }))} emptyText="没有标签"
+      onPick={item => { setTagPicker(undefined); void api<GitTagDetail>('git.action', { sessionId, action: 'tag.detail', value: item.id }).then(setTagDetail).catch(cause => setError(String(cause))) }} onClose={() => setTagPicker(undefined)}/>}
+    {tagDetail !== undefined && <div className="dvw-quickpick-backdrop" onMouseDown={() => setTagDetail(undefined)}>
+      <div className="dvw-quickpick dvw-git-dialog" role="dialog" aria-label="标签详情" onMouseDown={event => event.stopPropagation()}>
+        <div className="dvw-git-dialog-head"><span>标签 {tagDetail.name}</span><button className="dvw-icon" title="关闭" aria-label="关闭" onClick={() => setTagDetail(undefined)}><Icon name="close"/></button></div>
+        <div className="dvw-git-dialog-section">{tagDetail.objectType === 'tag' ? '附注标签' : '轻量标签'}</div>
+        {tagDetail.tagger !== undefined && <div className="dvw-git-dialog-row"><span className="dvw-git-dialog-name">打标签人</span><span>{tagDetail.tagger}{tagDetail.email === undefined ? '' : ` <${tagDetail.email}>`}</span></div>}
+        {tagDetail.date !== undefined && <div className="dvw-git-dialog-row"><span className="dvw-git-dialog-name">日期</span><span>{new Date(tagDetail.date).toLocaleString()}</span></div>}
+        <div className="dvw-git-dialog-row"><span className="dvw-git-dialog-name">提交</span><span><code>{shortHash(tagDetail.commit)}</code></span></div>
+        <pre className="dvw-git-detail-body">{tagDetail.message === '' ? '（没有说明）' : renderMessage(tagDetail.message, false)}</pre>
+      </div>
+    </div>}
+    {repoSettings && <GitRepositorySettings busy={busy} remotes={remoteList} view={view} onClose={() => setRepoSettings(false)}
+      onSaveRemote={(name, url) => void run('remote.set', name, url)}
+      onRemoveRemote={name => void run('remote.remove', undefined, name)}
+      onFetchRemote={name => void run('remote.fetch', name)}
+      onPruneRemote={name => void run('remote.prune', name)}
+      onExport={() => { void copyText(JSON.stringify(view)); setRepoSettings(false) }}/>}
   </div>
 }

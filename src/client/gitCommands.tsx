@@ -44,6 +44,13 @@ export interface GitCommandBridge {
   clearBranchFilter?(): void
   /** 已选分支过滤（用于菜单里显示「清除分支过滤」）。 */
   filteredBranches?: readonly string[]
+  /** 列显示 / emoji 等视图设置（只有提交图标签页提供）。 */
+  view?: { showAuthor: boolean; showDate: boolean; showHash: boolean; emoji: boolean }
+  updateView?(patch: Partial<{ showAuthor: boolean; showDate: boolean; showHash: boolean; emoji: boolean }>): void
+  /** 标签详情 / 代码审查清除 / 仓库设置（只有提交图标签页提供，面板里是 no-op）。 */
+  showTagDetail?(): void
+  clearReviews?(): void
+  openRepoSettings?(): void
 }
 
 /** 输入型选择器的描述：标题、占位符、是否允许空串，以及提交后的动作。 */
@@ -178,6 +185,13 @@ export function useGitCommands(bridge: GitCommandBridge) {
     openFind: () => bridgeRef.current.openFind?.(),
     openBranchFilter: () => bridgeRef.current.openBranchFilter?.(),
     clearBranchFilter: () => bridgeRef.current.clearBranchFilter?.(),
+    toggleViewAuthor: () => bridgeRef.current.updateView?.({ showAuthor: !(bridgeRef.current.view?.showAuthor ?? true) }),
+    toggleViewDate: () => bridgeRef.current.updateView?.({ showDate: !(bridgeRef.current.view?.showDate ?? true) }),
+    toggleViewHash: () => bridgeRef.current.updateView?.({ showHash: !(bridgeRef.current.view?.showHash ?? true) }),
+    toggleEmoji: () => bridgeRef.current.updateView?.({ emoji: !(bridgeRef.current.view?.emoji ?? true) }),
+    showTagDetail: () => bridgeRef.current.showTagDetail?.(),
+    clearReviews: () => { if (confirm('清除代码审查的已读记录？')) bridgeRef.current.clearReviews?.() },
+    openRepoSettings: () => bridgeRef.current.openRepoSettings?.(),
     loadMore: () => bridgeRef.current.loadMore?.(),
     showOutput: () => bridgeRef.current.openOutput(),
   }
@@ -190,6 +204,7 @@ export function useGitCommands(bridge: GitCommandBridge) {
   /** 提交图标签页的 `...`。 */
   const graphMenu = (state: { allCommits: boolean; canLoadMore: boolean }): MenuEntry[] => graphMenuItems({
     busy: bridge.busy, remote: bridge.remotes.length > 0, filtered: (bridge.filteredBranches?.length ?? 0) > 0,
+    view: bridge.view ?? { showAuthor: true, showDate: true, showHash: true, emoji: true },
     allCommits: state.allCommits, canLoadMore: state.canLoadMore, actions,
   })
   /** 提交行的右键菜单：复制类动作由调用方给（它们只依赖已读到的提交信息）。 */
@@ -211,6 +226,8 @@ export function useGitCommands(bridge: GitCommandBridge) {
         submit: name => { if (name.trim() !== '') run('tag.create', commit.hash, name.trim()) },
       }),
       cherryPick: () => run('commit.cherrypick', undefined, commit.hash),
+      reset: mode => { if (mode === 'hard' && !confirm('硬重置会丢弃工作区改动，继续？')) return; run('commit.reset', mode, commit.hash) },
+      drop: () => { if (confirm('把这次提交从当前分支丢弃？如果它不是分支尾部，后续提交会被重放到它的父提交上。')) run('commit.drop', undefined, commit.hash) },
       revert: () => { if (confirm(`还原提交 ${shortHash(commit.hash)}？这会新增一个反向提交。`)) run('commit.revert', undefined, commit.hash) },
     },
   })

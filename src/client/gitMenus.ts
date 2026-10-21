@@ -83,6 +83,10 @@ export interface CommitMenuActions {
   cherryPick(): void
   /** 反向提交，撤销这次提交的改动（危险操作，面板层负责二次确认）。 */
   revert(): void
+  /** 重置到这次提交（软/混合/硬）；硬重置会丢工作区改动，危险操作。 */
+  reset(mode: 'soft' | 'mixed' | 'hard'): void
+  /** 把这次提交从当前分支摘掉（rebase --onto）。 */
+  drop(): void
 }
 
 interface CommitMenuContext {
@@ -111,6 +115,15 @@ export function commitMenuItems(context: CommitMenuContext): MenuEntry[] {
     item({ id: 'commit-create-tag', label: '在此创建标签…', onSelect: actions.createTag }),
     item({ id: 'commit-cherry-pick', label: '拣选此提交', onSelect: actions.cherryPick }),
     item({ id: 'commit-revert', label: '还原此提交', danger: true, onSelect: actions.revert }),
+    separator(),
+    item({
+      id: 'commit-reset', label: '重置到此提交', submenu: [
+        item({ id: 'commit-reset-soft', label: '软重置（保留改动并暂存）', onSelect: () => actions.reset('soft') }),
+        item({ id: 'commit-reset-mixed', label: '混合重置（保留工作区改动）', onSelect: () => actions.reset('mixed') }),
+        item({ id: 'commit-reset-hard', label: '硬重置（丢弃改动）', danger: true, onSelect: () => actions.reset('hard') }),
+      ],
+    }),
+    item({ id: 'commit-drop', label: '丢弃此提交', danger: true, onSelect: actions.drop }),
   ]
 }
 
@@ -180,6 +193,17 @@ export interface GitMenuActions {
   openFind(): void
   openBranchFilter(): void
   clearBranchFilter(): void
+  /** 提交图的列显示 / emoji 替换开关。 */
+  toggleViewAuthor(): void
+  toggleViewDate(): void
+  toggleViewHash(): void
+  toggleEmoji(): void
+  /** 打开标签详情（附注标签的打标签人、日期、说明）。 */
+  showTagDetail(): void
+  /** 清除代码审查的已读记录。 */
+  clearReviews(): void
+  /** 打开仓库设置（远程管理 / Issue 链接 / 视图配置导出）。 */
+  openRepoSettings(): void
   /** 提交图多取一页（只有图表标签页/图表分组用得到）。 */
   loadMore(): void
   showOutput(): void
@@ -293,6 +317,8 @@ export interface GraphMenuContext {
   remote: boolean
   /** 当前是否有分支过滤（决定菜单里是「分支过滤…」还是「清除分支过滤」）。 */
   filtered: boolean
+  /** 列显示 / emoji 等视图开关的当前值（菜单文案随状态变）。 */
+  view: { showAuthor: boolean; showDate: boolean; showHash: boolean; emoji: boolean }
   /** 提交图当前是否显示全部分支。 */
   allCommits: boolean
   canLoadMore: boolean
@@ -301,11 +327,21 @@ export interface GraphMenuContext {
 
 /** 提交图标签页标题上的 `...` 菜单：范围、分页、提交/分支/贮藏/标记操作。 */
 export function graphMenuItems(context: GraphMenuContext): MenuEntry[] {
-  const { busy, remote, filtered, allCommits, canLoadMore, actions } = context
+  const { busy, remote, filtered, view, allCommits, canLoadMore, actions } = context
   return [
     item({ id: 'graph-refresh', label: '刷新提交图', disabled: busy, onSelect: actions.refresh }),
     item({ id: 'graph-find', label: '查找提交…', onSelect: actions.openFind }),
     item({ id: 'graph-filter', label: filtered ? '清除分支过滤' : '分支过滤…', onSelect: filtered ? actions.clearBranchFilter : actions.openBranchFilter }),
+    item({
+      id: 'graph-view', label: '视图', submenu: [
+        item({ id: 'graph-view-author', label: view.showAuthor ? '隐藏作者列' : '显示作者列', onSelect: actions.toggleViewAuthor }),
+        item({ id: 'graph-view-date', label: view.showDate ? '隐藏日期列' : '显示日期列', onSelect: actions.toggleViewDate }),
+        item({ id: 'graph-view-hash', label: view.showHash ? '隐藏哈希列' : '显示哈希列', onSelect: actions.toggleViewHash }),
+        item({ id: 'graph-view-emoji', label: view.emoji ? '关闭表情替换' : '开启表情替换', onSelect: actions.toggleEmoji }),
+        item({ id: 'graph-view-clear-reviews', label: '清除代码审查记录', danger: true, onSelect: actions.clearReviews }),
+      ],
+    }),
+    item({ id: 'graph-repo-settings', label: '仓库设置…', onSelect: actions.openRepoSettings }),
     item({
       id: 'graph-range', label: '提交范围', submenu: [
         item({ id: 'graph-range-current', label: allCommits ? '仅当前分支' : '仅当前分支（当前）', disabled: busy, onSelect: () => actions.openGraph(false) }),
@@ -332,6 +368,7 @@ export function graphMenuItems(context: GraphMenuContext): MenuEntry[] {
     item({
       id: 'graph-tag-group', label: '标记', submenu: [
         item({ id: 'graph-tag-create', label: '创建标签…', disabled: busy, onSelect: actions.tagCreate }),
+        item({ id: 'graph-tag-detail', label: '查看标签详情…', disabled: busy, onSelect: actions.showTagDetail }),
         item({ id: 'graph-tag-delete', label: '删除标签…', disabled: busy, onSelect: actions.tagDelete }),
         item({ id: 'graph-tag-push', label: '推送全部标签', disabled: busy || !remote, onSelect: actions.tagPush }),
       ],

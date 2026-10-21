@@ -59,6 +59,11 @@ export interface GitCommitFileDetail { path: string; previousPath?: string; stat
 /** 一次提交的完整信息：作者、日期、完整说明正文，以及带增删行数的文件列表。 */
 export interface GitCommitDetail { hash: string; parents: string[]; author: string; email: string; date: string; subject: string; body: string; files: GitCommitFileDetail[] }
 
+/** 标签详情（附注标签才有 tagger 与 message；轻量标签只有 commit 与 objectType）。 */
+export interface GitTagDetail { name: string; objectType: string; commit: string; tagger?: string; email?: string; date?: string; message: string }
+/** 一个远程（`git remote -v` 的 fetch 行）。 */
+export interface GitRemote { name: string; url: string }
+
 /** Local repository state. */
 export interface GitStatus { repository: string; branch: string; ahead: number; behind: number; changes: GitChange[] }
 /**
