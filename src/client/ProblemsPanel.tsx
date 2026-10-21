@@ -64,7 +64,8 @@ const SERVER_STATE_LABEL: Readonly<Record<LanguageServerState, string>> = {
 }
 
 const BUILTIN_STATE_LABEL: Readonly<Record<LanguageBuiltinInfo['state'], string>> = {
-  ready: '运行中',
+  // ready 只表示「可用」：内置服务是懒加载的，没打开 TS/JS 文件前并没有真正启动。
+  ready: '可用',
   loading: '加载中',
   disabled: '未启用',
   failed: '失败',

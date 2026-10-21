@@ -137,7 +137,7 @@ describe('ProblemsPanel', () => {
     expect(html).toContain('扫描中…')
     expect(html).toMatch(/class="dvw-problems-scan" disabled=""/)
     expect(html).toContain('正在扫描工作区 3/10')
-    expect(html).toContain('内置 TypeScript 5.6.3（运行中）')
+    expect(html).toContain('内置 TypeScript 5.6.3（可用）')
     expect(html).toContain('Pyright（未安装）')
     expect(html).toContain('rust-analyzer（运行中）')
   })
