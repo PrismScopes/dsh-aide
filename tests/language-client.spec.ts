@@ -77,7 +77,8 @@ describe('客户端路径与模型登记', () => {
     registerModelPath(model, 'C:\\repo\\a.ts')
     expect(absolutePathForModel(model)).toBe('C:\\repo\\a.ts')
     expect(modelForPath('C:\\repo\\a.ts')).toBe(model)
-    expect(modelForPath('c:/repo/A.TS')).toBe(model)
+    // 路径比较跟随平台语义：Windows 大小写不敏感，Linux/macOS 大小写敏感（CI 在两种平台上都跑）。
+    expect(modelForPath(isWindowsPlatform() ? 'c:/repo/A.TS' : 'C:/repo/a.ts')).toBe(model)
     unregisterModel(model)
     expect(absolutePathForModel(model)).toBeUndefined()
     expect(modelForPath('C:\\repo\\a.ts')).toBeUndefined()
