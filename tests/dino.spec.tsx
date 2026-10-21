@@ -33,7 +33,7 @@ describe('小恐龙彩蛋（复用 react-chrome-dino）', () => {
     expect(resolveDinoComponent({ default: { default: { default: { default: 1 } } } })).toBeUndefined()
   })
 
-  it('disposes the orphaned loop and key listeners when the easter egg is closed', () => {
+  it('disposes the orphaned loop and key listeners when the tab is closed', () => {
     const raq = (): void => { throw new Error('不应该再排帧了') }
     const handleEvent = (): void => { throw new Error('不应该再响应按键了') }
     const runner = { prototype: { raq: raq as () => void, handleEvent: handleEvent as (event: Event) => void } }
@@ -55,21 +55,44 @@ describe('小恐龙彩蛋（复用 react-chrome-dino）', () => {
     expect(rule?.[1]).not.toContain('display:flex')
   })
 
-  it('renders the upstream component inside the whole editor panel', () => {
+  it('renders the upstream component inside an editor tab, without its own window chrome', () => {
     const source = read('../src/client/DinoGame.tsx')
     expect(source).toContain("from './dinoComponent.ts'")
     expect(source).toContain('<Dino/>')
     expect(source).toContain('dvw-dino-stage')
-    expect(source).toContain('aria-label="退出小游戏"')
-    // 卸载时清理：否则离场后循环还在跑、编辑器里的空格还会打到残留实例上。
+    // 标签页由标签栏负责标题与关闭，组件里不再有标题栏 / 退出按钮。
+    expect(source).not.toContain('dvw-dino-bar')
+    expect(source).not.toContain('退出小游戏')
+    // 卸载时清理：否则切走后循环还在跑、编辑器里的空格还会打到残留实例上。
     expect(source).toContain('disposeDinoRunner(')
+    // 虚拟标签路径（不读磁盘文件）。
+    expect(source).toContain("export const DINO_PATH = 'dino:game'")
   })
 
-  it('is triggered by hovering the teaser line only, not by clicking the whole empty state', () => {
-    const source = read('../src/client/Workbench.tsx')
-    expect(source).toContain('或者，你想试试玩谷歌小恐龙吗？')
-    expect(source).toContain('<DinoGame onExit')
-    expect(source).toContain('className="dvw-dino-teaser" onClick={()=>setDino(true)}')
-    expect(source).not.toContain('onClick={()=>setDino(true)} onKeyDown=')
+  it('opens as a virtual editor tab, not as a separate window over the empty state', () => {
+    const workbench = read('../src/client/Workbench.tsx')
+    // 空状态里只有那一行小字是入口，点击开标签页。
+    expect(workbench).toContain('或者，你想试试玩谷歌小恐龙吗？')
+    expect(workbench).toContain('className="dvw-dino-teaser" onClick={()=>openDino()}')
+    // 虚拟标签：与提交图/Git 输出同一套语义。
+    expect(workbench).toContain("title:'小恐龙'")
+    expect(workbench).toContain('activeTab.path===DINO_PATH?<DinoGame/>')
+    // 不再有「整块空状态换成游戏」的独立窗口分支。
+    expect(workbench).not.toContain('setDino(')
+    expect(workbench).not.toContain('<DinoGame onExit')
+  })
+
+  it('highlights only the text of the teaser line, never a background block', () => {
+    const styles = read('../src/client/styles.ts')
+    const hover = /\.dvw-dino-teaser:hover\{([^}]*)\}/.exec(styles)
+    expect(hover).not.toBeNull()
+    expect(hover?.[1]).toContain('color:var(--dvw-accent)')
+    expect(hover?.[1]).not.toContain('background')
+  })
+
+  it('keeps the dino tab across hide/show and reload like the other virtual tabs', () => {
+    const workbench = read('../src/client/Workbench.tsx')
+    expect(workbench).toContain('[GIT_GRAPH_PATH,GIT_OUTPUT_PATH,DINO_PATH]')
+    expect(workbench).toContain("if(tab.path===DINO_PATH)return {...unloadedTab(tab.path),title:'小恐龙'")
   })
 })

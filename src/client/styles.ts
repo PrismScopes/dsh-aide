@@ -311,16 +311,16 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-git-dialog-empty{font-size:12px;color:var(--dvw-text-3);padding:2px 0}
 .dvw-git-dialog-note{font-size:11px;color:var(--dvw-text-3)}
 
-/* ---- 编辑器空状态里的彩蛋：小恐龙（vendored 开源实现，iframe 铺满编辑器） ---- */
+/* ---- 小恐龙：编辑器里的一个虚拟标签页（点空状态里的小字打开，不是浮窗） ---- */
 .dvw-dino-teaser{display:block;margin:10px auto 0;padding:2px 8px;border:0;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text-3);font:inherit;font-size:12px;cursor:pointer}
-.dvw-dino-teaser:hover{color:var(--dvw-accent);background:var(--dvw-hover)}
-.dvw-dino{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--dvw-base)}
-.dvw-dino-bar{flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--dvw-border-soft)}
-.dvw-dino-title{flex:1;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dvw-text-2)}
+/* 悬停只换文字颜色：不要底色块，空状态里那行小字应当始终是「一行小字」。 */
+.dvw-dino-teaser:hover{color:var(--dvw-accent)}
+/* 铺满编辑器面板，底色与字色照 Chrome 离线页（白底灰字）。 */
+.dvw-dino{position:absolute;inset:0;overflow:auto;background:#fff;color:#535353}
 /* 注意：这里必须是块级布局，不能 display:flex —— 上游组件的根 div 是自动宽度的
    块，里面 .interstitial-wrapper 用 width:100% 撑开；一旦父级变成 flex，
    「flex 项自动宽度 ← 子项 100%」会互相依赖并塌成 0，画布宽度就是 0（游戏等于看不见）。 */
-.dvw-dino-stage{flex:1;min-height:0;overflow:auto;padding-top:12px;background:#fff;color:#535353}
+.dvw-dino-stage{padding-top:12px}
 .dvw-dino-failed{margin:24px auto 0;font-size:12px;color:var(--dvw-text-3)}
 /* 小恐龙自己的样式由 react-chrome-dino 组件在挂载时以 <style> 注入，这里不再重复。 */
 

@@ -78,6 +78,8 @@ describe('打开标签的持久化', () => {
     expect(restorablePath('C:\\Windows\\win.ini', virtual)).toBe(false)
     expect(restorablePath('diff:src/a.ts', virtual)).toBe(false)
     expect(restorablePath('git:output', virtual)).toBe(false)
+    // 其它虚拟标签同样只认白名单里列出来的。
+    expect(restorablePath('dino:game', ['dino:game'])).toBe(true)
     expect(restorablePath('', virtual)).toBe(false)
     expect(restorablePath('a'.repeat(5000), virtual)).toBe(false)
   })
