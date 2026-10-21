@@ -99,6 +99,11 @@ describe('output wiring', () => {
     expect(tabs).toBeLessThan(more)
     expect(workbench).toContain('aria-label="底部面板"')
     expect(workbench).toContain('selectBottomPanel')
+    // 视图标签是三个独立的圆角按钮块，不再复用页签条样式。
+    expect(workbench).toContain('dvw-panel-tabs')
+    expect(workbench).toContain('className="dvw-panel-tab"')
+    expect(styles).toContain('.dvw-panel-tab[aria-selected=true]')
+    expect(styles).toContain('border-radius:var(--dvw-radius-sm)')
   })
 
   it('moves the terminal session tab strip into the terminal view', () => {
