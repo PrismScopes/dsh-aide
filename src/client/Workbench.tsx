@@ -13,7 +13,8 @@ import { DshConversationPanel } from './DshConversationPanel.tsx'
 import { DshMark } from './DshMark.tsx'
 import { DocumentPreview, documentPreviewKind, type DocumentPreviewKind } from './documentPreview.tsx'
 import { toggleTerminal } from './shortcuts.ts'
-import { resetWorkspaceDocuments, WorkspaceRequestScope } from './workspaceState.ts'
+import { WorkspaceRequestScope } from './workspaceState.ts'
+import { openTabsKey, parseStoredOpenTabs, restorableOpenTabs, serializeOpenTabs, type StoredOpenTabs, type StoredTab } from './openTabs.ts'
 import { useDshDarkTheme } from './theme.ts'
 import { Git } from './GitPanel.tsx'
 import { GitGraphTab, GIT_GRAPH_PATH } from './GitGraphTab.tsx'
@@ -164,6 +165,24 @@ function PanelResizer({ className, label, width, min, max, defaultWidth, directi
 function unloadedTab(path:string):Tab{return {path,content:'',draft:'',revision:'',size:0,binary:false,tooLarge:false,dirty:false,loaded:false,preview:/\.md$/i.test(path)}}
 
 /**
+ * 把一个恢复出来的标签还原成 Tab。
+ *
+ * 与 `unloadedTab` 一样只还原**标签头**（正文由激活时的加载 effect 去读）；区别是恢复出来的
+ * 标签一律固定（pinned）：预览标签的语义是「点别的文件就替换掉它」，恢复时不该再带这个语义，
+ * 否则用户切到另一个文件就会把恢复出来的标签顶掉。
+ */
+function restoredTab(tab:StoredTab):Tab{
+  if(tab.path===GIT_GRAPH_PATH)return {...unloadedTab(tab.path),title:'提交图',pinned:true,loaded:true,graphAll:tab.graphAll===true}
+  if(tab.path===GIT_OUTPUT_PATH)return {...unloadedTab(tab.path),title:'Git 输出',pinned:true,loaded:true}
+  return {...unloadedTab(tab.path),...(tab.title===undefined?{}:{title:tab.title}),line:tab.line,column:tab.column,pinned:true}
+}
+
+/** 存储里的原值 → 标签数组（解析失败、形状不认识、路径不可恢复都按「没有存过」处理）。 */
+function readStoredOpenTabs(root:string):StoredOpenTabs|undefined{
+  try{return parseStoredOpenTabs(localStorage.getItem(openTabsKey(root)))}catch{return undefined}
+}
+
+/**
  * 资源管理器里的文件类型图标。优先用 material-icon-theme 的彩色 SVG（与 VS Code 一致），
  * 没有对应图标时回落到 codicon 单色字形；目录仍用 codicon 的 folder / folder-opened。
  */
@@ -174,8 +193,6 @@ function FileGlyph({ name, kind, expanded }: { name: string; kind: 'file' | 'dir
     ? <Icon name={fileIcon(name)} className="dvw-file-icon"/>
     : <img className="dvw-file-icon-img" src={url} alt="" loading="lazy" decoding="async"/>
 }
-
-/** Restore tab headers without reading their file contents. */
 
 /** Return whether file changes require reloading one visible directory. */
 export function directoryAffected(directory:string,changedPaths:string[]):boolean{return changedPaths.some(changed=>{const normalized=changed.replace(/\\/g,'/');const parent=normalized.includes('/')?normalized.slice(0,normalized.lastIndexOf('/')):'';return normalized===directory||parent===directory})}
@@ -874,7 +891,65 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     }
     setActive(path)
   }
-  useEffect(()=>{if(!snapshot.visible||sessionId===undefined)return;const epoch=workspaceRequests.current.begin();const cleared=resetWorkspaceDocuments<Tab>();loadingTabs.current.clear();setWorkspace(undefined);setTabs(cleared.tabs);tabsRef.current=cleared.tabs;setActive(cleared.active);setError(cleared.error);const controller=new AbortController();void api<{cwd:string;name:string}>('workspace',{sessionId},controller.signal).then(value=>{if(!workspaceRequests.current.isCurrent(epoch))return;setWorkspace(value);}).catch(error=>{if(!controller.signal.aborted&&workspaceRequests.current.isCurrent(epoch))setError(String(error))});return()=>{controller.abort();loadingTabs.current.clear();workspaceRequests.current.invalidate(epoch)}},[snapshot.visible,sessionId])
+  /**
+   * 打开工作台时解析工作区根（文件树与标签持久化都以它为根）。
+   *
+   * 隐藏再打开时**不再清空标签**：用户只是回 DSH 主页面说句话，回来时打开的文件应该还在。
+   * 以前这里每次 `visible` 变 true 都 reset 一次标签，于是「返回 DSH」= 丢掉全部已打开文件；
+   * 会话或工作目录真的变了由外层 Overlay 的 key（`session.id:cwd`）重新挂载整个工作台。
+   */
+  useEffect(()=>{if(!snapshot.visible||sessionId===undefined)return;const epoch=workspaceRequests.current.begin();const controller=new AbortController();void api<{cwd:string;name:string}>('workspace',{sessionId},controller.signal).then(value=>{if(workspaceRequests.current.isCurrent(epoch))setWorkspace(value)}).catch(error=>{if(!controller.signal.aborted&&workspaceRequests.current.isCurrent(epoch))setError(String(error))});return()=>{controller.abort();workspaceRequests.current.invalidate(epoch)}},[snapshot.visible,sessionId])
+  /**
+   * 首次打开工作台时恢复上次的标签栏（同一工作区）。
+   *
+   * 只恢复路径、顺序与当前标签，正文交给激活时的加载 effect —— 和「点开一个文件」完全同一条
+   * 路径，读到的永远是磁盘上的最新内容。只恢复一次：之后标签状态就是用户自己的了。
+   */
+  const restoredOpenTabs=useRef(false)
+  useEffect(()=>{
+    if(restoredOpenTabs.current)return
+    const root=workspace?.cwd
+    if(!snapshot.visible||root===undefined)return
+    restoredOpenTabs.current=true
+    if(tabsRef.current.length>0)return
+    const stored=readStoredOpenTabs(root)
+    if(stored===undefined)return
+    const restored=restorableOpenTabs(stored,[GIT_GRAPH_PATH,GIT_OUTPUT_PATH])
+    if(restored.tabs.length===0)return
+    const rows=restored.tabs.map(restoredTab)
+    setTabs(rows);tabsRef.current=rows;setActive(restored.active??rows[0]?.path)
+  },[snapshot.visible,workspace])
+  /**
+   * 标签栏落库（按工作区根目录分别存）。
+   *
+   * 先压成 JSON 字符串再当依赖：输入正文时 tabs 每敲一个键都会变，但可持久化的形状不变，
+   * 字符串相同 effect 就不重跑，localStorage 不会被键盘输入带着一次次同步写。
+   * `restoredOpenTabs` 之前不写：否则恢复还没发生，就先拿空列表把上次的标签覆盖掉了。
+   */
+  const storedOpenTabs=useMemo(()=>JSON.stringify(serializeOpenTabs(tabs,active)),[tabs,active])
+  useEffect(()=>{
+    const root=workspace?.cwd
+    if(root===undefined||!restoredOpenTabs.current)return
+    try{localStorage.setItem(openTabsKey(root),storedOpenTabs)}catch{/* 隐私模式/配额满：内存里的标签仍然可用 */}
+  },[workspace?.cwd,storedOpenTabs])
+  /**
+   * 回到工作台时刷新隐藏期间在磁盘上变过的文件。
+   *
+   * 工作台不可见时文件监听（WebSocket）是断开的，标签正文可能已经过期；不刷新就会出现
+   * 「显示旧内容、保存时撞 revision」的怪状态。只重读干净标签，脏标签的草稿一律不动。
+   */
+  const shownOnce=useRef(false)
+  useEffect(()=>{
+    if(!snapshot.visible||sessionId===undefined)return
+    if(!shownOnce.current){shownOnce.current=true;return}
+    const targets=tabsRef.current.filter(tab=>tab.loaded!==false&&tab.dirty!==true&&tab.diff===undefined&&tab.tooLarge!==true&&tab.imageUrl===undefined&&tab.documentPreview===undefined&&tab.path!==GIT_GRAPH_PATH&&tab.path!==GIT_OUTPUT_PATH)
+    for(const tab of targets){
+      void api<FileDocument>('fs.read',{sessionId,path:tab.path}).then(doc=>{
+        if(doc.binary||doc.tooLarge)return
+        setTabs(rows=>rows.map(row=>row.path!==tab.path||row.dirty===true||row.revision===doc.revision?row:{...row,...doc,draft:doc.content,loaded:true,external:false}))
+      }).catch(()=>{/* 文件被删除/无权限：保留标签，等用户操作时由错误栏提示 */})
+    }
+  },[snapshot.visible,sessionId])
   // 文件变更监听。地址必须用宿主的绝对地址：桌面端页面在 dsh-app://app/ 下，location.host 是
   // "app"，按它拼出来的 ws://app/… 连不上（实测 close 1006）——同一处坑，终端那边也踩过。
   // 宿主地址随 API 响应写进 api.ts 的模块状态，所以这里等它到位再连；拿不到就不连（Web 端会

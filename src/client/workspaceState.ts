@@ -1,14 +1,3 @@
-/** Values cleared before another workspace starts loading. */
-interface EmptyWorkspaceDocuments<T> {
-  tabs: T[]
-  active: undefined
-  error: undefined
-}
-
-/** Remove editor state that belongs to the previous workspace. */
-export function resetWorkspaceDocuments<T>(): EmptyWorkspaceDocuments<T> {
-  return { tabs: [], active: undefined, error: undefined }
-}
 
 /** Identifies responses that still belong to the active workspace request. */
 export class WorkspaceRequestScope {

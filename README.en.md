@@ -54,7 +54,8 @@
   and a local retrieval index that never leaves the workspace directory.
   See [docs/inline-completion.md](docs/inline-completion.md) for implementation and verification status.
   Note: host-side code loads at process start, so **restart the app** after changes (a page reload is enough for the client side).
-- **Sync and restore**: workspace file changes stream to the UI, while reload restores views, expanded directories, panels, and layout (file tabs are not restored across sessions).
+- **Sync and restore**: workspace file changes stream to the UI, while reload restores views, expanded directories, panels, layout, and **the file tabs from your previous session**
+  (stored locally per workspace root: leaving to the DSH main page, reloading the page, or restarting the app all bring the tab bar back; contents are re-read from disk when you switch to a tab, and unsaved drafts are not restored across sessions. Files that changed on disk while AIDE was hidden are reloaded when you return).
 
 AIDE mounts through DSH's `shell.overlay`, `main`, `sidebar.panellist`, and `settings.section` extension points
 (`main` and `sidebar.panellist` are registered as a pair and swap places when the side panel is collapsed). It does not

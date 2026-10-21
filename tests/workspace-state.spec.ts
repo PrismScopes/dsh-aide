@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { resetWorkspaceDocuments, WorkspaceRequestScope } from '../src/client/workspaceState.ts'
+import { WorkspaceRequestScope } from '../src/client/workspaceState.ts'
 
-describe('workspace editor isolation', () => {
-  it('drops tabs, selection, and errors when a different workspace begins loading', () => {
-    expect(resetWorkspaceDocuments()).toEqual({ tabs: [], active: undefined, error: undefined })
-  })
-
+describe('workspace request scoping', () => {
   it('rejects responses issued for an earlier workspace', () => {
     const scope = new WorkspaceRequestScope()
     const first = scope.begin()
