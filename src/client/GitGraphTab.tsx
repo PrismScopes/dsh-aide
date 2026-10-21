@@ -10,7 +10,7 @@ import { buildGraphList, branchTips, filterCommits, graphSubtitle, reachableComm
 import { groupMenuItems, stashMenuItems } from './gitMenus.ts'
 import { recordGitCommand } from './gitOutput.ts'
 import { gitViewStorageKey, parseGitViewSettings, type GitGraphViewSettings } from './gitView.ts'
-import { issueSegments, parseRemoteUrl, replaceEmojiShortcodes, type IssueProvider } from './gitText.ts'
+import { issueSegments, issueLinkStorageKey, parseIssueLinkConfig, pullRequestUrl, replaceEmojiShortcodes, resolveIssueLinks, type IssueLinkConfig, type IssueProvider } from './gitText.ts'
 import { isReviewed, markReviewed, parseReviewStore, pruneReviewStore, reviewProgress, reviewScopeKey, reviewStorageKey, type ReviewStore } from './gitReview.ts'
 import { QuickPick, type QuickPickItem } from './quickPick.tsx'
 import { Icon } from './Icon.tsx'
@@ -65,6 +65,10 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
   const [tagPicker, setTagPicker] = useState<GitTag[]>()
   const [tagDetail, setTagDetail] = useState<GitTagDetail>()
   const [repoSettings, setRepoSettings] = useState(false)
+  // Issue 链接配置与拉取请求目标分支：按仓库保存，空/坏数据走默认值。
+  const [issueConfig, setIssueConfig] = useState<IssueLinkConfig>({ provider: 'auto', repoUrl: '' })
+  const [pullBase, setPullBase] = useState('')
+  const [pullPicker, setPullPicker] = useState<GitBranchList>()
   const drag = useRef<{ column: 'authorWidth' | 'dateWidth' | 'hashWidth'; startX: number; startWidth: number }>()
   const findInput = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -92,6 +96,13 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
   useEffect(() => { if (repository !== '') writeStorage(gitViewStorageKey(repository), JSON.stringify(view)) }, [repository, view])
   useEffect(() => { if (repository !== '') writeStorage(reviewStorageKey(repository), Object.keys(reviews).length === 0 ? null : JSON.stringify(reviews)) }, [repository, reviews])
   // 文件变化（保存、外部改动、agent 写文件）后刷新；`.git` 不在 watcher 的忽略列表里。
+  useEffect(() => {
+    if (repository === '') return
+    setIssueConfig(parseIssueLinkConfig(readStorage(issueLinkStorageKey(repository))))
+    setPullBase(readStorage('dvw:git-pr-base:v1:' + repository) ?? '')
+  }, [repository])
+  useEffect(() => { if (repository !== '') writeStorage(issueLinkStorageKey(repository), JSON.stringify(issueConfig)) }, [repository, issueConfig])
+  useEffect(() => { if (repository !== '') writeStorage('dvw:git-pr-base:v1:' + repository, pullBase === '' ? null : pullBase) }, [repository, pullBase])
   const refreshDebounced = useDebouncedCallback(() => void refresh(), 600)
   useEffect(() => { window.addEventListener('dvw-files-changed', refreshDebounced); return () => window.removeEventListener('dvw-files-changed', refreshDebounced) }, [refreshDebounced])
   // 列宽拖动：pointermove 只改状态，松手后由持久化 effect 写回。
@@ -177,8 +188,9 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
   const hasUncommitted = (status?.changes.length ?? 0) > 0
   const graphList = useMemo(() => buildGraphList({ commitCount: rows.length, stashCount: stashes.length, hasUncommitted }), [rows.length, stashes.length, hasUncommitted])
   const originRemote = remoteList.find(remote => remote.name === 'origin') ?? remoteList[0]
-  const provider: IssueProvider = parseRemoteUrl(originRemote?.url ?? '')?.provider ?? 'none'
-  const repoUrl = parseRemoteUrl(originRemote?.url ?? '')?.repoUrl
+  const links = resolveIssueLinks(issueConfig, originRemote?.url)
+  const provider: IssueProvider = links.provider
+  const repoUrl = links.repoUrl
 
   const openFilterPicker = useCallback(async () => {
     if (branches === undefined) {
@@ -191,6 +203,24 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     try { setTagPicker(await api<GitTag[]>('git.action', { sessionId, action: 'tag.list' })) }
     catch (cause) { setError(String(cause)) }
   }, [sessionId])
+  const launchPullRequest = useCallback((base: string) => {
+    const source = status?.branch ?? ''
+    const url = pullRequestUrl(links.provider, links.repoUrl, source, base)
+    if (url === undefined) { setError('无法创建拉取请求：请先在「仓库设置」里配置远程仓库地址，并确认当前不在目标分支上'); return }
+    setError(undefined)
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }, [links.provider, links.repoUrl, status?.branch])
+  /** 目标分支固定在仓库设置里就直接开；否则列本地分支让用户选一次并记住。 */
+  const createPullRequest = useCallback(async () => {
+    const source = status?.branch ?? ''
+    if (pullBase.trim() !== '') { launchPullRequest(pullBase.trim()); return }
+    try {
+      const list = await api<GitBranchList>('git.action', { sessionId, action: 'branch.list' })
+      const candidates = list.local.filter(name => name !== source && name !== 'HEAD')
+      if (candidates.length === 1) { setPullBase(candidates[0]!); launchPullRequest(candidates[0]!); return }
+      setPullPicker(list)
+    } catch (cause) { setError(String(cause)) }
+  }, [status?.branch, pullBase, launchPullRequest, sessionId])
   const commands = useGitCommands({
     sessionId, busy, status, remotes,
     run: (action, path, value) => run(action, path, value),
@@ -208,6 +238,7 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     showTagDetail: () => void openTagPicker(),
     clearReviews: () => setReviews({}),
     openRepoSettings: () => setRepoSettings(true),
+    createPullRequest: () => void createPullRequest(),
   })
   const filterItems: QuickPickItem[] = useMemo(() => {
     const names = [...(branches?.local ?? []), ...(branches?.remote ?? [])]
@@ -399,7 +430,12 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
         <pre className="dvw-git-detail-body">{tagDetail.message === '' ? '（没有说明）' : renderMessage(tagDetail.message, false)}</pre>
       </div>
     </div>}
-    {repoSettings && <GitRepositorySettings busy={busy} remotes={remoteList} view={view} onClose={() => setRepoSettings(false)}
+    {pullPicker !== undefined && <QuickPick title="拉取请求的目标分支" placeholder="搜索分支" items={pullPicker.local.filter(name => name !== (status?.branch ?? '')).map(name => ({ id: name, label: name }))} emptyText="没有可用的目标分支"
+      onPick={item => { setPullPicker(undefined); setPullBase(item.id); launchPullRequest(item.id) }} onClose={() => setPullPicker(undefined)}/>}
+    {repoSettings && <GitRepositorySettings busy={busy} remotes={remoteList} view={view} issue={issueConfig} provider={links.provider} pullBase={pullBase} onClose={() => setRepoSettings(false)}
+      onSaveIssue={config => setIssueConfig(config)}
+      onSavePullBase={value => setPullBase(value)}
+      onCreatePullRequest={() => void createPullRequest()}
       onSaveRemote={(name, url) => void run('remote.set', name, url)}
       onRemoveRemote={name => void run('remote.remove', undefined, name)}
       onFetchRemote={name => void run('remote.fetch', name)}

@@ -32,7 +32,7 @@ function commitFileActions(): CommitFileMenuActions {
   return { openDiff: vi.fn(), copyPath: vi.fn() } as unknown as CommitFileMenuActions
 }
 
-const MENU_ACTION_KEYS = ['refresh', 'pull', 'push', 'fetch', 'sync', 'clone', 'checkout', 'commitStaged', 'commitAll', 'undoCommit', 'stageAll', 'unstageAll', 'discardAll', 'branchCreate', 'branchRename', 'branchDelete', 'branchMerge', 'branchRebase', 'openGraph', 'remoteAdd', 'remoteRemove', 'stashPush', 'stashApply', 'stashPop', 'stashDrop', 'tagCreate', 'tagDelete', 'tagPush', 'copyBranch', 'copyRepository', 'toggleTree', 'sortByPath', 'sortByName', 'loadMore', 'openFind', 'openBranchFilter', 'clearBranchFilter', 'toggleViewAuthor', 'toggleViewDate', 'toggleViewHash', 'toggleEmoji', 'showTagDetail', 'clearReviews', 'openRepoSettings', 'showOutput'] as const
+const MENU_ACTION_KEYS = ['refresh', 'pull', 'push', 'fetch', 'sync', 'clone', 'checkout', 'commitStaged', 'commitAll', 'undoCommit', 'stageAll', 'unstageAll', 'discardAll', 'branchCreate', 'branchRename', 'branchDelete', 'branchMerge', 'branchRebase', 'openGraph', 'remoteAdd', 'remoteRemove', 'stashPush', 'stashApply', 'stashPop', 'stashDrop', 'tagCreate', 'tagDelete', 'tagPush', 'copyBranch', 'copyRepository', 'toggleTree', 'sortByPath', 'sortByName', 'loadMore', 'openFind', 'openBranchFilter', 'clearBranchFilter', 'toggleViewAuthor', 'toggleViewDate', 'toggleViewHash', 'toggleEmoji', 'showTagDetail', 'clearReviews', 'openRepoSettings', 'createPullRequest', 'showOutput'] as const
 
 function menuActions(): GitMenuActions & Record<typeof MENU_ACTION_KEYS[number], ReturnType<typeof vi.fn>> {
   return Object.fromEntries(MENU_ACTION_KEYS.map(key => [key, vi.fn()])) as unknown as GitMenuActions & Record<typeof MENU_ACTION_KEYS[number], ReturnType<typeof vi.fn>>
@@ -195,7 +195,7 @@ describe('commit graph tab menu', () => {
 
   it('nests range, branch, stash and tag submenus', () => {
     expect(shape(graphMenuItems({ ...base, filtered: false, view: { showAuthor: true, showDate: true, showHash: true, emoji: true }, actions: menuActions() }))).toEqual([
-      'graph-refresh', 'graph-find', 'graph-filter', 'graph-view ▸ graph-view-author,graph-view-date,graph-view-hash,graph-view-emoji,graph-view-clear-reviews', 'graph-repo-settings', 'graph-range ▸ graph-range-current,graph-range-all', 'graph-load-more', '---',
+      'graph-refresh', 'graph-find', 'graph-filter', 'graph-view ▸ graph-view-author,graph-view-date,graph-view-hash,graph-view-emoji,graph-view-clear-reviews', 'graph-repo-settings', 'graph-pull-request', 'graph-range ▸ graph-range-current,graph-range-all', 'graph-load-more', '---',
       'graph-checkout',
       'graph-branch-group ▸ graph-branch-create,graph-branch-delete,graph-branch-merge',
       'graph-stash-group ▸ graph-stash-push,graph-stash-apply,graph-stash-pop',

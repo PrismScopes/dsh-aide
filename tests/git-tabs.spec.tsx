@@ -84,6 +84,15 @@ describe('提交图的 Git Graph 剩余项', () => {
     expect(source).toContain('reviewProgress')
   })
 
+  it('creates pull requests and stores the issue link config per repository', () => {
+    expect(source).toContain('pullRequestUrl')
+    expect(source).toContain("window.open(url, '_blank'")
+    expect(source).toContain('issueLinkStorageKey')
+    expect(source).toContain('resolveIssueLinks')
+    expect(source).toContain('dvw:git-pr-base:v1:')
+    expect(settings).toContain('拉取请求')
+    expect(settings).toContain('Issue 链接')
+  })
   it('loads tag details, remotes and the repository settings dialog', () => {
     expect(source).toContain("action: 'tag.detail'")
     expect(source).toContain("action: 'remote.list'")

@@ -51,6 +51,8 @@ export interface GitCommandBridge {
   showTagDetail?(): void
   clearReviews?(): void
   openRepoSettings?(): void
+  /** 创建 Pull Request（只有提交图标签页提供实现）。 */
+  createPullRequest?(): void
 }
 
 /** 输入型选择器的描述：标题、占位符、是否允许空串，以及提交后的动作。 */
@@ -192,6 +194,7 @@ export function useGitCommands(bridge: GitCommandBridge) {
     showTagDetail: () => bridgeRef.current.showTagDetail?.(),
     clearReviews: () => { if (confirm('清除代码审查的已读记录？')) bridgeRef.current.clearReviews?.() },
     openRepoSettings: () => bridgeRef.current.openRepoSettings?.(),
+    createPullRequest: () => bridgeRef.current.createPullRequest?.(),
     loadMore: () => bridgeRef.current.loadMore?.(),
     showOutput: () => bridgeRef.current.openOutput(),
   }

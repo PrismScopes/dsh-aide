@@ -204,6 +204,8 @@ export interface GitMenuActions {
   clearReviews(): void
   /** 打开仓库设置（远程管理 / Issue 链接 / 视图配置导出）。 */
   openRepoSettings(): void
+  /** 打开 Pull Request 创建页（按远程托管方生成 URL，目标分支可在仓库设置里固定）。 */
+  createPullRequest(): void
   /** 提交图多取一页（只有图表标签页/图表分组用得到）。 */
   loadMore(): void
   showOutput(): void
@@ -342,6 +344,7 @@ export function graphMenuItems(context: GraphMenuContext): MenuEntry[] {
       ],
     }),
     item({ id: 'graph-repo-settings', label: '仓库设置…', onSelect: actions.openRepoSettings }),
+    item({ id: 'graph-pull-request', label: '创建拉取请求…', disabled: !remote, onSelect: actions.createPullRequest }),
     item({
       id: 'graph-range', label: '提交范围', submenu: [
         item({ id: 'graph-range-current', label: allCommits ? '仅当前分支' : '仅当前分支（当前）', disabled: busy, onSelect: () => actions.openGraph(false) }),

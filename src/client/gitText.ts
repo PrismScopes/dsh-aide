@@ -102,3 +102,34 @@ export function isSupportedRemote(url: string): boolean {
 }
 
 export { PROVIDERS }
+
+/** Issue 链接配置：`auto` 表示按远程 URL 自动推断托管方；repoUrl 可手动覆盖。 */
+export interface IssueLinkConfig { provider: IssueProvider | 'auto'; repoUrl: string }
+
+/** 宽松解析仓库设置里的 Issue 配置；坏数据回落 auto + 空地址。 */
+export function parseIssueLinkConfig(raw: string | null): IssueLinkConfig {
+  const fallback: IssueLinkConfig = { provider: 'auto', repoUrl: '' }
+  if (raw === null || raw === '') return fallback
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { return fallback }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return fallback
+  const source = value as Record<string, unknown>
+  const provider = source.provider === 'github' || source.provider === 'gitlab' || source.provider === 'bitbucket' || source.provider === 'none' ? source.provider : 'auto'
+  return { provider, repoUrl: typeof source.repoUrl === 'string' ? source.repoUrl.trim() : '' }
+}
+
+/** 按仓库保存 Issue 链接配置。 */
+export function issueLinkStorageKey(repository: string): string {
+  return 'dvw:git-issues:v1:' + repository
+}
+
+/**
+ * 解析出实际使用的托管方与仓库地址：手动配置优先，否则从远程 URL 自动推断。
+ * 手动填了 repoUrl 但 provider 仍是 auto 时，再从 repoUrl 反推托管方。
+ */
+export function resolveIssueLinks(config: IssueLinkConfig, remoteUrl: string | undefined): { provider: IssueProvider; repoUrl: string | undefined } {
+  if (config.provider !== 'auto') return { provider: config.provider, repoUrl: config.repoUrl === '' ? undefined : config.repoUrl }
+  const source = config.repoUrl !== '' ? config.repoUrl : remoteUrl
+  const parsed = parseRemoteUrl(source ?? '')
+  return { provider: parsed?.provider ?? 'none', repoUrl: parsed?.repoUrl }
+}

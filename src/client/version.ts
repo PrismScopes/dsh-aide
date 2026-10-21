@@ -7,4 +7,4 @@
  *
  * 设置页「关于与诊断」与补全请求的 environment.extensionVersion 都从这里取，不再各写一份。
  */
-export const WORKBENCH_VERSION = '0.3.6'
+export const WORKBENCH_VERSION = '0.3.7'

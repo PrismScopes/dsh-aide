@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { COLUMN_WIDTH, DEFAULT_GIT_VIEW, clampColumnWidth, gitViewStorageKey, parseGitViewSettings } from '../src/client/gitView.ts'
-import { issueSegments, parseRemoteUrl, pullRequestUrl, replaceEmojiShortcodes } from '../src/client/gitText.ts'
+import { issueLinkStorageKey, issueSegments, parseIssueLinkConfig, parseRemoteUrl, pullRequestUrl, replaceEmojiShortcodes, resolveIssueLinks } from '../src/client/gitText.ts'
 import { REVIEW_TTL_MS, isReviewed, markReviewed, parseReviewStore, pruneReviewStore, reviewProgress, reviewScopeKey, reviewStorageKey } from '../src/client/gitReview.ts'
 
 describe('提交图视图设置', () => {
@@ -124,5 +124,22 @@ describe('代码审查记录', () => {
     expect(pruneReviewStore(fresh, now)).toEqual({ [scope]: { 'fresh.ts': now } })
     expect(parseReviewStore('not json')).toEqual({})
     expect(parseReviewStore(JSON.stringify({ [scope]: { 'a.ts': 1, 'b.ts': 'bad' } }))).toEqual({ [scope]: { 'a.ts': 1 } })
+  })
+})
+
+describe('Issue 链接配置', () => {
+  it('parses the repository setting with a safe fallback', () => {
+    expect(parseIssueLinkConfig(null)).toEqual({ provider: 'auto', repoUrl: '' })
+    expect(parseIssueLinkConfig('not json')).toEqual({ provider: 'auto', repoUrl: '' })
+    expect(parseIssueLinkConfig(JSON.stringify({ provider: 'gitlab', repoUrl: ' https://gitlab.com/o/r ' }))).toEqual({ provider: 'gitlab', repoUrl: 'https://gitlab.com/o/r' })
+    expect(parseIssueLinkConfig(JSON.stringify({ provider: 'weird' }))).toEqual({ provider: 'auto', repoUrl: '' })
+    expect(issueLinkStorageKey('H:/repo')).toBe('dvw:git-issues:v1:H:/repo')
+  })
+
+  it('prefers the manual config and otherwise derives from the remote', () => {
+    expect(resolveIssueLinks({ provider: 'auto', repoUrl: '' }, 'git@github.com:o/r.git')).toEqual({ provider: 'github', repoUrl: 'https://github.com/o/r' })
+    expect(resolveIssueLinks({ provider: 'none', repoUrl: '' }, 'git@github.com:o/r.git')).toEqual({ provider: 'none', repoUrl: undefined })
+    expect(resolveIssueLinks({ provider: 'auto', repoUrl: 'https://gitlab.com/o/r' }, undefined)).toEqual({ provider: 'gitlab', repoUrl: 'https://gitlab.com/o/r' })
+    expect(resolveIssueLinks({ provider: 'auto', repoUrl: 'https://example.com/o/r' }, 'git@github.com:o/r.git')).toEqual({ provider: 'none', repoUrl: undefined })
   })
 })
