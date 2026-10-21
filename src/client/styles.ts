@@ -136,6 +136,18 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-set-recorder{height:32px;padding:0 12px;border:1px dashed var(--dsw-alias-state-warn-primary,#d7ba7d);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;cursor:pointer;outline:none}
 .dvw-set-recorder:focus-visible{border-style:solid;box-shadow:0 0 0 2px var(--dsw-alias-state-warn-primary,#d7ba7d)}
 .dvw-set-button-small{height:28px;padding:0 10px;font-size:12px}
+/* ---- 快捷键面板（对话框）：设置页只留一行入口，搜索/分组列表/录制都在面板里 ---- */
+.dvw-shortcut-backdrop{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.42)}
+.dvw-shortcut-dialog{display:flex;flex-direction:column;width:min(560px,100%);max-height:min(78vh,720px);border-radius:14px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);box-shadow:0 18px 48px rgba(0,0,0,.35);overflow:hidden}
+.dvw-shortcut-dialog-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:.5px solid var(--dsw-alias-border-l2)}
+.dvw-shortcut-dialog-title{flex:1;font-size:14px;font-weight:600;line-height:20px}
+.dvw-shortcut-dialog-close{display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dvw-shortcut-dialog-close:hover{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary)}
+.dvw-shortcut-dialog-search{padding:10px 16px;border-bottom:.5px solid var(--dsw-alias-border-l2)}
+.dvw-shortcut-dialog-search .dvw-set-input{width:100%}
+.dvw-shortcut-dialog-list{flex:1;min-height:0;overflow:auto;padding:2px 16px 6px}
+.dvw-shortcut-dialog-foot{display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:.5px solid var(--dsw-alias-border-l2)}
+.dvw-shortcut-dialog-foot .dvw-set-desc{flex:1}
 .dvw-set-footnote{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6}
 /* 侧栏面板行：图标占一个正常 flex 位，命中层另用绝对定位铺满整行并在冒泡阶段吃掉点击，
    避免 DSH 把主区域切到空面板（那会卸载整个会话视图，是打开工作台时整屏卡顿的来源）。 */

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
+import { ShortcutDialogContent } from '../src/client/ShortcutSettings.tsx'
 import { PREFERENCES_KEY, preferences } from '../src/client/preferences.ts'
 import { keybindings } from '../src/client/keybindings.ts'
 
@@ -91,36 +92,45 @@ describe('workbench settings page', () => {
     expect(html).toContain('aria-label="增大补全触发延迟"')
   })
 
-  it('renders the shortcuts as a searchable, grouped, editable list', () => {
-    // 不再是平铺清单：有搜索框、分组小标题、可点的键帽、以及固定的编辑器内置键位。
-    expect(html).toContain('aria-label="搜索快捷键"')
-    expect(html).toContain('class="dvw-set-subgroup">导航</h4>')
-    expect(html).toContain('aria-label="修改快捷键：保存当前文件"')
-    expect(html).toContain('aria-label="快捷键（编辑器内置，不可修改）：编辑器内查找"')
-    expect(html).toContain('编辑器内置快捷键，不可修改')
-    expect(html).toContain('恢复全部默认')
+  it('keeps the shortcut editor behind one row entry instead of flattening it into the page', () => {
+    // 与 DSH 一致：设置页只有一行入口（标题 + 说明 + 「查看」），列表与改键都在面板里。
+    expect(html).toContain('class="dvw-set-title">快捷键面板</span>')
+    expect(html).toContain('aria-label="打开快捷键设置"')
+    expect(html).not.toContain('dvw-set-shortcut')
+    expect(html).not.toContain('dvw-set-subgroup')
+    expect(html).not.toContain('dvw-set-keycap')
+    expect(styles).toContain('.dvw-shortcut-backdrop')
     expect(styles).toContain('.dvw-set-recorder')
     expect(styles).toContain('.dvw-set-subgroup')
   })
 
-  it('shows changed bindings and how many shortcuts were modified', () => {
+  it('renders the shortcut panel with search, groups and editable rows', () => {
+    const dialog = renderToStaticMarkup(<ShortcutDialogContent onClose={() => {}}/>)
+    expect(dialog).toContain('role="dialog"')
+    expect(dialog).toContain('aria-modal="true"')
+    expect(dialog).toContain('aria-label="搜索快捷键"')
+    expect(dialog).toContain('class="dvw-set-subgroup">导航</h4>')
+    expect(dialog).toContain('aria-label="修改快捷键：保存当前文件"')
+    expect(dialog).toContain('aria-label="快捷键（编辑器内置，不可修改）：编辑器内查找"')
+    expect(dialog).toContain('<kbd class="dvw-set-keycap">Ctrl</kbd>')
+    expect(dialog).toContain('采纳整条补全建议')
+    expect(dialog).toContain('恢复全部默认')
+  })
+
+  it('shows changed bindings and how many shortcuts were modified inside the panel', () => {
     keybindings.set('editor.save', { code: 'KeyQ', ctrl: true })
-    const updated = renderToStaticMarkup(<SettingsPanel/>)
-    expect(updated).toContain('<kbd class="dvw-set-keycap">Q</kbd>')
-    expect(updated).toContain('已修改 1 项')
+    const dialog = renderToStaticMarkup(<ShortcutDialogContent onClose={() => {}}/>)
+    expect(dialog).toContain('<kbd class="dvw-set-keycap">Q</kbd>')
+    expect(dialog).toContain('已修改 1 项')
     keybindings.set('terminal.toggle', null)
-    expect(renderToStaticMarkup(<SettingsPanel/>)).toContain('未绑定')
+    expect(renderToStaticMarkup(<ShortcutDialogContent onClose={() => {}}/>)).toContain('未绑定')
     keybindings.resetAll()
   })
 
   it('renders the terminal, shortcut and diagnostic groups', () => {
     expect(html).toContain('终端字号')
     expect(html).toContain('class="dvw-set-value">13</span>')
-    // 键帽用 <kbd> 渲染，读屏与复制都能拿到真实键名。
-    expect(html).toContain('<kbd class="dvw-set-keycap">Ctrl</kbd>')
-    expect(html).toContain('采纳整条补全建议')
-    expect(html).toContain('编辑器内查找')
-    expect(html).toContain('显示或隐藏终端')
+    expect(html).toContain('打开快捷键设置')
     expect(html).toContain('版本')
     expect(html).toContain(VERSION)
     expect(html).toContain('DSH 设置文件')
