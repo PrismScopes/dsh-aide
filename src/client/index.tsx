@@ -15,6 +15,7 @@ import { SettingsPanel } from './SettingsPanel.tsx'
 import { Workbench } from './Workbench.tsx'
 import { installStyles } from './styles.ts'
 import { handleTerminalShortcut } from './shortcuts.ts'
+import { bindingMatches, bindingOf } from './keybindings.ts'
 import { mainViewSession } from './session.ts'
 import type { MenuEntry } from './ContextMenu.tsx'
 import type { EditorMenuTarget } from './editorMenuRegistry.ts'
@@ -275,28 +276,47 @@ export function apply(ctx: ClientContext): void {
   // DSH 设置导航里的「AIDE 工作台」页。order 取较大值，排在「插件市场」下面。
   // 设置页自己读写偏好（客户端 localStorage + 宿主的补全设置端点），不需要注入 workbench 服务。
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: PANEL_ID, order: 1000, label: 'AIDE', inject: () => ({}) }, SettingsPanel))
+  /**
+   * 全局导航快捷键。
+   *
+   * 键位一律从设置页可改的注册表里实时读取（`keybindings.ts`）：设置页改完不用刷新，
+   * 且与 DSH 的设置项（可改 / 固定）共用同一份定义。
+   */
   ctx.effect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (handleTerminalShortcut(event, service)) return
       if (event.isComposing) return
-      // F4 / Shift+F4：搜索结果的「下一个 / 上一个匹配」（与 VS Code 同键位）。
-      // 这两条命令由搜索面板在挂载期注册，不在搜索视图里就什么都不做。
-      if (event.code === 'F4' && !event.ctrlKey && !event.altKey) {
+      // 搜索结果的「下一个 / 上一个匹配」：只有停在搜索视图时才响应（命令由搜索面板在挂载期注册）。
+      const next = bindingOf('search.next')
+      const previous = bindingOf('search.previous')
+      if ((next !== null && bindingMatches(event, next)) || (previous !== null && bindingMatches(event, previous))) {
         const snapshot = service.getSnapshot()
-        if (snapshot.visible && snapshot.view === 'search') { event.preventDefault(); service.runCommand(event.shiftKey ? 'search.previous' : 'search.next') }
+        if (snapshot.visible && snapshot.view === 'search') {
+          event.preventDefault()
+          service.runCommand(previous !== null && bindingMatches(event, previous) ? 'search.previous' : 'search.next')
+        }
         return
       }
-      if (!event.ctrlKey || event.altKey) return
-      // Ctrl+Shift+F 打开搜索并聚焦输入框；Ctrl+Shift+H 同时展开替换行（VS Code 的「替换文件」）。
-      // 视图首次打开时组件还没挂载，等到这一帧提交之后再发命令。
-      if (event.shiftKey && (event.code === 'KeyF' || event.code === 'KeyH')) {
+      // 搜索并聚焦输入框 / 同时展开替换行。视图首次打开时组件还没挂载，等到这一帧提交之后再发命令。
+      const focusSearch = bindingOf('view.search')
+      const openReplace = bindingOf('search.replace')
+      const wantsSearch = focusSearch !== null && bindingMatches(event, focusSearch)
+      const wantsReplace = openReplace !== null && bindingMatches(event, openReplace)
+      if (wantsSearch || wantsReplace) {
         event.preventDefault()
         service.show('search')
-        window.setTimeout(() => service.runCommand(event.code === 'KeyF' ? 'search.focus' : 'search.replace'), 30)
+        window.setTimeout(() => service.runCommand(wantsReplace ? 'search.replace' : 'search.focus'), 30)
         return
       }
-      const view = event.shiftKey && event.code === 'KeyE' ? 'explorer' : event.shiftKey && event.code === 'KeyG' ? 'git' : undefined
-      if (view !== undefined) { event.preventDefault(); service.show(view) }
+      // 资源管理器 / 源代码管理。
+      const explorer = bindingOf('view.explorer')
+      const git = bindingOf('view.git')
+      const wantsExplorer = explorer !== null && bindingMatches(event, explorer)
+      const wantsGit = git !== null && bindingMatches(event, git)
+      if (wantsExplorer || wantsGit) {
+        event.preventDefault()
+        service.show(wantsExplorer ? 'explorer' : 'git')
+      }
     }
     window.addEventListener('keydown', onKey, true); return () => window.removeEventListener('keydown', onKey, true)
   }, 'dsh-aide: navigation shortcuts')

@@ -120,6 +120,22 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-set-info[data-tone=warn] .dvw-set-info-value{color:var(--dsw-alias-state-warn-primary,#d7ba7d)}
 .dvw-set-info[data-tone=error] .dvw-set-info-value{color:var(--dsw-alias-state-error-primary,#f48771)}
 .dvw-set-keycap{display:inline-block;min-width:22px;padding:1px 6px;border:1px solid var(--dsw-alias-border-l2);border-bottom-width:2px;border-radius:6px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:center}
+/* ---- 快捷键分组：搜索 + 分组列表 + 就地录制（交互对齐 DSH 自己的快捷键设置） ---- */
+.dvw-set-shortcut-search{width:240px}
+.dvw-set-subgroup{margin:18px 0 0;font-size:12px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dvw-set-shortcut{padding:9px 2px}
+.dvw-set-shortcut-keys{display:inline-flex;align-items:center;gap:4px;padding:2px;border:0;border-radius:8px;background:transparent;cursor:pointer}
+.dvw-set-shortcut-keys:hover:not(:disabled){background:var(--dsw-alias-bg-layer-3)}
+.dvw-set-shortcut-keys:disabled{cursor:default;opacity:.75}
+/* 可改的行在悬停时露一个铅笔提示，固定键位没有 —— 否则两排在视觉上分不出来。 */
+.dvw-set-shortcut-edit{width:12px;opacity:0;transition:opacity .12s;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dvw-set-shortcut:hover .dvw-set-shortcut-edit,.dvw-set-shortcut-keys:focus-visible .dvw-set-shortcut-edit{opacity:1}
+.dvw-set-unbound{font-size:12px;color:var(--dsw-alias-label-tertiary)}
+.dvw-set-conflict{color:var(--dsw-alias-state-warn-primary,#d7ba7d)}
+.dvw-set-recorder-group{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.dvw-set-recorder{height:32px;padding:0 12px;border:1px dashed var(--dsw-alias-state-warn-primary,#d7ba7d);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;cursor:pointer;outline:none}
+.dvw-set-recorder:focus-visible{border-style:solid;box-shadow:0 0 0 2px var(--dsw-alias-state-warn-primary,#d7ba7d)}
+.dvw-set-button-small{height:28px;padding:0 10px;font-size:12px}
 .dvw-set-footnote{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6}
 /* 侧栏面板行：图标占一个正常 flex 位，命中层另用绝对定位铺满整行并在冒泡阶段吃掉点击，
    避免 DSH 把主区域切到空面板（那会卸载整个会话视图，是打开工作台时整屏卡顿的来源）。 */

@@ -4,6 +4,7 @@ import lightPlus from '@shikijs/themes/light-plus'
 import { installTextMate, textMateSize } from './textmateHighlight.ts'
 import { attachInlineCompletion } from './inlineCompletion.ts'
 import { getPreferences, usePreferences } from './preferences.ts'
+import { bindingMatches, bindingOf } from './keybindings.ts'
 import { editorChrome, editorModelOptions, editorOptions, highlightThemeColors, SCROLLBAR_SLIDER_ALPHA, withAlpha } from './editorOptions.ts'
 import { ContextMenu, separator, type MenuEntry } from './ContextMenu.tsx'
 import { copyText, readClipboard } from './clipboard.ts'
@@ -652,7 +653,17 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       model.updateOptions(editorModelOptions(editorPreferences))
       editor.current = instance
       const change = instance.onDidChangeModelContent(() => callbacks.current.onChange(instance.getValue()))
-      instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => callbacks.current.onSave())
+      // 保存键位来自设置页可改的键位表。用 DOM 捕获阶段监听而不是 addCommand：addCommand 的键位在
+      // 注册时就固定了，改键之后旧键仍然有效；这里每次按键实时读，改完立刻生效。
+      const dom = instance.getDomNode()
+      const saveKeydown = (event: KeyboardEvent) => {
+        const binding = bindingOf('editor.save')
+        if (binding === null || !bindingMatches(event, binding)) return
+        event.preventDefault()
+        event.stopPropagation()
+        callbacks.current.onSave()
+      }
+      dom?.addEventListener('keydown', saveKeydown, true)
       // contextmenu:false 之后 Monaco 不再 preventDefault，浏览器原生菜单会冒出来，这里自己拦住；
       // overlay widget（查找框等）保留原生菜单，否则里面的输入框没有复制粘贴。
       instance.onContextMenu((event: MonacoMouseEvent) => {
@@ -673,7 +684,7 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       if (props.line !== undefined) { instance.setPosition({ lineNumber: props.line, column: props.column ?? 1 }); instance.revealLineInCenter(props.line); instance.focus() }
       // 行内补全跟着编辑器实例走：没有 sessionId（比如预览场景）就不接。
       const detachCompletion = props.sessionId === undefined ? undefined : attachInlineCompletion(monaco, instance, { sessionId: props.sessionId })
-      return () => { detachCompletion?.(); change.dispose() }
+      return () => { detachCompletion?.(); change.dispose(); dom?.removeEventListener('keydown', saveKeydown, true) }
     }).catch(error => setError(error instanceof Error ? error.message : String(error)))
     return () => { disposed = true; editor.current?.dispose(); editor.current = undefined }
   }, [props.uri])

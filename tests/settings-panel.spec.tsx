@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { SettingsPanel } from '../src/client/SettingsPanel.tsx'
 import { PREFERENCES_KEY, preferences } from '../src/client/preferences.ts'
+import { keybindings } from '../src/client/keybindings.ts'
 
 /**
  * 设置页的结构测试。
@@ -22,7 +23,7 @@ const VERSION = (JSON.parse(readFileSync(fileURLToPath(new URL('../package.json'
 const html = renderToStaticMarkup(<SettingsPanel/>)
 
 describe('workbench settings page', () => {
-  afterEach(() => { preferences.reset() })
+  afterEach(() => { preferences.reset(); keybindings.resetAll() })
 
   it('renders all five groups in one scrolling page, without the removed sub-menu', () => {
     for (const label of ['编辑器', 'AI 补全', '终端', '快捷键', '关于与诊断']) {
@@ -88,6 +89,28 @@ describe('workbench settings page', () => {
     // 宿主设置未就绪：模型路由输入框禁用，但界面偏好（补全开关/延迟）照常可改。
     expect(html).toMatch(/aria-label="补全模型路由"[^>]*disabled=""/)
     expect(html).toContain('aria-label="增大补全触发延迟"')
+  })
+
+  it('renders the shortcuts as a searchable, grouped, editable list', () => {
+    // 不再是平铺清单：有搜索框、分组小标题、可点的键帽、以及固定的编辑器内置键位。
+    expect(html).toContain('aria-label="搜索快捷键"')
+    expect(html).toContain('class="dvw-set-subgroup">导航</h4>')
+    expect(html).toContain('aria-label="修改快捷键：保存当前文件"')
+    expect(html).toContain('aria-label="快捷键（编辑器内置，不可修改）：编辑器内查找"')
+    expect(html).toContain('编辑器内置快捷键，不可修改')
+    expect(html).toContain('恢复全部默认')
+    expect(styles).toContain('.dvw-set-recorder')
+    expect(styles).toContain('.dvw-set-subgroup')
+  })
+
+  it('shows changed bindings and how many shortcuts were modified', () => {
+    keybindings.set('editor.save', { code: 'KeyQ', ctrl: true })
+    const updated = renderToStaticMarkup(<SettingsPanel/>)
+    expect(updated).toContain('<kbd class="dvw-set-keycap">Q</kbd>')
+    expect(updated).toContain('已修改 1 项')
+    keybindings.set('terminal.toggle', null)
+    expect(renderToStaticMarkup(<SettingsPanel/>)).toContain('未绑定')
+    keybindings.resetAll()
   })
 
   it('renders the terminal, shortcut and diagnostic groups', () => {

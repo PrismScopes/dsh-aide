@@ -1,6 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CompletionSettingsView, WorkbenchSettingsView } from './api.ts'
 import { ApiError, readWorkbenchSettings, writeWorkbenchSettings } from './api.ts'
+import {
+  bindingConflict,
+  bindingFromEvent,
+  formatBinding,
+  modifiedShortcutCount,
+  resetAllKeyBindings,
+  resetKeyBinding,
+  searchShortcutRows,
+  setKeyBinding,
+  useKeybindings,
+  type CommandId,
+  type ShortcutRow,
+} from './keybindings.ts'
 import { listDshModelRoutes } from './dshModels.ts'
 import type { AutoSaveMode, CursorStyle, RenderWhitespace, WordWrapMode } from './preferences.ts'
 import {
@@ -193,27 +206,6 @@ const LINE_HEIGHT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
     const pixels = EDITOR_LINE_HEIGHT_MIN + offset
     return { value: String(pixels), label: `${pixels} px` }
   }),
-]
-
-/** 只读键位清单：这些能力在工作台里没有任何可见入口，不写在设置页就只能靠猜。 */
-const SHORTCUTS: ReadonlyArray<{ keys: readonly string[]; label: string }> = [
-  { keys: ['Tab'], label: '采纳整条补全建议' },
-  { keys: ['Ctrl', 'Alt', '→'], label: '只采纳补全的下一行' },
-  { keys: ['Ctrl', 'S'], label: '保存当前文件' },
-  { keys: ['Ctrl', 'F'], label: '编辑器内查找' },
-  { keys: ['Ctrl', 'H'], label: '编辑器内替换' },
-  { keys: ['Ctrl', 'G'], label: '转到行' },
-  { keys: ['Ctrl', '/'], label: '注释或取消注释当前行' },
-  { keys: ['Shift', 'Alt', 'F'], label: '格式化文档' },
-  { keys: ['Ctrl', 'Alt', 'B'], label: '显示或隐藏右侧 DSH 对话栏' },
-  { keys: ['Ctrl', 'Shift', 'E'], label: '资源管理器' },
-  { keys: ['Ctrl', 'Shift', 'F'], label: '搜索并聚焦输入框' },
-  { keys: ['Ctrl', 'Shift', 'H'], label: '替换文件' },
-  { keys: ['F4'], label: '下一个搜索结果' },
-  { keys: ['Shift', 'F4'], label: '上一个搜索结果' },
-  { keys: ['Ctrl', 'Shift', 'G'], label: '源代码管理' },
-  { keys: ['Ctrl', '`'], label: '显示或隐藏终端' },
-  { keys: ['Ctrl', 'Shift', '`'], label: '新建终端' },
 ]
 
 /** 编辑器分组：每一项都真的写进 preferences，MonacoEditor 读同一份 store 后立即生效。 */
@@ -413,15 +405,127 @@ function TerminalGroup({ preferences }: { preferences: ReturnType<typeof usePref
   </section>
 }
 
-/** 快捷键分组：只读清单，这些键位没有别的入口能发现。 */
-function ShortcutGroup() {
+/** 快捷键分组：搜索 + 分组列表，点键帽就地录制新组合键（与 DSH 自己的快捷键设置同一套交互）。 */
+function ShortcutsGroup() {
+  const overrides = useKeybindings()
+  const [query, setQuery] = useState('')
+  const [editing, setEditing] = useState<string | undefined>(undefined)
+  const [resetArmed, setResetArmed] = useState(false)
+  const rows = searchShortcutRows(query, overrides)
+  // 分组顺序取行出现的顺序：定义表里的顺序就是设置页想要的顺序，不另维护一份分组表。
+  const groups = [...new Set(rows.map(row => row.group))]
+  const modified = modifiedShortcutCount(overrides)
   return <section className="dvw-set-group">
     <h3 className="dvw-set-group-title">快捷键</h3>
-    {SHORTCUTS.map(shortcut => <div className="dvw-set-row" key={shortcut.label}>
-      <div className="dvw-set-text"><span className="dvw-set-title">{shortcut.label}</span></div>
-      <div className="dvw-set-control">{shortcut.keys.map(key => <kbd className="dvw-set-keycap" key={key}>{key}</kbd>)}</div>
+    <div className="dvw-set-row">
+      <div className="dvw-set-text">
+        <span className="dvw-set-title">改键</span>
+        <span className="dvw-set-desc">点右侧键帽开始录制，按下新组合键立即生效；Esc 取消。单键需配合 Ctrl/Alt/Shift 或使用 F1–F12，避免把普通输入吃掉。编辑器内置键位（如查找、替换）不接受修改。</span>
+      </div>
+      <div className="dvw-set-control">
+        <input className="dvw-set-input dvw-set-shortcut-search" type="search" aria-label="搜索快捷键" placeholder="搜索命令或键帽"
+          value={query} onChange={event => { setQuery(event.target.value); setEditing(undefined) }}/>
+      </div>
+    </div>
+    {groups.map(group => <div className="dvw-set-shortcut-group" key={group}>
+      <h4 className="dvw-set-subgroup">{group}</h4>
+      {rows.filter(row => row.group === group).map(row => <ShortcutRowView key={row.id} row={row} editing={editing === row.id}
+        onEdit={() => setEditing(row.id)} onDone={() => setEditing(undefined)}/>)}
     </div>)}
+    {rows.length === 0 && <div className="dvw-set-row">
+      <div className="dvw-set-text"><span className="dvw-set-desc">没有匹配的快捷键。</span></div>
+    </div>}
+    <div className="dvw-set-row">
+      <div className="dvw-set-text">
+        <span className="dvw-set-title">恢复全部默认</span>
+        <span className="dvw-set-desc">{modified === 0 ? '当前没有改过的快捷键。' : `已修改 ${modified} 项。`}固定的编辑器内置键位不在恢复范围内。</span>
+      </div>
+      <div className="dvw-set-control">
+        {resetArmed
+          ? <>
+            <button type="button" className="dvw-set-button dvw-set-button-danger" onClick={() => { resetAllKeyBindings(); setResetArmed(false); setEditing(undefined) }}>确认恢复</button>
+            <button type="button" className="dvw-set-button dvw-set-button-secondary" onClick={() => setResetArmed(false)}>取消</button>
+          </>
+          : <button type="button" className="dvw-set-button" disabled={modified === 0} onClick={() => setResetArmed(true)}>恢复全部默认</button>}
+      </div>
+    </div>
   </section>
+}
+
+/** 一行快捷键：可改命令点键帽进录制，固定键位只展示键帽。 */
+function ShortcutRowView({ row, editing, onEdit, onDone }: { row: ShortcutRow; editing: boolean; onEdit(): void; onDone(): void }) {
+  // 固定键位与「未绑定」没有冲突可言；其余用当前生效键位与全部命令（含固定项）比较。
+  const conflict = row.fixed || row.binding === null ? undefined : bindingConflict(row.binding, row.id as CommandId)
+  return <div className="dvw-set-row dvw-set-shortcut">
+    <div className="dvw-set-text">
+      <span className="dvw-set-title">{row.label}</span>
+      {conflict !== undefined && <span className="dvw-set-desc dvw-set-conflict">与「{conflict.label}」冲突</span>}
+    </div>
+    <div className="dvw-set-control">
+      {editing && !row.fixed
+        ? <ShortcutRecorder id={row.id as CommandId} label={row.label} onDone={onDone}/>
+        : <button type="button" className="dvw-set-shortcut-keys" data-fixed={row.fixed || undefined} disabled={row.fixed}
+            aria-label={row.fixed ? `快捷键（编辑器内置，不可修改）：${row.label}` : `修改快捷键：${row.label}`}
+            title={row.fixed ? '编辑器内置快捷键，不可修改' : '点击录制新的组合键'}
+            onClick={() => { if (!row.fixed) onEdit() }}>
+            {!row.fixed && <span className="dvw-set-shortcut-edit" aria-hidden="true">✎</span>}
+            {row.binding === null
+              ? <span className="dvw-set-unbound">未绑定</span>
+              : formatBinding(row.binding).map(key => <kbd className="dvw-set-keycap" key={key}>{key}</kbd>)}
+          </button>}
+    </div>
+  </div>
+}
+
+/**
+ * 就地录制：按下组合键立即保存。
+ *
+ * 焦点必须留在录制按钮上 —— 点走或 Esc 就取消，避免用户以为还在录制时把查找框里的输入吃掉。
+ * 与 DSH 一致：录制期间直接接管 keydown 捕获，不经过任何其它快捷键处理。
+ */
+function ShortcutRecorder({ id, label, onDone }: { id: CommandId; label: string; onDone(): void }) {
+  const recorder = useRef<HTMLButtonElement | null>(null)
+  const [message, setMessage] = useState('')
+  useEffect(() => {
+    recorder.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing) return
+      if (document.activeElement !== recorder.current) { onDone(); return }
+      if (event.code === 'Escape' && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        event.preventDefault()
+        event.stopPropagation()
+        onDone()
+        return
+      }
+      const binding = bindingFromEvent(event)
+      if (binding === undefined) return
+      event.preventDefault()
+      event.stopPropagation()
+      // 不允许光秃秃的字母数字键：那会把编辑器里的正常输入变成命令。
+      if (binding.ctrl !== true && binding.alt !== true && binding.shift !== true && !/^F\d{1,2}$/.test(binding.code)) {
+        setMessage('请配合 Ctrl/Alt/Shift，或使用 F1–F12')
+        return
+      }
+      const conflict = bindingConflict(binding, id)
+      if (conflict !== undefined) {
+        setMessage(`与「${conflict.label}」冲突，换一个组合键`)
+        return
+      }
+      setKeyBinding(id, binding)
+      onDone()
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [id, onDone])
+  return <div className="dvw-set-recorder-group">
+    <button ref={recorder} type="button" className="dvw-set-recorder" data-recording="true"
+      aria-label={`为「${label}」录制快捷键`} onClick={() => { setMessage('') }}>按下组合键…</button>
+    <button type="button" className="dvw-set-button dvw-set-button-secondary dvw-set-button-small"
+      onClick={() => { resetKeyBinding(id); onDone() }}>恢复默认</button>
+    <button type="button" className="dvw-set-button dvw-set-button-secondary dvw-set-button-small"
+      onClick={() => { setKeyBinding(id, null); onDone() }}>清除</button>
+    {message !== '' && <span className="dvw-set-desc dvw-set-conflict" role="alert">{message}</span>}
+  </div>
 }
 
 /** 关于与诊断分组：版本、设置落点、以及一个带二次确认的「恢复默认设置」。 */
@@ -467,7 +571,7 @@ export function SettingsPanel() {
     <EditorGroup preferences={preferences}/>
     <CompletionGroup preferences={preferences} settings={settings}/>
     <TerminalGroup preferences={preferences}/>
-    <ShortcutGroup/>
+    <ShortcutsGroup/>
     <AboutGroup settingsFile={settings.view?.completion.file}/>
     <p className="dvw-set-footnote">界面偏好保存在本机浏览器里；补全的模型路由与兜底写入 DSH 数据目录，重启后仍然有效。</p>
   </div>

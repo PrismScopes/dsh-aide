@@ -14,6 +14,7 @@ import { triggerPlan } from './completion.ts'
 import { api } from './api.ts'
 import { DEFAULT_PREFERENCES, getPreferences } from './preferences.ts'
 import { CompletionClient, type CompletionResponse } from './completion.ts'
+import { bindingMatches, bindingOf } from './keybindings.ts'
 
 /** 最近一次内容变更是否包含换行。换行意味着语句或块结束，按文档跳过防抖。 */
 interface ChangeTracker {
@@ -125,6 +126,11 @@ export class InlineCompletionController {
    * 整块采纳与按词采纳由 Monaco 自带（Tab 与 Ctrl+方向键右），按行它没有，所以由本地切片后
    * 作为一次编辑写入并同样记账。切分与记账都不依赖 Monaco 的内部状态，因此可以单独测。
    */
+  /** 当前是否有可采纳的建议（按行采纳的快捷键只在此时接管按键）。 */
+  hasSuggestion(): boolean {
+    return this.current !== undefined && this.current.text !== ''
+  }
+
   acceptNextLine(): string | undefined {
     const current = this.current
     if (current === undefined || current.text === '') return undefined
@@ -419,18 +425,18 @@ export function attachInlineCompletion(monacoApi: typeof monaco, editor: monaco.
     })
   }
 
-  // 按词与按行：只在建议可见时接管按键，否则会抢掉正常的按词移动。
-  const actions = [
-
-    editor.addAction({
-      id: 'dsh-completion.acceptLine',
-      label: '采纳补全的下一行',
-      precondition: 'inlineSuggestionVisible',
-      keybindings: [monacoApi.KeyMod.CtrlCmd | monacoApi.KeyMod.Alt | monacoApi.KeyCode.RightArrow],
-      run: () => { controller.acceptNextLine() },
-    }),
-
-  ]
+  // 按行采纳：键位来自设置页可改的键位表（每次按键实时读，改完立刻生效）。用 DOM 捕获监听而不是
+  // Monaco 的 addAction：addAction 的键位在注册时就固定了。只在确有建议时接管按键，否则会抢掉
+  // 正常的按词移动；整块与按词采纳仍由 Monaco 自带（Tab 与 Ctrl+方向键右）。
+  const dom = editor.getDomNode()
+  const acceptLine = (event: KeyboardEvent) => {
+    const binding = bindingOf('completion.acceptLine')
+    if (binding === null || !bindingMatches(event, binding) || !controller.hasSuggestion()) return
+    event.preventDefault()
+    event.stopPropagation()
+    controller.acceptNextLine()
+  }
+  dom?.addEventListener('keydown', acceptLine, true)
 
   const change = editor.onDidChangeModelContent(changes => controller.noteChange(changes))
   if (!providerRegistered) {
@@ -445,7 +451,7 @@ export function attachInlineCompletion(monacoApi: typeof monaco, editor: monaco.
     })
   }
   return () => {
-    for (const action of actions) action.dispose()
+    dom?.removeEventListener('keydown', acceptLine, true)
     change.dispose()
     controller.dispose()
     if (key !== '') controllers.delete(key)
