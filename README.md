@@ -194,12 +194,14 @@ PDF / Word 预览的渲染栈通过 DSH 客户端模块系统的按需 chunk（`
 AIDE 面向 DSH 社区发布，收录状态会持续更新：
 
 - **GitHub**：[PrismScopes/dsh-aide](https://github.com/PrismScopes/dsh-aide) —— 仓库已带 `dsh-plugin` / `deepseek-harness` topics，多个插件目录会自动索引。
-- **npm**：`dsh-aide` —— 发布后进入各索引源；本仓库的 `package.json` 已声明 `dsh.bundle` 清单、精确 SemVer 与 `cordis.patch.yml`。
-- **DSH Plugin Hub**：[dshpluginhub.ai](https://dshpluginhub.ai) —— 按 npm 小时级同步；带 `dsh.bundle` 与 `dsh-plugin` topic 的仓库会先以 source-only 出现，npm 发布后自动升级为完整条目。
+- **DSH Market**：[已收录](https://dsh.market/?plugin=PrismScopes%2Fdsh-aide) —— dsh.market（dshmarket）每日扫描 `dsh-plugin` topic 与社区精选列表。
+- **DSH Plugin Hub**：[已收录](https://dsh-plugin.org/zh/plugins/prismscopes/dsh-aide) —— dsh-plugin.org 社区插件市场，按 topic 自动收录，含中文条目。
+- **DSH Profile Hub**：[已收录](https://dshpluginhub.ai/zh/plugins/dsh-aide) —— dshpluginhub.ai，按 npm 小时级同步，也可浏览 / 分享 Profile。
+- **npm**：`dsh-aide` —— 尚未发布到 npm；发布后进入各索引源（`package.json` 已声明 `dsh.bundle` 清单、精确 SemVer 与 `cordis.patch.yml`）。
 - **dsh.so 插件市场**：[提交入口](https://www.dsh.so/zh/submit/) —— 粘贴仓库或包名，做 schema 校验与安全扫描后进入市场。
 - **awesome-dsh-plugin**：[community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) —— 一个插件一个 `data/plugins/<owner>__<repo>.yml`，满足 `dsh.bundle` + topic 后提交 PR。
 
-已提交的收录（审核 / 同步中）：[awesome-dsh-plugins #145](https://github.com/kejixiaoliang/awesome-dsh-plugins/pull/145) · [dshopen.org #17](https://github.com/polang233/dsh-plugin-index/issues/17) · [dsh-plugin.org #346](https://github.com/dshplugin/dsh-plugin-hub/issues/346)。
+已提交的收录（审核 / 同步中）：[awesome-dsh-plugin #8551](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/8551) · [awesome-dsh-plugins #145](https://github.com/kejixiaoliang/awesome-dsh-plugins/pull/145) · [dshopen.org #17](https://github.com/polang233/dsh-plugin-index/issues/17)。
 
 > 支持自定义插件索引的客户端，可以直接添加 `https://github.com/PrismScopes/dsh-aide`。
 

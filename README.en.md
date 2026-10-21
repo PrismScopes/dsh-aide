@@ -156,12 +156,14 @@ supported; every other feature keeps working.
 ## Listings and promotion
 
 - **GitHub**: [PrismScopes/dsh-aide](https://github.com/PrismScopes/dsh-aide) — the repo carries `dsh-plugin` / `deepseek-harness` topics, so several plugin directories index it automatically.
-- **npm**: `dsh-aide` — indexed once published; `package.json` already declares the `dsh.bundle` manifest, exact SemVer, and `cordis.patch.yml`.
-- **DSH Plugin Hub**: [dshpluginhub.ai](https://dshpluginhub.ai) — hourly npm sync; repos with a `dsh.bundle` manifest and the `dsh-plugin` topic appear as source-only first, then upgrade after the npm release.
+- **DSH Market**: [listed](https://dsh.market/?plugin=PrismScopes%2Fdsh-aide) — dsh.market (dshmarket) scans the `dsh-plugin` topic and curated lists daily.
+- **DSH Plugin Hub**: [listed](https://dsh-plugin.org/plugins/prismscopes/dsh-aide) — dsh-plugin.org community plugin market, auto-indexed from the topic, with a Chinese entry.
+- **DSH Profile Hub**: [listed](https://dshpluginhub.ai/en/plugins/dsh-aide) — dshpluginhub.ai, synced from npm hourly; also hosts shareable Profiles.
+- **npm**: `dsh-aide` — not published to npm yet; once published it feeds the indexes (`package.json` already declares the `dsh.bundle` manifest, exact SemVer, and `cordis.patch.yml`).
 - **dsh.so market**: [submission page](https://www.dsh.so/zh/submit/) — paste the repository or package name for schema validation and a security scan.
 - **awesome-dsh-plugin**: [community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) — one `data/plugins/<owner>__<repo>.yml` per plugin.
 
-Submitted listings (under review / sync): [awesome-dsh-plugins #145](https://github.com/kejixiaoliang/awesome-dsh-plugins/pull/145) · [dshopen.org #17](https://github.com/polang233/dsh-plugin-index/issues/17) · [dsh-plugin.org #346](https://github.com/dshplugin/dsh-plugin-hub/issues/346).
+Submitted listings (under review / sync): [awesome-dsh-plugin #8551](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/8551) · [awesome-dsh-plugins #145](https://github.com/kejixiaoliang/awesome-dsh-plugins/pull/145) · [dshopen.org #17](https://github.com/polang233/dsh-plugin-index/issues/17).
 
 > Clients with custom plugin-index support can add `https://github.com/PrismScopes/dsh-aide` directly.
 
