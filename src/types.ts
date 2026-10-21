@@ -65,7 +65,7 @@ export interface GitTagDetail { name: string; objectType: string; commit: string
 export interface GitRemote { name: string; url: string }
 
 /** Local repository state. */
-export interface GitStatus { repository: string; branch: string; ahead: number; behind: number; changes: GitChange[] }
+export interface GitStatus { repository: string; branch: string; ahead: number; behind: number; changes: GitChange[]; /** 是否有变基正在进行（决定「中止变基」是否可点）。 */ rebase: boolean }
 /**
  * 分支清单（分支选择器用）。
  *

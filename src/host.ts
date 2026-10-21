@@ -528,6 +528,25 @@ async function commitFiles(repository: string, hash: string, runner: ProcessRunn
   return (await commitFilesWithParent(repository, hash, runner)).files
 }
 
+/** 是否有变基正在进行：`REBASE_HEAD` 只在 rebase 期间存在（一次 spawn，不读 .git 目录）。 */
+async function rebaseInProgress(repository: string): Promise<boolean> {
+  // 不 spawn 一条 git：status 调用很频繁，直接看 .git 下的 rebase-merge / rebase-apply 目录。
+  let gitDir = join(repository, '.git')
+  try {
+    const info = await lstat(gitDir)
+    if (info.isFile()) {
+      const text = await readFile(gitDir, 'utf8')
+      const match = /^gitdir:\s*(.+)$/m.exec(text)
+      if (match === null) return false
+      gitDir = resolve(repository, (match[1] ?? '').trim())
+    }
+  } catch { return false }
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    try { await access(join(gitDir, name)); return true } catch { /* 不存在 */ }
+  }
+  return false
+}
+
 export async function gitStatus(cwd: string, runner: ProcessRunner = run): Promise<GitStatus> {
   const repository = await gitRoot(cwd, runner)
   const result = await runner('git', ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all'], repository)
@@ -544,7 +563,7 @@ export async function gitStatus(cwd: string, runner: ProcessRunner = run): Promi
       changes.push({ path, index: xy[0] ?? '.', worktree: xy[1] ?? '.', staged: xy[0] !== '.', untracked: false })
     }
   }
-  return { repository, branch, ahead, behind, changes }
+  return { repository, branch, ahead, behind, changes, rebase: await rebaseInProgress(repository) }
 }
 
 /**
@@ -962,6 +981,24 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       const modified = await gitObject(repository, `${to}:${target}`, runner)
       return { diff: shown.stdout, original, modified } satisfies GitDiff
     }
+    case 'commit.exec': {
+      // 一条动作覆盖「提交/全部提交/修正/签名」的组合：JSON 载荷比再堆十几个 case 清楚。
+      let payload: { message?: unknown; all?: unknown; amend?: unknown; signed?: unknown; reuse?: unknown }
+      try { payload = JSON.parse(value ?? '') as typeof payload } catch { throw new WorkbenchError('bad-request', 'commit payload must be valid JSON') }
+      const message = typeof payload.message === 'string' && payload.message.trim() !== '' ? payload.message : undefined
+      const all = payload.all === true
+      const amend = payload.amend === true
+      const signed = payload.signed === true
+      const reuse = payload.reuse === true
+      if (message === undefined && !amend && !reuse) throw new WorkbenchError('bad-request', 'commit message is required')
+      if (all) {
+        const added = await runGit(['add', '-A'])
+        if (added.code !== 0) throw new WorkbenchError('git-failed', added.stderr || added.stdout, 409)
+      }
+      args = ['commit', ...(amend ? ['--amend'] : []), ...(message !== undefined ? ['-m', message] : reuse ? ['-C', 'HEAD'] : ['--no-edit']), ...(signed ? ['-S'] : [])]
+      break
+    }
+    case 'rebase.abort': args = ['rebase', '--abort']; break
     case 'commit.checkout': args = ['switch', '--detach', validateCommitHash(value)]; break
     // path 在这里复用为「新分支名」，value 是基准提交（与 commit.show / commit.files 一样把哈希放 value）。
     case 'commit.branch': args = ['switch', '-c', validateBranchName(path), validateCommitHash(value)]; break

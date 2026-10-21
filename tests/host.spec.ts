@@ -623,6 +623,46 @@ describe('git graph parity actions', () => {
   })
 })
 
+describe('commit menu variants', () => {
+  it('commits staged changes with an explicit message and stages everything for the all variant', async () => {
+    const { root } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit.exec', undefined, JSON.stringify({ message: 'second' }))
+    expect((await gitStatus(root)).changes).toEqual([])
+    await writeFile(join(root, 'b.txt'), 'new\n')
+    await gitAction(root, 'commit.exec', undefined, JSON.stringify({ all: true, message: 'third' }))
+    const subjects = ((await gitAction(root, 'log')) as Array<{ subject: string }>).map(commit => commit.subject)
+    expect(subjects).toEqual(['third', 'second', 'first'])
+  })
+
+  it('reuses the previous message and amends without a message', async () => {
+    const { root } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit.exec', undefined, JSON.stringify({ message: 'second' }))
+    await writeFile(join(root, 'b.txt'), 'b\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit.exec', undefined, JSON.stringify({ reuse: true }))
+    let subjects = ((await gitAction(root, 'log')) as Array<{ subject: string }>).map(commit => commit.subject)
+    expect(subjects[0]).toBe('second')
+    await writeFile(join(root, 'c.txt'), 'c\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit.exec', undefined, JSON.stringify({ amend: true }))
+    subjects = ((await gitAction(root, 'log')) as Array<{ subject: string }>).map(commit => commit.subject)
+    expect(subjects[0]).toBe('second')
+    await gitAction(root, 'commit.exec', undefined, JSON.stringify({ amend: true, message: 'amended' }))
+    expect(((await gitAction(root, 'log')) as Array<{ subject: string }>)[0]?.subject).toBe('amended')
+  })
+
+  it('rejects malformed payloads and reports rebase state', async () => {
+    const { root } = await gitFixture()
+    await expect(gitAction(root, 'commit.exec', undefined, 'not json')).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'commit.exec', undefined, '{}')).rejects.toMatchObject({ code: 'bad-request' })
+    await expect(gitAction(root, 'rebase.abort')).rejects.toMatchObject({ code: 'git-failed' })
+    expect((await gitStatus(root)).rebase).toBe(false)
+  })
+})
 describe('client assets',()=>{it('resolves the VS Code Codicon font',()=>{expect(codiconAsset()).toMatchObject({type:'font/ttf'});expect(codiconAsset().path).toMatch(/codicon\.ttf$/)});it('resolves the PDF.js module worker',()=>{expect(pdfWorkerAsset()).toMatchObject({type:'text/javascript; charset=utf-8'});expect(pdfWorkerAsset().path).toMatch(/pdf\.worker\.min\.mjs$/)})})
 
 /**

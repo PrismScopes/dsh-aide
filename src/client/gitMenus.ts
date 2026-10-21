@@ -166,6 +166,20 @@ export interface GitMenuActions {
   commitStaged(): void
   commitAll(): void
   undoCommit(): void
+  /** 提交已暂存文件（沿用上次提交信息）。 */
+  commitStagedReuse(): void
+  /** 修正提交（可留空说明沿用原信息）。 */
+  commitAmend(): void
+  /** 修正已暂存的提交（不弹说明，沿用原信息）。 */
+  commitStagedAmend(): void
+  /** 全部提交并修正。 */
+  commitAllAmend(): void
+  /** 签名提交的三档。 */
+  commitSigned(): void
+  commitStagedSigned(): void
+  commitAllSigned(): void
+  /** 中止正在进行的变基。 */
+  abortRebase(): void
   stageAll(): void
   unstageAll(): void
   discardAll(): void
@@ -224,6 +238,8 @@ export interface ScmMenuContext {
   tree?: boolean
   /** 更改列表排序方式（查看和排序子菜单里切换）。 */
   sort?: 'path' | 'name'
+  /** 是否有变基在进行（决定「中止变基」是否可点）。 */
+  rebase: boolean
   actions: GitMenuActions
 }
 
@@ -234,7 +250,7 @@ export interface ScmMenuContext {
  * 分支 / 远程 / 存储 / 标记 / 显示输出。会写仓库的项带 `danger`，没有远程时远程相关项禁用。
  */
 export function scmMenuItems(context: ScmMenuContext): MenuEntry[] {
-  const { busy, remote, stagedCount, changeCount, tree, sort, actions } = context
+  const { busy, remote, stagedCount, changeCount, tree, sort, rebase, actions } = context
   const offline = busy || !remote
   return [
     item({ id: 'scm-refresh', label: '刷新', disabled: busy, onSelect: actions.refresh }),
@@ -254,9 +270,19 @@ export function scmMenuItems(context: ScmMenuContext): MenuEntry[] {
     separator(),
     item({
       id: 'scm-commit-group', label: '提交', submenu: [
-        item({ id: 'scm-commit-staged', label: '提交已暂存的更改…', disabled: busy || stagedCount === 0, onSelect: actions.commitStaged }),
-        item({ id: 'scm-commit-all', label: '提交所有更改…', disabled: busy || stagedCount + changeCount === 0, onSelect: actions.commitAll }),
+        item({ id: 'scm-commit-staged', label: '提交…', disabled: busy || stagedCount === 0, onSelect: actions.commitStaged }),
+        item({ id: 'scm-commit-staged-reuse', label: '提交已暂存文件', disabled: busy || stagedCount === 0, onSelect: actions.commitStagedReuse }),
+        item({ id: 'scm-commit-all', label: '全部提交…', disabled: busy || stagedCount + changeCount === 0, onSelect: actions.commitAll }),
         item({ id: 'scm-commit-undo', label: '撤销上次提交…', danger: true, disabled: busy, onSelect: actions.undoCommit }),
+        item({ id: 'scm-commit-abort-rebase', label: '中止变基', disabled: busy || !rebase, onSelect: actions.abortRebase }),
+        separator(),
+        item({ id: 'scm-commit-amend', label: '提交(修改)…', disabled: busy || stagedCount + changeCount === 0, onSelect: actions.commitAmend }),
+        item({ id: 'scm-commit-staged-amend', label: '提交已暂存文件(修改)', disabled: busy || stagedCount === 0, onSelect: actions.commitStagedAmend }),
+        item({ id: 'scm-commit-all-amend', label: '全部提交(修改)…', disabled: busy || stagedCount + changeCount === 0, onSelect: actions.commitAllAmend }),
+        separator(),
+        item({ id: 'scm-commit-signed', label: '提交(已签名)…', disabled: busy || stagedCount === 0, onSelect: actions.commitSigned }),
+        item({ id: 'scm-commit-staged-signed', label: '提交已暂存文件(已签名)', disabled: busy || stagedCount === 0, onSelect: actions.commitStagedSigned }),
+        item({ id: 'scm-commit-all-signed', label: '全部提交(已签名)…', disabled: busy || stagedCount + changeCount === 0, onSelect: actions.commitAllSigned }),
       ],
     }),
     item({

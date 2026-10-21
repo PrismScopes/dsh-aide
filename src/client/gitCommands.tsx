@@ -114,13 +114,27 @@ export function useGitCommands(bridge: GitCommandBridge) {
   const promptText = (prompt: TextPrompt) => setPicker({ kind: 'text', prompt })
   const close = () => setPicker(undefined)
 
-  /** 提交说明输入：先暂存（可选）再提交，两条命令都走同一套错误/刷新路径。 */
-  const promptCommit = (all: boolean) => promptText({
-    title: all ? '提交所有更改' : '提交已暂存的更改',
-    placeholder: '提交信息',
-    submitLabel: value => `提交 “${value}”`,
-    submit: message => { if (message.trim() !== '') run(all ? 'commit.all' : 'commit', undefined, message) },
+  /** 提交载荷：说明/全部/修正/签名组合成 commit.exec 的 JSON。 */
+  const commitPayload = (options: { all?: boolean; amend?: boolean; signed?: boolean; message: string }) => JSON.stringify({
+    ...(options.all === true ? { all: true } : {}),
+    ...(options.amend === true ? { amend: true } : {}),
+    ...(options.signed === true ? { signed: true } : {}),
+    ...(options.message.trim() === '' ? {} : { message: options.message.trim() }),
   })
+  const promptCommit = (options: { title: string; all?: boolean; amend?: boolean; signed?: boolean; allowEmpty: boolean }) => promptText({
+    title: options.title,
+    placeholder: options.allowEmpty ? '提交信息（留空沿用上次）' : '提交信息',
+    allowEmpty: options.allowEmpty,
+    submitLabel: value => value.trim() === '' ? '沿用上次提交信息' : `提交 “${value.trim()}”`,
+    submit: message => { if (message.trim() === '' && !options.allowEmpty) return; run('commit.exec', undefined, commitPayload({ all: options.all, amend: options.amend, signed: options.signed, message })) },
+  })
+  /** 不输入说明的提交：沿用上次提交信息（git commit -C HEAD）。 */
+  const reuseCommit = (options: { all?: boolean; amend?: boolean; signed?: boolean }) => run('commit.exec', undefined, JSON.stringify({
+    ...(options.all === true ? { all: true } : {}),
+    ...(options.amend === true ? { amend: true } : {}),
+    ...(options.signed === true ? { signed: true } : {}),
+    reuse: true,
+  }))
 
   const actions: GitMenuActions = {
     refresh: () => bridgeRef.current.refresh(),
@@ -132,9 +146,17 @@ export function useGitCommands(bridge: GitCommandBridge) {
       submit: url => { if (url.trim() !== '') run('clone', cloneTargetName(url), url.trim()) },
     }),
     checkout: () => void openBranch('switch'),
-    commitStaged: () => promptCommit(false),
-    commitAll: () => promptCommit(true),
+    commitStaged: () => promptCommit({ title: '提交已暂存的更改', allowEmpty: false }),
+    commitStagedReuse: () => reuseCommit({}),
+    commitAll: () => promptCommit({ title: '提交所有更改', all: true, allowEmpty: false }),
     undoCommit: () => { if (confirm('撤销上次提交？改动会退回暂存区。')) run('commit.undo') },
+    commitAmend: () => promptCommit({ title: '修正上次提交', amend: true, allowEmpty: true }),
+    commitStagedAmend: () => reuseCommit({ amend: true }),
+    commitAllAmend: () => promptCommit({ title: '提交全部更改并修正', all: true, amend: true, allowEmpty: true }),
+    commitSigned: () => promptCommit({ title: '签名提交已暂存的更改', signed: true, allowEmpty: false }),
+    commitStagedSigned: () => reuseCommit({ signed: true }),
+    commitAllSigned: () => promptCommit({ title: '签名提交全部更改', all: true, signed: true, allowEmpty: false }),
+    abortRebase: () => { if (confirm('中止正在进行的变基并恢复到变基前？')) run('rebase.abort') },
     stageAll: () => run('stage.all'),
     unstageAll: () => run('unstage.all'),
     discardAll: () => { if (confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。')) run('discard.all') },
@@ -201,7 +223,7 @@ export function useGitCommands(bridge: GitCommandBridge) {
 
   /** 面板标题的 `...`：需要调用方给出两组条目数（菜单里的禁用规则依赖它们）。 */
   const scmMenu = (counts: { staged: number; changes: number }): MenuEntry[] => scmMenuItems({
-    busy: bridge.busy, remote: bridge.remotes.length > 0, stagedCount: counts.staged, changeCount: counts.changes,
+    busy: bridge.busy, remote: bridge.remotes.length > 0, stagedCount: counts.staged, changeCount: counts.changes, rebase: bridge.status?.rebase === true,
     tree: bridge.tree, sort: bridge.sort, actions,
   })
   /** 提交图标签页的 `...`。 */

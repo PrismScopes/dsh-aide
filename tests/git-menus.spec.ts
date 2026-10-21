@@ -32,7 +32,7 @@ function commitFileActions(): CommitFileMenuActions {
   return { openDiff: vi.fn(), copyPath: vi.fn() } as unknown as CommitFileMenuActions
 }
 
-const MENU_ACTION_KEYS = ['refresh', 'pull', 'push', 'fetch', 'sync', 'clone', 'checkout', 'commitStaged', 'commitAll', 'undoCommit', 'stageAll', 'unstageAll', 'discardAll', 'branchCreate', 'branchRename', 'branchDelete', 'branchMerge', 'branchRebase', 'openGraph', 'remoteAdd', 'remoteRemove', 'stashPush', 'stashApply', 'stashPop', 'stashDrop', 'tagCreate', 'tagDelete', 'tagPush', 'copyBranch', 'copyRepository', 'toggleTree', 'sortByPath', 'sortByName', 'loadMore', 'openFind', 'openBranchFilter', 'clearBranchFilter', 'toggleViewAuthor', 'toggleViewDate', 'toggleViewHash', 'toggleEmoji', 'showTagDetail', 'clearReviews', 'openRepoSettings', 'createPullRequest', 'showOutput'] as const
+const MENU_ACTION_KEYS = ['refresh', 'pull', 'push', 'fetch', 'sync', 'clone', 'checkout', 'commitStaged', 'commitAll', 'undoCommit', 'stageAll', 'unstageAll', 'discardAll', 'branchCreate', 'branchRename', 'branchDelete', 'branchMerge', 'branchRebase', 'openGraph', 'remoteAdd', 'remoteRemove', 'stashPush', 'stashApply', 'stashPop', 'stashDrop', 'tagCreate', 'tagDelete', 'tagPush', 'copyBranch', 'copyRepository', 'toggleTree', 'sortByPath', 'sortByName', 'loadMore', 'openFind', 'openBranchFilter', 'clearBranchFilter', 'toggleViewAuthor', 'toggleViewDate', 'toggleViewHash', 'toggleEmoji', 'showTagDetail', 'clearReviews', 'openRepoSettings', 'createPullRequest', 'commitStagedReuse', 'commitAmend', 'commitStagedAmend', 'commitAllAmend', 'commitSigned', 'commitStagedSigned', 'commitAllSigned', 'abortRebase', 'showOutput'] as const
 
 function menuActions(): GitMenuActions & Record<typeof MENU_ACTION_KEYS[number], ReturnType<typeof vi.fn>> {
   return Object.fromEntries(MENU_ACTION_KEYS.map(key => [key, vi.fn()])) as unknown as GitMenuActions & Record<typeof MENU_ACTION_KEYS[number], ReturnType<typeof vi.fn>>
@@ -42,8 +42,8 @@ function groupActions(): GroupMenuActions {
   return { stageAll: vi.fn(), unstageAll: vi.fn(), discardAll: vi.fn(), refreshGraph: vi.fn(), toggleAllCommits: vi.fn(), loadMore: vi.fn(), collapseCommit: vi.fn() } as unknown as GroupMenuActions
 }
 
-interface ScmBase { busy: boolean; remote: boolean; stagedCount: number; changeCount: number; tree: boolean; sort: 'path' | 'name' }
-const SCM_BASE: ScmBase = { busy: false, remote: true, stagedCount: 2, changeCount: 1, tree: false, sort: 'path' }
+interface ScmBase { busy: boolean; remote: boolean; stagedCount: number; changeCount: number; tree: boolean; sort: 'path' | 'name'; rebase: boolean }
+const SCM_BASE: ScmBase = { busy: false, remote: true, stagedCount: 2, changeCount: 1, tree: false, sort: 'path', rebase: false }
 
 function scm(overrides: Partial<ScmBase> = {}, actions = menuActions()) {
   return scmMenuItems({ ...SCM_BASE, ...overrides, actions })
@@ -128,7 +128,7 @@ describe('source control title menu', () => {
     expect(shape(scm())).toEqual([
       'scm-refresh', 'scm-view ▸ scm-view-tree,scm-view-sort-path,scm-view-sort-name', '---',
       'scm-pull', 'scm-push', 'scm-clone', 'scm-checkout', 'scm-fetch', '---',
-      'scm-commit-group ▸ scm-commit-staged,scm-commit-all,scm-commit-undo',
+      'scm-commit-group ▸ scm-commit-staged,scm-commit-staged-reuse,scm-commit-all,scm-commit-undo,scm-commit-abort-rebase(禁用),---,scm-commit-amend,scm-commit-staged-amend,scm-commit-all-amend,---,scm-commit-signed,scm-commit-staged-signed,scm-commit-all-signed',
       'scm-changes-group ▸ scm-changes-stage,scm-changes-unstage,scm-changes-discard',
       'scm-sync-group ▸ scm-sync-pull,scm-sync-push,scm-sync,scm-sync-fetch,scm-sync-tags',
       'scm-branch-group ▸ scm-branch-create,scm-branch-rename,scm-branch-delete,scm-branch-merge,scm-branch-rebase,scm-branch-graph',
@@ -161,6 +161,11 @@ describe('source control title menu', () => {
     const busy = shape(scm({ busy: true })).filter(entry => entry !== '---').join(' ')
     // 克隆/添加远程这类「不改变仓库」的入口也一并禁用：忙时不该叠加第二条命令。
     for (const id of ['scm-refresh(禁用)', 'scm-clone(禁用)', 'scm-checkout(禁用)', 'scm-remote-add(禁用)', 'scm-branch-create(禁用)']) expect(busy).toContain(id)
+  })
+
+  it('only enables abort-rebase when a rebase is in progress', () => {
+    expect(shape(scm()).join(' ')).toContain('scm-commit-abort-rebase(禁用)')
+    expect(shape(scm({ rebase: true })).join(' ')).not.toContain('scm-commit-abort-rebase(禁用)')
   })
 
   it('marks only the destructive entries as danger', () => {
