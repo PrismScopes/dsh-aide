@@ -32,8 +32,14 @@ import { pathKey } from './paths.ts'
 
 /** 输入合并窗口：停止输入这么久之后再把正文推给宿主。 */
 export const SYNC_DEBOUNCE_MS = 260
-/** 单篇文档同步上限（宿主请求体 2 MiB，留出 JSON 转义余量）。 */
-const MAX_SYNC_CHARS = 1_400_000
+/**
+ * 单篇文档同步上限（字符数）。
+ *
+ * 宿主请求体上限 2 MiB，而 `JSON.stringify` 不转义 CJK —— 一个汉字按 UTF-8 是 3 字节，
+ * 取 60 万字符可保证最坏情况（全中文）也在 2 MiB 以内，不会让大文件在同步时撞 413。
+ * 超过上限的文件不参与语言服务（语法高亮与编辑不受影响）。
+ */
+const MAX_SYNC_CHARS = 600_000
 /** WebSocket 断线重连间隔。 */
 const RECONNECT_MS = 2000
 
