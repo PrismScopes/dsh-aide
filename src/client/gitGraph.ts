@@ -100,3 +100,16 @@ export function buildGraphList(options: { commitCount: number; stashCount: numbe
   for (let index = 0; index < options.commitCount; index++) entries.push({ kind: 'commit', index })
   return entries
 }
+
+/**
+ * 详情面板该显示什么。
+ *
+ * 关闭详情时只把 selected 置空、detail 仍然缓存着（下次打开不用重取），如果渲染只看 detail，
+ * 就会出现「点了关闭、面板还在」——这就是「关闭详情无效」的根因。视图状态必须同时看 selected。
+ */
+export type DetailView = 'none' | 'commit-loading' | 'commit' | 'compare-loading' | 'compare'
+export function detailViewState(selected: { kind: string } | undefined, hasDetail: boolean, hasCompare: boolean): DetailView {
+  if (selected === undefined) return 'none'
+  if (selected.kind === 'compare') return hasCompare ? 'compare' : 'compare-loading'
+  return hasDetail ? 'commit' : 'commit-loading'
+}

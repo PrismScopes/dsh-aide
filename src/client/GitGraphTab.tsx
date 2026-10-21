@@ -6,7 +6,7 @@ import { GitRepositorySettings } from './GitRepositorySettings.tsx'
 import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
 import { copyText } from './clipboard.ts'
 import { useGitCommands } from './gitCommands.tsx'
-import { buildGraphList, branchTips, filterCommits, graphSubtitle, reachableCommits, refKind, refLabel, shortHash } from './gitGraph.ts'
+import { buildGraphList, branchTips, detailViewState, filterCommits, graphSubtitle, reachableCommits, refKind, refLabel, shortHash } from './gitGraph.ts'
 import { groupMenuItems, stashMenuItems } from './gitMenus.ts'
 import { recordGitCommand } from './gitOutput.ts'
 import { gitViewStorageKey, parseGitViewSettings, type GitGraphViewSettings } from './gitView.ts'
@@ -151,6 +151,8 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     catch (cause) { setError(String(cause)) } finally { setBusy(false) }
   }, [selected, sessionId])
 
+  /** 关闭详情/对比：同时清掉已读取内容，避免下次打开前闪出旧数据。 */
+  const closeDetail = useCallback(() => { setSelected(undefined); setDetail(undefined); setCompare(undefined) }, [])
   const scope = selected === undefined ? undefined : selected.kind === 'commit' ? reviewScopeKey({ kind: 'commit', hash: selected.hash }) : reviewScopeKey({ kind: 'compare', from: selected.from, to: selected.to })
   const reviewPaths = useMemo(() => (selected?.kind === 'commit' ? detail?.files ?? [] : compare ?? []).map(file => file.path), [selected, detail, compare])
   const progress = scope === undefined ? { reviewed: 0, total: 0 } : reviewProgress(reviews, scope, reviewPaths)
@@ -271,12 +273,12 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
         if (key === 'r') { event.preventDefault(); void refresh(); return }
         if (key === 'h') { event.preventDefault(); scrollToHash(commits.find(commit => commit.refs.some(ref => refKind(ref, remotes) === 'head'))?.hash); return }
       }
-      if (event.key === 'Escape') { setSelected(undefined); setFindOpen(false); return }
+      if (event.key === 'Escape') { closeDetail(); setFindOpen(false); return }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); moveSelection(event.key === 'ArrowDown' ? 1 : -1) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [commits, remotes, refresh, scrollToHash, moveSelection])
+  }, [commits, remotes, refresh, scrollToHash, moveSelection, closeDetail])
 
   const stashLabel = (stash: GitStash) => `stash@{${stash.index}}: ${stash.message}`
   const menuEntries = (): MenuEntry[] => {
@@ -302,7 +304,7 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
       stageAll: () => void run('stage.all'), unstageAll: () => void run('unstage.all'),
       discardAll: () => { if (confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。')) void run('discard.all') },
       refreshGraph: () => void refresh(), toggleAllCommits: () => setAllCommits(value => !value),
-      loadMore: () => setLogLimit(value => Math.min(1000, value + 200)), collapseCommit: () => setSelected(undefined),
+      loadMore: () => setLogLimit(value => Math.min(1000, value + 200)), collapseCommit: closeDetail,
     } })
   }
   const menuLabel = menu === undefined ? '' : menu.kind === 'toolbar' ? '提交图操作' : menu.kind === 'commit' ? '提交操作' : menu.kind === 'stash' ? '贮藏操作' : '未提交更改操作'
@@ -365,21 +367,28 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     </div>
   }
 
-  const details = selected?.kind === 'compare'
-    ? <div className="dvw-git-detail">
-        <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">比较 <code>{shortHash(selected.from)}</code> → <code>{shortHash(selected.to)}</code></span>{reviewBadge}<button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={() => setSelected(undefined)}><Icon name="close"/></button></div>
-        <div className="dvw-git-detail-meta">{compare?.length ?? 0} 个文件发生变化</div>
-        <div className="dvw-git-detail-files">{compare?.length === 0 && <div className="dvw-git-detail-empty">两个提交之间没有文件差异</div>}{(compare ?? []).map(file => fileRow(file, selected))}</div>
-      </div>
-    : detail === undefined
-      ? undefined
-      : <div className="dvw-git-detail">
-          <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">{renderMessage(detail.subject, view.emoji)}</span>{reviewBadge}<button className="dvw-icon" title="更多操作" aria-label="更多操作" onClick={event => { const row = rows.find(entry => entry.commit.hash === detail.hash); if (row !== undefined) setMenu({ kind: 'commit', x: event.clientX, y: event.clientY, commit: row.commit }) }}><Icon name="ellipsis"/></button><button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={() => setSelected(undefined)}><Icon name="close"/></button></div>
-          <div className="dvw-git-detail-meta"><code title={detail.hash}>{shortHash(detail.hash)}</code> · {detail.author} &lt;{detail.email}&gt; · {new Date(detail.date).toLocaleString()}</div>
-          {detail.body !== '' && <pre className="dvw-git-detail-body">{renderMessage(detail.body, view.emoji)}</pre>}
-          <div className="dvw-git-detail-files">{detail.files.length === 0 && <div className="dvw-git-detail-empty">这次提交没有文件变化</div>}{detail.files.map(file => fileRow(file, { kind: 'commit', hash: detail.hash }))}</div>
+  const detailView = detailViewState(selected, detail !== undefined, compare !== undefined)
+  const loadedDetail = detailView === 'commit' ? detail : undefined
+  const loadedCompare = detailView === 'compare' ? compare : undefined
+  const compareTarget = selected?.kind === 'compare' ? selected : undefined
+  const details = detailView === 'none'
+    ? undefined
+    : loadedCompare !== undefined && compareTarget !== undefined
+      ? <div className="dvw-git-detail">
+          <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">比较 <code>{shortHash(compareTarget.from)}</code> → <code>{shortHash(compareTarget.to)}</code></span>{reviewBadge}<button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={closeDetail}><Icon name="close"/></button></div>
+          <div className="dvw-git-detail-meta">{loadedCompare.length} 个文件发生变化</div>
+          <div className="dvw-git-detail-files">{loadedCompare.length === 0 && <div className="dvw-git-detail-empty">两个提交之间没有文件差异</div>}{loadedCompare.map(file => fileRow(file, compareTarget))}</div>
         </div>
-
+      : loadedDetail !== undefined
+        ? <div className="dvw-git-detail">
+            <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">{renderMessage(loadedDetail.subject, view.emoji)}</span>{reviewBadge}<button className="dvw-icon" title="更多操作" aria-label="更多操作" onClick={event => { const row = rows.find(entry => entry.commit.hash === loadedDetail.hash); if (row !== undefined) setMenu({ kind: 'commit', x: event.clientX, y: event.clientY, commit: row.commit }) }}><Icon name="ellipsis"/></button><button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={closeDetail}><Icon name="close"/></button></div>
+            <div className="dvw-git-detail-meta"><code title={loadedDetail.hash}>{shortHash(loadedDetail.hash)}</code> · {loadedDetail.author} &lt;{loadedDetail.email}&gt; · {new Date(loadedDetail.date).toLocaleString()}</div>
+            {loadedDetail.body !== '' && <pre className="dvw-git-detail-body">{renderMessage(loadedDetail.body, view.emoji)}</pre>}
+            <div className="dvw-git-detail-files">{loadedDetail.files.length === 0 && <div className="dvw-git-detail-empty">这次提交没有文件变化</div>}{loadedDetail.files.map(file => fileRow(file, { kind: 'commit', hash: loadedDetail.hash }))}</div>
+          </div>
+        : <div className="dvw-git-detail">
+            <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">读取中…</span><button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={closeDetail}><Icon name="close"/></button></div>
+          </div>
   return <div className="dvw-gittab">
     <div className="dvw-gittab-toolbar">
       <Icon name="git-branch"/>

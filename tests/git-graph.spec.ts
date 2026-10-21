@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { branchTips, buildGraphList, filterCommits, graphSubtitle, reachableCommits, refKind, refLabel, shortHash } from '../src/client/gitGraph.ts'
+import { branchTips, buildGraphList, detailViewState, filterCommits, graphSubtitle, reachableCommits, refKind, refLabel, shortHash } from '../src/client/gitGraph.ts'
 
 describe('提交图引用分类', () => {
   it('separates HEAD, tags, remote branches and local branches', () => {
@@ -81,5 +81,20 @@ describe('提交图列表条目', () => {
   it('omits the uncommitted row when the worktree is clean and handles empty histories', () => {
     expect(buildGraphList({ commitCount: 1, stashCount: 0, hasUncommitted: false })).toEqual([{ kind: 'commit', index: 0 }])
     expect(buildGraphList({ commitCount: 0, stashCount: 0, hasUncommitted: false })).toEqual([])
+  })
+})
+
+describe('详情面板视图状态', () => {
+  it('returns none as soon as nothing is selected, even if detail is still cached', () => {
+    // 这正是「关闭详情无效」的回归点：selected 清空后不能再按缓存 detail 渲染。
+    expect(detailViewState(undefined, true, true)).toBe('none')
+    expect(detailViewState(undefined, false, false)).toBe('none')
+  })
+
+  it('distinguishes loading from loaded for commit and compare', () => {
+    expect(detailViewState({ kind: 'commit' }, true, false)).toBe('commit')
+    expect(detailViewState({ kind: 'commit' }, false, false)).toBe('commit-loading')
+    expect(detailViewState({ kind: 'compare' }, false, true)).toBe('compare')
+    expect(detailViewState({ kind: 'compare' }, true, false)).toBe('compare-loading')
   })
 })
