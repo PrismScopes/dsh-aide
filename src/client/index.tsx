@@ -12,6 +12,7 @@ import type { VscodeWorkbench } from './service.ts'
 import { WorkbenchController } from './service.ts'
 import { TerminalPanel } from './TerminalPanel.tsx'
 import { ProblemsPanel } from './ProblemsPanel.tsx'
+import { DebugConsolePanel } from './DebugConsolePanel.tsx'
 import { SettingsPanel } from './SettingsPanel.tsx'
 import { installLanguageActions } from './language/actions.ts'
 import { Workbench } from './Workbench.tsx'
@@ -272,6 +273,8 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-aide: terminal panel')
   // 「问题」面板：语言服务把诊断推到客户端 store，面板只负责渲染与跳转。
   ctx.effect(() => service.registerBottomPanel({ id: 'problems', title: '问题', component: ProblemsPanel }), 'dsh-aide: problems panel')
+  // 「调试控制台」面板：没有活动栏入口，只能从终端面板标题栏的「更多操作」菜单打开（见 Workbench）。
+  ctx.effect(() => service.registerBottomPanel({ id: 'debug', title: '调试控制台', component: DebugConsolePanel }), 'dsh-aide: debug console panel')
   // 语言服务的全局按键与 Ctrl+点击。装在 window 捕获阶段，才能压过 Monaco 内置的 F12 / Ctrl+点击。
   ctx.effect(() => installLanguageActions(), 'dsh-aide: language actions')
   ctx.effect(() => service.registerCommand({ id: 'terminal.new', run() { window.dispatchEvent(new Event('dvw-terminal-new')) } }), 'dsh-aide: terminal command')

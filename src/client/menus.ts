@@ -185,3 +185,19 @@ export function terminalPaneMenuItems(context: TerminalMenuContext): MenuEntry[]
     item({ id: 'terminal-kill', label: '终止终端', danger: true, onSelect: actions.kill }),
   ]
 }
+
+interface PanelMoreMenuActions {
+  openDebugConsole(): void
+}
+
+/**
+ * 底部面板标题栏的「更多操作」菜单（终端面板里 + / 下箭头左侧的 ⋯）。
+ *
+ * 目前只放「调试控制台」：问题与终端在活动栏都有自己的入口，只有调试控制台没有别的入口，
+ * 所以由这个菜单提供。以后新增面板时按同样规则（没有独立入口的放这里）往数组里加。
+ */
+export function panelMoreMenuItems(actions: PanelMoreMenuActions): MenuEntry[] {
+  return [
+    item({ id: 'debug-console', label: '调试控制台', onSelect: actions.openDebugConsole }),
+  ]
+}

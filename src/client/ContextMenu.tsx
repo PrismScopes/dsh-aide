@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { KeyboardEvent as MenuKeyEvent } from 'react'
+import type { KeyboardEvent as MenuKeyEvent, RefObject } from 'react'
 import { Icon } from './Icon.tsx'
 
 /**
@@ -133,10 +133,18 @@ interface ContextMenuProps {
   entries: readonly MenuEntry[]
   /** 无障碍名称，例如「文件操作」「标签页操作」。 */
   label: string
+  /**
+   * 锚点按钮：点它**不**关闭菜单。
+   *
+   * 菜单由按钮点击打开，同一个按钮再点一次应当收起；但「点外面关闭」会先把菜单关掉，
+   * onClick 里的 toggle 拿到的已是关闭后的状态，于是又打开一次 —— 表现为按钮「关不掉菜单」。
+   * 把锚点按钮交进来，按钮自己的 onClick 才能正常 toggle。
+   */
+  ignorePointerDown?: RefObject<HTMLElement>
   onClose(): void
 }
 
-export function ContextMenu({ position, entries, label, onClose }: ContextMenuProps) {
+export function ContextMenu({ position, entries, label, ignorePointerDown, onClose }: ContextMenuProps) {
   const root = useRef<HTMLDivElement>(null)
   /** 子菜单是父菜单的**兄弟**节点（role=menu 里不能再嵌套 role=menu），所以单独拿一个 ref 做「点在菜单内」判定。 */
   const submenuRoot = useRef<HTMLDivElement>(null)
@@ -210,7 +218,11 @@ export function ContextMenu({ position, entries, label, onClose }: ContextMenuPr
       if (!shouldDismissMenu(kind, { elapsedMs: performance.now() - openedAt.current, insideMenu })) return
       onClose()
     }
-    const pointer = (event: PointerEvent) => closeIf('pointerdown', inside(event.target))
+    const pointer = (event: PointerEvent) => {
+      // 锚点按钮自己处理「再点一次收起」，这里放行；否则关闭与重新打开会在同一次点击里打架。
+      if (ignorePointerDown?.current?.contains(event.target as Node) === true) return
+      closeIf('pointerdown', inside(event.target))
+    }
     const wheel = (event: WheelEvent) => closeIf('wheel', inside(event.target))
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
@@ -239,7 +251,7 @@ export function ContextMenu({ position, entries, label, onClose }: ContextMenuPr
       window.removeEventListener('blur', blur)
       window.removeEventListener('resize', resize)
     }
-  }, [onClose, closeSubmenu])
+  }, [onClose, closeSubmenu, ignorePointerDown])
 
   const run = useCallback((entry: MenuItem) => {
     if (entry.disabled === true) return
