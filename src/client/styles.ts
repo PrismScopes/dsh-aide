@@ -317,12 +317,12 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-dino{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--dvw-base)}
 .dvw-dino-bar{flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--dvw-border-soft)}
 .dvw-dino-title{flex:1;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dvw-text-2)}
-.dvw-dino-stage{flex:1;min-height:0;overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding-top:12px;background:#fff;color:#535353}
-
-
-/* ---- react-chrome-dino（MIT）自带的样式：原样追加，仅去掉 html[subframe] 规则 ---- */
-.interstitial-wrapper{box-sizing:border-box;font-size:1em;line-height:1.6em;margin:50px auto 0;max-width:600px;width:100%}@media (max-width:700px){.interstitial-wrapper{padding:0 10%}}@media (max-height:600px){.interstitial-wrapper{margin-top:5px}}@media (max-width:400px){.interstitial-wrapper{padding:0 5%}}.hidden#buttons:after{clear:both;content:"";display:block;width:100%}.offline .interstitial-wrapper{color:#2b2b2b;font-size:1em;line-height:1.55;margin:100px auto 0;max-width:600px;width:100%}.offline .runner-container{top:10px;width:44px;z-index:2}.offline .runner-canvas,.offline .runner-container{height:150px;max-width:600px;overflow:hidden;position:absolute}.offline .runner-canvas{opacity:1;top:0}.offline .controller{background:hsla(0,0%,96.9%,.1);height:100vh;left:0;position:absolute;top:0;width:100vw;z-index:1}#offline-resources{display:none}@media (max-height:350px){.interstitial-wrapper{margin-top:5%}}
-/*# sourceMappingURL=index.css.map */
+/* 注意：这里必须是块级布局，不能 display:flex —— 上游组件的根 div 是自动宽度的
+   块，里面 .interstitial-wrapper 用 width:100% 撑开；一旦父级变成 flex，
+   「flex 项自动宽度 ← 子项 100%」会互相依赖并塌成 0，画布宽度就是 0（游戏等于看不见）。 */
+.dvw-dino-stage{flex:1;min-height:0;overflow:auto;padding-top:12px;background:#fff;color:#535353}
+.dvw-dino-failed{margin:24px auto 0;font-size:12px;color:var(--dvw-text-3)}
+/* 小恐龙自己的样式由 react-chrome-dino 组件在挂载时以 <style> 注入，这里不再重复。 */
 
 `
 
