@@ -17,6 +17,7 @@ import { DebugConsolePanel } from './DebugConsolePanel.tsx'
 import { SettingsPanel } from './SettingsPanel.tsx'
 import { installLanguageActions } from './language/actions.ts'
 import { Workbench } from './Workbench.tsx'
+import { NoSessionPrompt } from './NoSessionPrompt.tsx'
 import { installStyles } from './styles.ts'
 import { handleTerminalShortcut } from './shortcuts.ts'
 import { bindingMatches, bindingOf } from './keybindings.ts'
@@ -114,7 +115,13 @@ interface LayoutLike { selectPanel(id: string | null): void }
  * 已登录是头像（可能是 <img>）。只删 svg 会在已登录时漏掉头像。
  */
 
-const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { service: VscodeWorkbench }) => {
+/**
+ * 全局工作台 overlay。
+ *
+ * 导出是为了让回归测试直接验证「没有主视图会话」时的渲染分支（见 tests/no-session-prompt.spec.tsx）：
+ * DSH 归档会话后归档动作不能把已经关闭的工作台弹出来。
+ */
+export const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { service: VscodeWorkbench }) => {
   // DSH 0.2.1 起 sessions store 不再提供 state.current：主视图由 retainedBy.mainView 标记，
   // 取法与 shell 的 DocumentTitle 一致。后台保活的会话不算主视图。
   const session = useSessions(mainViewSession)
@@ -128,17 +135,12 @@ const Overlay = ({ service, useSessions }: PropsRuntime<'shell.overlay'> & { ser
     service.setSettingsOpener(openDshSettings)
     return () => { service.setSettingsOpener(() => {}) }
   }, [service])
-  // 没有会话就不渲染：文件树与文件读写都以会话工作区为根，会话未就绪时取到的内容不可信。
-  // 组件以会话与工作目录为 key，会话出现或切换工作区后会重新挂载，自然完成首次取数。
+  // 没有会话就不渲染工作台：文件树与文件读写都以会话工作区为根，会话未就绪时取到的内容不可信。
+  // DSH 启动时并不默认选中会话，此时打开工作台要给一句明确提示，留白会被当成加载失败。
+  // 但提示层必须自己看 visible —— DSH 归档会话后 mainViewSession 会变成 undefined，
+  // 旧实现无条件渲染提示，导致工作台明明关着也被「弹」出来，而且「返回 DSH」关不掉（见 NoSessionPrompt）。
   if (session === undefined || session.id === '') {
-    // 没有会话就不进工作台：文件树与文件读写都以会话工作区为根，没有会话就没有根。
-    // DSH 启动时并不默认选中会话，此时打开工作台要给一句明确提示，留白会被当成加载失败。
-    return <div className="dvw-overlay"><div className="dvw-empty" style={{ gridColumn: '1/4' }}>
-      <div>请选择一个会话
-        <div className="dvw-message" style={{ marginTop: 6 }}>先在 DSH 里选择要使用的会话，再打开 AIDE。</div>
-      </div>
-      <button className="dvw-mode-button" onClick={() => service.hide()}>返回 DSH</button>
-    </div></div>
+    return <NoSessionPrompt visible={visible} onBack={() => service.hide()}/>
   }
   return <Workbench key={`${session.id}:${cwd ?? ''}`} service={service} sessionId={session.id} cwd={cwd}/>
 }
