@@ -31,7 +31,7 @@ describe('提交图标签页', () => {
     // 入口在 Git 侧边面板里（用户明确要求），活动栏不再多一个图标按钮。
     expect(workbench).not.toContain('data-active={active===GIT_GRAPH_PATH')
     const panel = readFileSync(new URL('../src/client/GitPanel.tsx', import.meta.url), 'utf8')
-    expect(panel).toContain('dvw-graph-open')
+    expect(panel).toContain('GitGraphMark')
     expect(GIT_GRAPH_PATH).toBe('git:graph')
   })
 })

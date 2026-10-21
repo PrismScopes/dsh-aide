@@ -254,10 +254,9 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-gitout-empty{padding:20px;text-align:center;color:var(--dvw-text-3);font-family:inherit}
 .dvw-git-dir{padding:3px 8px 1px;font-size:11px;color:var(--dvw-text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* 「提交图」按钮：放在源代码管理面板的分支行右侧（带文字，比工具栏图标更好找）。 */
-.dvw-graph-open{margin-left:auto;flex:none;display:flex;align-items:center;gap:5px;height:24px;padding:0 9px;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-xs);background:var(--dvw-surface-2);color:var(--dvw-text-2);font:inherit;font-size:12px;cursor:pointer}
-.dvw-graph-open:hover{background:var(--dvw-hover);color:var(--dvw-text)}
-.dvw-graph-open .codicon{font-size:14px}
+/* 「提交图」入口按钮：Git Graph 同款 SVG 图标，跟随主题 currentColor。 */
+.dvw-git-graph-mark{display:inline-grid;place-items:center;width:16px;height:16px;flex:none}
+.dvw-git-graph-mark svg{display:block;color:inherit}
 
 /* ---- 提交图标签页：详情面板 / 查找框 / 未提交与贮藏行 ---- */
 .dvw-gitgraph-body{flex:1;min-height:0;display:flex}

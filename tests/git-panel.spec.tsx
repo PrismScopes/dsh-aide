@@ -20,12 +20,11 @@ describe('源代码管理面板', () => {
     expect(html).toContain('aria-haspopup="menu"')
   })
 
-  it('puts the commit-graph entry inside this panel as a labelled button', () => {
-    // 用户明确要求入口在 Git 侧边面板里，而不是活动栏上多一个图标。
-    expect(source).toContain('dvw-graph-open')
-    expect(source).toContain('提交图</button>')
+  it('puts the commit-graph entry in the title bar, using the Git Graph SVG icon', () => {
+    // 用户明确要求入口在 Git 侧边面板里，图标沿用 Git Graph 扩展自己的 SVG。
+    expect(source).toContain('GitGraphMark')
     expect(source).toContain('props.onOpenGraph(false)')
-    expect(html).not.toContain('aria-label="打开提交图"')
+    expect(html).toContain('aria-label="打开提交图"')
   })
 
   it('selects branches through the quick pick instead of window.prompt', () => {
