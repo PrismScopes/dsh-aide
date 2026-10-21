@@ -36,6 +36,37 @@ describe('提交图标签页', () => {
   })
 })
 
+describe('提交图标签页的 Git Graph 对齐项', () => {
+  const html = renderToStaticMarkup(<GitGraphTab sessionId="session" onOpenDiff={() => {}} />)
+  const source = readFileSync(new URL('../src/client/GitGraphTab.tsx', import.meta.url), 'utf8')
+
+  it('has find and branch-filter entries on the toolbar', () => {
+    expect(html).toContain('aria-label="查找提交"')
+    expect(html).toContain('aria-label="分支过滤"')
+    expect(html).toContain('aria-label="提交列表"')
+  })
+
+  it('loads commit details and comparisons from the new host actions', () => {
+    expect(source).toContain("action: 'commit.detail'")
+    expect(source).toContain("action: 'compare.files'")
+    expect(source).toContain("action: 'range.file.diff'")
+    expect(source).toContain('dvw-gitgraph-detail')
+  })
+
+  it('shows uncommitted changes and stashes as graph rows', () => {
+    expect(source).toContain('未提交的更改')
+    expect(source).toContain('stash.list')
+    expect(source).toContain('dvw-stash-row')
+  })
+
+  it('binds the Git Graph keyboard shortcuts', () => {
+    expect(source).toContain("key === 'f'")
+    expect(source).toContain("key === 'r'")
+    expect(source).toContain("key === 'h'")
+    expect(source).toContain("event.key === 'ArrowDown'")
+    expect(source).toContain('Ctrl+F')
+  })
+})
 describe('Git 输出标签页', () => {
   beforeEach(() => clearGitOutput())
 

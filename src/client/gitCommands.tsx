@@ -38,6 +38,12 @@ export interface GitCommandBridge {
   sortBy?(mode: 'path' | 'name'): void
   /** 提交图多取一页（只有图表标签页提供）。 */
   loadMore?(): void
+  /** 提交图的查找框与分支过滤（只有图表标签页提供）。 */
+  openFind?(): void
+  openBranchFilter?(): void
+  clearBranchFilter?(): void
+  /** 已选分支过滤（用于菜单里显示「清除分支过滤」）。 */
+  filteredBranches?: readonly string[]
 }
 
 /** 输入型选择器的描述：标题、占位符、是否允许空串，以及提交后的动作。 */
@@ -169,6 +175,9 @@ export function useGitCommands(bridge: GitCommandBridge) {
     toggleTree: () => bridgeRef.current.toggleTree?.(),
     sortByPath: () => bridgeRef.current.sortBy?.('path'),
     sortByName: () => bridgeRef.current.sortBy?.('name'),
+    openFind: () => bridgeRef.current.openFind?.(),
+    openBranchFilter: () => bridgeRef.current.openBranchFilter?.(),
+    clearBranchFilter: () => bridgeRef.current.clearBranchFilter?.(),
     loadMore: () => bridgeRef.current.loadMore?.(),
     showOutput: () => bridgeRef.current.openOutput(),
   }
@@ -180,7 +189,8 @@ export function useGitCommands(bridge: GitCommandBridge) {
   })
   /** 提交图标签页的 `...`。 */
   const graphMenu = (state: { allCommits: boolean; canLoadMore: boolean }): MenuEntry[] => graphMenuItems({
-    busy: bridge.busy, remote: bridge.remotes.length > 0, allCommits: state.allCommits, canLoadMore: state.canLoadMore, actions,
+    busy: bridge.busy, remote: bridge.remotes.length > 0, filtered: (bridge.filteredBranches?.length ?? 0) > 0,
+    allCommits: state.allCommits, canLoadMore: state.canLoadMore, actions,
   })
   /** 提交行的右键菜单：复制类动作由调用方给（它们只依赖已读到的提交信息）。 */
   const commitMenu = (commit: GitCommit, expanded: boolean, extra: { copyHash(): void; copyMessage(): void; toggleFiles(): void }): MenuEntry[] => commitMenuItems({

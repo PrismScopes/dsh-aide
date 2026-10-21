@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { GitCommit, GitCommitFile, GitDiff, GitStatus } from '../types.ts'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { GitBranchList, GitChange, GitCommit, GitCommitDetail, GitCommitFileDetail, GitDiff, GitStash, GitStatus } from '../types.ts'
 import { ApiError, api } from './api.ts'
-import { CommitGraph } from './GitPanel.tsx'
+import { GraphTracks, graphRows } from './GitPanel.tsx'
 import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
 import { copyText } from './clipboard.ts'
 import { useGitCommands } from './gitCommands.tsx'
-import { commitFileMenuItems } from './gitMenus.ts'
+import { buildGraphList, branchTips, filterCommits, graphSubtitle, reachableCommits, refKind, refLabel, shortHash } from './gitGraph.ts'
+import { groupMenuItems, stashMenuItems } from './gitMenus.ts'
 import { recordGitCommand } from './gitOutput.ts'
+import { QuickPick, type QuickPickItem } from './quickPick.tsx'
 import { Icon } from './Icon.tsx'
 import { useDebouncedCallback } from './hooks.ts'
 
@@ -16,39 +18,54 @@ export const GIT_GRAPH_PATH = 'git:graph'
 /**
  * 提交图标签页。
  *
- * 与侧栏里那块紧凑的「图表」分组不同，这里是 VS Code Git Graph 扩展那种整页视图：
- * 顶部工具条（分支、ahead/behind、提交范围、刷新、`...` 菜单），下面是可展开的提交列表。
- * 数据自己取（`git.action=log` + `git.status`），动作统一走 useGitCommands ——
- * 与侧栏共用同一套菜单结构与二次确认，不会出现「侧栏能拣选、标签页不能」这类分叉。
+ * 按 VS Code Git Graph 扩展的整页视图组织：顶部工具条（分支、ahead/behind、范围、查找框、分支过滤、刷新、`...`），
+ * 中间是提交列表（未提交更改 / 贮藏 / 提交），右侧是「提交详情 / 提交对比」面板。
+ * 交互对齐原版：单击提交看详情、Ctrl(⌘)+单击另一个提交进入对比、Ctrl+F 查找、Ctrl+H 回到 HEAD、
+ * Ctrl+R 刷新、↑/↓ 在提交间移动、Esc 关闭详情。
  */
 export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff }: { sessionId: string; initialAllBranches?: boolean; onOpenDiff(key: string, diff: GitDiff, title?: string, sourcePath?: string): void }) {
   const [status, setStatus] = useState<GitStatus>()
   const [commits, setCommits] = useState<GitCommit[]>([])
+  const [stashes, setStashes] = useState<GitStash[]>([])
   const [remotes, setRemotes] = useState<string[]>([])
   const [allCommits, setAllCommits] = useState(initialAllBranches)
   const [logLimit, setLogLimit] = useState(200)
-  const [expandedCommit, setExpandedCommit] = useState<string>()
-  const [files, setFiles] = useState<Map<string, GitCommitFile[]>>(new Map())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const [menu, setMenu] = useState<
     | { kind: 'toolbar'; x: number; y: number }
     | { kind: 'commit'; x: number; y: number; commit: GitCommit }
-    | { kind: 'commit-file'; x: number; y: number; commit: GitCommit; file: GitCommitFile }
+    | { kind: 'stash'; x: number; y: number; stash: GitStash }
+    | { kind: 'uncommitted'; x: number; y: number }
   >()
+  // 查找（Ctrl+F）与分支过滤：两者都只作用于已经加载的提交窗口。
+  const [findOpen, setFindOpen] = useState(false)
+  const [find, setFind] = useState('')
+  const [branches, setBranches] = useState<GitBranchList>()
+  const [branchFilter, setBranchFilter] = useState<ReadonlySet<string>>(() => new Set())
+  const [filterPicker, setFilterPicker] = useState(false)
+  // 右侧面板：提交详情 或 两个提交的对比。
+  const [selected, setSelected] = useState<{ kind: 'commit'; hash: string } | { kind: 'compare'; from: string; to: string }>()
+  const [detail, setDetail] = useState<GitCommitDetail>()
+  const [compare, setCompare] = useState<GitCommitFileDetail[]>()
+  const [uncommittedOpen, setUncommittedOpen] = useState(false)
+  const [activeHash, setActiveHash] = useState<string>()
+  const findInput = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const onOpenDiffRef = useRef(onOpenDiff); onOpenDiffRef.current = onOpenDiff
+
   const loadLog = useCallback(() => api<GitCommit[]>('git.action', { sessionId, action: allCommits ? 'log.all' : 'log', value: String(logLimit) }), [sessionId, allCommits, logLimit])
+  const loadStashes = useCallback(() => api<GitStash[]>('git.action', { sessionId, action: 'stash.list' }).catch(() => [] as GitStash[]), [sessionId])
   const refresh = useCallback(() => {
-    void Promise.all([api<GitStatus>('git.status', { sessionId }), loadLog()]).then(([nextStatus, nextCommits]) => {
-      setStatus(nextStatus); setCommits(nextCommits); setError(undefined)
+    void Promise.all([api<GitStatus>('git.status', { sessionId }), loadLog(), loadStashes()]).then(([nextStatus, nextCommits, nextStashes]) => {
+      setStatus(nextStatus); setCommits(nextCommits); setStashes(nextStashes); setError(undefined)
     }).catch(cause => {
       setError(cause instanceof ApiError && cause.code === 'not-repository' ? '当前工作区不是 Git 仓库' : String(cause))
     })
-  }, [sessionId, loadLog])
+  }, [sessionId, loadLog, loadStashes])
   useEffect(refresh, [refresh])
   useEffect(() => { void api<string[]>('git.action', { sessionId, action: 'remotes' }).then(setRemotes).catch(() => setRemotes([])) }, [sessionId])
-  // 文件变化（保存、外部改动、agent 写文件）后刷新：`.git` 不在 watcher 的忽略列表里，
-  // 但 `dvw-files-changed` 只针对工作区文件，提交图仍需要跟上最新的工作区状态。
+  // 文件变化（保存、外部改动、agent 写文件）后刷新；`.git` 不在 watcher 的忽略列表里。
   const refreshDebounced = useDebouncedCallback(() => void refresh(), 600)
   useEffect(() => { window.addEventListener('dvw-files-changed', refreshDebounced); return () => window.removeEventListener('dvw-files-changed', refreshDebounced) }, [refreshDebounced])
 
@@ -61,6 +78,7 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
       if (result !== null && typeof result === 'object' && Array.isArray((result as GitStatus).changes)) setStatus(result as GitStatus)
       if (name.startsWith('remote.') || name === 'clone') { void api<string[]>('git.action', { sessionId, action: 'remotes' }).then(setRemotes).catch(() => undefined) }
       void loadLog().then(setCommits).catch(() => undefined)
+      void loadStashes().then(setStashes).catch(() => undefined)
     } catch (cause) {
       recordGitCommand({ action: name, path, value, ok: false, message: String(cause) })
       setError(String(cause))
@@ -68,60 +86,200 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     } finally { setBusy(false) }
   }
 
-  const toggleCommit = useCallback(async (commit: GitCommit) => {
-    if (expandedCommit === commit.hash) { setExpandedCommit(undefined); return }
-    setExpandedCommit(commit.hash)
-    if (files.has(commit.hash)) return
+  /** 打开提交详情 / 提交对比：单击看详情，Ctrl(⌘)+单击在「先选中的提交」与「这次点击的提交」之间对比。 */
+  const selectCommit = useCallback(async (hash: string, mode: 'detail' | 'compare') => {
+    if (mode === 'compare' && selected?.kind === 'commit' && selected.hash !== hash) {
+      const from = selected.hash
+      setSelected({ kind: 'compare', from, to: hash }); setDetail(undefined); setCompare(undefined); setBusy(true)
+      try { setCompare(await api<GitCommitFileDetail[]>('git.action', { sessionId, action: 'compare.files', path: from, value: hash })) }
+      catch (cause) { setError(String(cause)) } finally { setBusy(false) }
+      return
+    }
+    setSelected({ kind: 'commit', hash }); setCompare(undefined); setActiveHash(hash); setDetail(undefined); setBusy(true)
+    try { setDetail(await api<GitCommitDetail>('git.action', { sessionId, action: 'commit.detail', value: hash })) }
+    catch (cause) { setError(String(cause)) } finally { setBusy(false) }
+  }, [selected, sessionId])
+
+  const openFileDiff = useCallback(async (file: GitCommitFileDetail, target: { kind: 'commit'; hash: string } | { kind: 'compare'; from: string; to: string }) => {
     setBusy(true)
     try {
-      const list = await api<GitCommitFile[]>('git.action', { sessionId, action: 'commit.files', value: commit.hash })
-      setFiles(current => new Map(current).set(commit.hash, list))
-    } catch (cause) { setError(String(cause)) } finally { setBusy(false) }
-  }, [expandedCommit, files, sessionId])
-  const openCommitFile = useCallback(async (commit: GitCommit, file: GitCommitFile) => {
-    setBusy(true)
-    try {
-      const result = await api<GitDiff>('git.action', { sessionId, action: 'commit.file.diff', path: file.path, value: commit.hash })
-      onOpenDiffRef.current(`commit:${commit.hash}:${file.path}`, result, file.path.split('/').at(-1) ?? file.path, file.path)
+      const result = target.kind === 'commit'
+        ? await api<GitDiff>('git.action', { sessionId, action: 'commit.file.diff', path: file.path, value: target.hash })
+        : await api<GitDiff>('git.action', { sessionId, action: 'range.file.diff', path: file.path, value: `${target.from}..${target.to}` })
+      const key = target.kind === 'commit' ? `commit:${target.hash}:${file.path}` : `compare:${target.from}..${target.to}:${file.path}`
+      onOpenDiffRef.current(key, result, file.path.split('/').at(-1) ?? file.path, file.path)
     } catch (cause) { setError(String(cause)) } finally { setBusy(false) }
   }, [sessionId])
-  const toggleCommitRef = useCallback((commit: GitCommit) => void toggleCommit(commit), [toggleCommit])
-  const openCommitFileRef = useCallback((commit: GitCommit, file: GitCommitFile) => void openCommitFile(commit, file), [openCommitFile])
 
+  // ---- 过滤（查找 + 分支）与图上条目 ----
+  const visibleCommits = useMemo(() => {
+    let list = filterCommits(commits, find)
+    if (branchFilter.size > 0) {
+      const known = new Set([...(branches?.local ?? []), ...(branches?.remote ?? [])])
+      const selectedBranches = new Set([...branchFilter].filter(name => known.size === 0 || known.has(name)))
+      const reachable = reachableCommits(commits, branchTips(commits, selectedBranches))
+      list = list.filter(commit => reachable.has(commit.hash))
+    }
+    return list
+  }, [commits, find, branchFilter, branches])
+  const rows = useMemo(() => graphRows(visibleCommits), [visibleCommits])
+  const rowIndex = useMemo(() => new Map(rows.map((row, index) => [row.commit.hash, index] as const)), [rows])
+  const hasUncommitted = (status?.changes.length ?? 0) > 0
+  const graphList = useMemo(() => buildGraphList({ commitCount: rows.length, stashCount: stashes.length, hasUncommitted }), [rows.length, stashes.length, hasUncommitted])
+
+  const openFilterPicker = useCallback(async () => {
+    if (branches === undefined) {
+      try { setBranches(await api<GitBranchList>('git.action', { sessionId, action: 'branch.list' })) }
+      catch (cause) { setError(String(cause)); return }
+    }
+    setFilterPicker(true)
+  }, [branches, sessionId])
   const commands = useGitCommands({
     sessionId, busy, status, remotes,
     run: (action, path, value) => run(action, path, value),
     refresh: () => void refresh(),
     openGraph: all => setAllCommits(all),
-    openOutput: () => { /* 由 Workbench 通过 onOpenOutput 注入时才有意义；图表页里保持空操作。 */ },
+    openOutput: () => { /* 图表页没有输出入口，保持空操作 */ },
     onError: message => setError(message),
     onCopy: text => { void copyText(text) },
     loadMore: () => setLogLimit(value => Math.min(1000, value + 200)),
+    openFind: () => { setFindOpen(true); window.setTimeout(() => findInput.current?.focus(), 0) },
+    openBranchFilter: () => { void openFilterPicker() },
+    clearBranchFilter: () => setBranchFilter(new Set()),
+    filteredBranches: [...branchFilter],
   })
+  const filterItems: QuickPickItem[] = useMemo(() => {
+    const names = [...(branches?.local ?? []), ...(branches?.remote ?? [])]
+    return names.map(name => ({ id: name, label: name, ...(branches?.remote.includes(name) === true ? { detail: '远程' } : {}) }))
+  }, [branches])
 
+  // ---- 键盘：Ctrl+F 查找、Ctrl+H 回到 HEAD、Ctrl+R 刷新、↑↓ 移动、Esc 关闭 ----
+  const scrollToHash = useCallback((hash: string | undefined) => {
+    if (hash === undefined) return
+    window.setTimeout(() => listRef.current?.querySelector(`[data-graph-hash="${hash}"]`)?.scrollIntoView({ block: 'center' }), 0)
+  }, [])
+  const moveSelection = useCallback((direction: 1 | -1) => {
+    if (rows.length === 0) return
+    const current = activeHash === undefined ? (direction === 1 ? -1 : 0) : (rowIndex.get(activeHash) ?? -1)
+    const next = (current + direction + rows.length) % rows.length
+    const row = rows[next]
+    if (row === undefined) return
+    setActiveHash(row.commit.hash)
+    scrollToHash(row.commit.hash)
+    void selectCommit(row.commit.hash, 'detail')
+  }, [rows, activeHash, rowIndex, selectCommit, scrollToHash])
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const typing = target !== null && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      if (typing) { if (event.key === 'Escape') { (target as HTMLElement).blur(); setFindOpen(false) } return }
+      if (event.ctrlKey || event.metaKey) {
+        const key = event.key.toLowerCase()
+        if (key === 'f') { event.preventDefault(); setFindOpen(true); window.setTimeout(() => findInput.current?.focus(), 0); return }
+        if (key === 'r') { event.preventDefault(); void refresh(); return }
+        if (key === 'h') { event.preventDefault(); scrollToHash(commits.find(commit => commit.refs.some(ref => refKind(ref, remotes) === 'head'))?.hash); return }
+      }
+      if (event.key === 'Escape') { setSelected(undefined); setFindOpen(false); return }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); moveSelection(event.key === 'ArrowDown' ? 1 : -1) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [commits, remotes, refresh, scrollToHash, moveSelection])
+
+  const stashLabel = (stash: GitStash) => `stash@{${stash.index}}: ${stash.message}`
   const menuEntries = (): MenuEntry[] => {
     if (menu === undefined) return []
     if (menu.kind === 'toolbar') return commands.graphMenu({ allCommits, canLoadMore: logLimit < 1000 })
     if (menu.kind === 'commit') {
-      return commands.commitMenu(menu.commit, expandedCommit === menu.commit.hash, {
+      return commands.commitMenu(menu.commit, selected?.kind === 'commit' && selected.hash === menu.commit.hash, {
         copyHash: () => { void copyText(menu.commit.hash) },
         copyMessage: () => { void copyText(menu.commit.subject) },
-        toggleFiles: () => void toggleCommit(menu.commit),
+        toggleFiles: () => void selectCommit(menu.commit.hash, 'detail'),
       })
     }
-    return commitFileMenuItems({ path: menu.file.path, actions: {
-      openDiff: () => void openCommitFile(menu.commit, menu.file),
-      copyPath: () => { void copyText(menu.file.path) },
+    if (menu.kind === 'stash') {
+      const stash = menu.stash
+      return stashMenuItems({ label: stashLabel(stash), actions: {
+        apply: () => run('stash.apply', undefined, String(stash.index)),
+        pop: () => run('stash.pop', undefined, String(stash.index)),
+        drop: () => { if (confirm(`删除 ${stashLabel(stash)}？`)) void run('stash.drop', undefined, String(stash.index)) },
+        copyName: () => { void copyText(`stash@{${stash.index}}`) },
+      } })
+    }
+    return groupMenuItems({ group: 'changes', busy, count: status?.changes.length ?? 0, allCommits, canLoadMore: logLimit < 1000, expandedCommit: false, actions: {
+      stageAll: () => void run('stage.all'), unstageAll: () => void run('unstage.all'),
+      discardAll: () => { if (confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。')) void run('discard.all') },
+      refreshGraph: () => void refresh(), toggleAllCommits: () => setAllCommits(value => !value),
+      loadMore: () => setLogLimit(value => Math.min(1000, value + 200)), collapseCommit: () => setSelected(undefined),
     } })
   }
-  const menuLabel = menu === undefined ? '' : menu.kind === 'toolbar' ? '提交图操作' : menu.kind === 'commit' ? '提交操作' : '提交文件操作'
+  const menuLabel = menu === undefined ? '' : menu.kind === 'toolbar' ? '提交图操作' : menu.kind === 'commit' ? '提交操作' : menu.kind === 'stash' ? '贮藏操作' : '未提交更改操作'
+
+  const renderUncommitted = () => <div className="dvw-git-uncommitted" key="uncommitted">
+    <button className="dvw-graph-row dvw-uncommitted-row" aria-expanded={uncommittedOpen} onClick={() => setUncommittedOpen(value => !value)}
+      onContextMenu={event => { event.preventDefault(); setMenu({ kind: 'uncommitted', x: event.clientX, y: event.clientY }) }}>
+      <span className="dvw-uncommitted-dot" aria-hidden="true"/>
+      <span className="dvw-graph-copy"><span className="dvw-graph-subject">未提交的更改</span><span className="dvw-graph-meta">{status?.changes.length ?? 0} 个文件</span></span>
+      <Icon name={uncommittedOpen ? 'chevron-down' : 'chevron-right'}/>
+    </button>
+    {uncommittedOpen && <div className="dvw-uncommitted-files">{(status?.changes ?? []).map((change: GitChange) => <div className="dvw-uncommitted-file" key={change.path}>
+      <Icon name={change.untracked ? 'new-file' : 'diff'}/><span className="dvw-change-path">{change.path}</span>
+      <span className="dvw-badge">{change.untracked ? 'U' : change.worktree !== '.' ? change.worktree : change.index}</span>
+    </div>)}</div>}
+  </div>
+
+  const renderStash = (stash: GitStash) => <button className="dvw-graph-row dvw-stash-row" key={`stash:${stash.index}`} title={stashLabel(stash)}
+    onClick={event => setMenu({ kind: 'stash', x: event.clientX, y: event.clientY, stash })}
+    onContextMenu={event => { event.preventDefault(); setMenu({ kind: 'stash', x: event.clientX, y: event.clientY, stash }) }}>
+    <span className="dvw-stash-dot" aria-hidden="true"/>
+    <span className="dvw-graph-copy"><span className="dvw-graph-subject">{stash.message}</span><span className="dvw-graph-meta">{`stash@{${stash.index}}`}</span></span>
+    <Icon name="archive"/>
+  </button>
+
+  const renderCommit = (row: (typeof rows)[number]) => {
+    const isSelected = selected?.kind === 'commit' && selected.hash === row.commit.hash
+    const isCompareEnd = selected?.kind === 'compare' && (selected.from === row.commit.hash || selected.to === row.commit.hash)
+    return <button className="dvw-graph-row" key={row.commit.hash} data-graph-hash={row.commit.hash}
+      data-active={isSelected || isCompareEnd || undefined}
+      title={`${row.commit.hash}\n${row.commit.author}`}
+      onClick={event => { setMenu(undefined); void selectCommit(row.commit.hash, event.ctrlKey || event.metaKey ? 'compare' : 'detail') }}
+      onContextMenu={event => { event.preventDefault(); setMenu({ kind: 'commit', x: event.clientX, y: event.clientY, commit: row.commit }) }}>
+      <GraphTracks row={row}/>
+      <span className="dvw-graph-copy"><span className="dvw-graph-subject">{row.commit.subject}</span><span className="dvw-graph-meta">{graphSubtitle(row.commit)} · {new Date(row.commit.date).toLocaleDateString()}</span></span>
+      {row.commit.refs.slice(0, 3).map(ref => <span className="dvw-ref" data-kind={refKind(ref, remotes)} key={ref}>{refLabel(ref)}</span>)}
+    </button>
+  }
+
+  const details = selected?.kind === 'compare'
+    ? <div className="dvw-git-detail">
+        <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">比较 <code>{shortHash(selected.from)}</code> → <code>{shortHash(selected.to)}</code></span><button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={() => setSelected(undefined)}><Icon name="close"/></button></div>
+        <div className="dvw-git-detail-meta">{compare?.length ?? 0} 个文件发生变化</div>
+        <div className="dvw-git-detail-files">{compare?.length === 0 && <div className="dvw-git-detail-empty">两个提交之间没有文件差异</div>}{(compare ?? []).map(file => <button className="dvw-git-detail-file" key={file.path} onClick={() => void openFileDiff(file, selected)}>
+          <span className="dvw-badge">{file.status}</span><span className="dvw-graph-subject">{file.path}</span>
+          <span className="dvw-file-stat"><span className="dvw-stat-add">+{file.additions}</span><span className="dvw-stat-del">−{file.deletions}</span></span>
+        </button>)}</div>
+      </div>
+    : detail === undefined
+      ? undefined
+      : <div className="dvw-git-detail">
+          <div className="dvw-git-detail-head"><span className="dvw-git-detail-title">{detail.subject}</span><button className="dvw-icon" title="更多操作" aria-label="更多操作" onClick={event => { const row = rows.find(entry => entry.commit.hash === detail.hash); if (row !== undefined) setMenu({ kind: 'commit', x: event.clientX, y: event.clientY, commit: row.commit }) }}><Icon name="ellipsis"/></button><button className="dvw-icon" title="关闭详情" aria-label="关闭详情" onClick={() => setSelected(undefined)}><Icon name="close"/></button></div>
+          <div className="dvw-git-detail-meta"><code title={detail.hash}>{shortHash(detail.hash)}</code> · {detail.author} &lt;{detail.email}&gt; · {new Date(detail.date).toLocaleString()}</div>
+          {detail.body !== '' && <pre className="dvw-git-detail-body">{detail.body}</pre>}
+          <div className="dvw-git-detail-files">{detail.files.length === 0 && <div className="dvw-git-detail-empty">这次提交没有文件变化</div>}{detail.files.map(file => <button className="dvw-git-detail-file" key={file.path} onClick={() => void openFileDiff(file, { kind: 'commit', hash: detail.hash })}>
+            <span className="dvw-badge">{file.status}</span><span className="dvw-graph-subject">{file.path}</span>
+            <span className="dvw-file-stat">{file.binary ? <span className="dvw-stat-add">二进制</span> : <><span className="dvw-stat-add">+{file.additions}</span><span className="dvw-stat-del">−{file.deletions}</span></>}</span>
+          </button>)}</div>
+        </div>
 
   return <div className="dvw-gittab">
     <div className="dvw-gittab-toolbar">
       <Icon name="git-branch"/>
       <span className="dvw-gittab-branch">{status?.branch ?? '…'}</span>
-      <span className="dvw-gittab-meta">↑{status?.ahead ?? 0} ↓{status?.behind ?? 0} · {commits.length} 个提交</span>
+      <span className="dvw-gittab-meta">↑{status?.ahead ?? 0} ↓{status?.behind ?? 0} · {visibleCommits.length} 个提交</span>
       <div className="dvw-gittab-actions">
+        {findOpen && <input ref={findInput} className="dvw-input dvw-gittab-find" value={find} placeholder="查找提交（消息 / 作者 / 哈希 / 引用）" aria-label="查找提交" onChange={event => setFind(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { setFindOpen(false); setFind(''); (event.target as HTMLInputElement).blur() } }}/>}
+        <button className="dvw-icon" data-active={findOpen || undefined} title="查找提交 (Ctrl+F)" aria-label="查找提交" onClick={() => { setFindOpen(value => !value); window.setTimeout(() => findInput.current?.focus(), 0) }}><Icon name="search"/></button>
+        <button className="dvw-icon" data-active={branchFilter.size > 0 || undefined} title={branchFilter.size > 0 ? `分支过滤（已选 ${branchFilter.size} 个）` : '分支过滤'} aria-label="分支过滤" onClick={() => void openFilterPicker()}><Icon name="git-branch"/></button>
         <button className="dvw-icon" data-active={allCommits || undefined} title={allCommits ? '仅显示当前分支' : '显示全部分支'} aria-label={allCommits ? '仅显示当前分支' : '显示全部分支'} aria-pressed={allCommits} onClick={() => setAllCommits(value => !value)}><Icon name="graph"/></button>
         <button className="dvw-icon" title="刷新提交图" aria-label="刷新提交图" disabled={busy} onClick={() => void refresh()}><Icon name="refresh"/></button>
         <button className="dvw-icon" title="更多操作" aria-label="更多操作" aria-haspopup="menu" onClick={event => setMenu({ kind: 'toolbar', x: event.clientX, y: event.clientY })}><Icon name="ellipsis"/></button>
@@ -129,15 +287,20 @@ export function GitGraphTab({ sessionId, initialAllBranches = false, onOpenDiff 
     </div>
     {error !== undefined && <div className="dvw-error"><button className="dvw-icon" onClick={() => setError(undefined)}><Icon name="close"/></button>{error}</div>}
     {busy && <div className="dvw-search-progress" role="progressbar" aria-label="正在执行 git 操作"/>}
-    <div className="dvw-gittab-body">
-      {commits.length === 0
-        ? <div className="dvw-gittab-empty">还没有提交{allCommits ? '' : '（当前分支）'}</div>
-        : <CommitGraph commits={commits} expanded={expandedCommit} files={files} remotes={remotes}
-            onToggle={toggleCommitRef} onOpenFile={openCommitFileRef}
-            onMenu={(commit, position) => setMenu({ kind: 'commit', commit, x: position.x, y: position.y })}
-            onFileMenu={(commit, file, position) => setMenu({ kind: 'commit-file', commit, file, x: position.x, y: position.y })}/>}
+    <div className="dvw-gitgraph-body">
+      <div className="dvw-gitgraph-list dvw-graph-list" ref={listRef} aria-label="提交列表">
+        {graphList.length === 0 ? <div className="dvw-gittab-empty">{commits.length === 0 ? '还没有提交' : '没有匹配的提交'}</div> : graphList.map(entry => {
+          if (entry.kind === 'uncommitted') return renderUncommitted()
+          if (entry.kind === 'stash') { const stash = stashes[entry.index]; return stash === undefined ? null : renderStash(stash) }
+          const row = rows[entry.index]; return row === undefined ? null : renderCommit(row)
+        })}
+      </div>
+      {details !== undefined && <aside className="dvw-gitgraph-detail" aria-label="提交详情">{details}</aside>}
     </div>
     {menu !== undefined && <ContextMenu position={{ x: menu.x, y: menu.y }} label={menuLabel} entries={menuEntries()} onClose={() => setMenu(undefined)}/>}
     {commands.pickerElement}
+    {filterPicker && <QuickPick title="分支过滤" placeholder="搜索分支（点一行勾选/取消）" items={filterItems}
+      selectedIds={[...branchFilter]} onToggle={item => setBranchFilter(current => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })}
+      emptyText="没有分支" onClose={() => setFilterPicker(false)}/>}
   </div>
 }

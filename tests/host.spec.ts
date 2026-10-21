@@ -509,6 +509,44 @@ describe('git commit, remote and clone actions', () => {
   })
 })
 
+describe('commit detail and comparison', () => {
+  it('reports author, body and per-file additions/deletions, including the root commit', async () => {
+    const { root, first } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'one\ntwo\n')
+    await writeFile(join(root, 'b.txt'), 'new\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'second\n\nbody line')
+    const head = ((await gitAction(root, 'log')) as Array<{ hash: string }>)[0]!.hash
+    const detail = (await gitAction(root, 'commit.detail', undefined, head)) as { hash: string; author: string; email: string; subject: string; body: string; files: Array<{ path: string; status: string; additions: number; deletions: number }> }
+    expect(detail.hash).toBe(head)
+    expect(detail.author).toBe('Test')
+    expect(detail.email).toBe('test@example.com')
+    expect(detail.subject).toBe('second')
+    expect(detail.body).toContain('body line')
+    expect(detail.files.map(file => file.path).sort()).toEqual(['a.txt', 'b.txt'])
+    expect(detail.files.find(file => file.path === 'a.txt')).toMatchObject({ status: 'M', additions: 1, deletions: 0 })
+    expect(detail.files.find(file => file.path === 'b.txt')).toMatchObject({ status: 'A', additions: 1, deletions: 0 })
+    // 根提交没有父：diff-tree --root 也必须列出首次提交的文件。
+    const rootDetail = (await gitAction(root, 'commit.detail', undefined, first)) as { files: Array<{ path: string; additions: number }> }
+    expect(rootDetail.files).toMatchObject([{ path: 'a.txt', additions: 1 }])
+  })
+
+  it('lists and diffs the files changed between two commits', async () => {
+    const { root, first } = await gitFixture()
+    await writeFile(join(root, 'a.txt'), 'one\ntwo\n')
+    await gitAction(root, 'stage.all')
+    await gitAction(root, 'commit', undefined, 'second')
+    const second = ((await gitAction(root, 'log')) as Array<{ hash: string }>)[0]!.hash
+    const files = (await gitAction(root, 'compare.files', first, second)) as Array<{ path: string; status: string; additions: number; deletions: number }>
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({ path: 'a.txt', status: 'M', additions: 1, deletions: 0 })
+    const diff = (await gitAction(root, 'range.file.diff', 'a.txt', first + '..' + second)) as { diff: string; original: string; modified: string }
+    expect(diff.original).toBe('one\n')
+    expect(diff.modified).toBe('one\ntwo\n')
+    expect(diff.diff).toContain('+two')
+    await expect(gitAction(root, 'range.file.diff', 'a.txt', 'bad..hash')).rejects.toMatchObject({ code: 'bad-request' })
+  })
+})
 describe('client assets',()=>{it('resolves the VS Code Codicon font',()=>{expect(codiconAsset()).toMatchObject({type:'font/ttf'});expect(codiconAsset().path).toMatch(/codicon\.ttf$/)});it('resolves the PDF.js module worker',()=>{expect(pdfWorkerAsset()).toMatchObject({type:'text/javascript; charset=utf-8'});expect(pdfWorkerAsset().path).toMatch(/pdf\.worker\.min\.mjs$/)})})
 
 /**

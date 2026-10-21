@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import type { MenuEntry } from '../src/client/ContextMenu.tsx'
-import { changeMenuItems, commitFileMenuItems, commitMenuItems, graphMenuItems, groupMenuItems, scmMenuItems, type ChangeMenuActions, type CommitFileMenuActions, type CommitMenuActions, type GitMenuActions, type GroupMenuActions } from '../src/client/gitMenus.ts'
+import { changeMenuItems, commitFileMenuItems, commitMenuItems, graphMenuItems, groupMenuItems, scmMenuItems, stashMenuItems, type ChangeMenuActions, type CommitFileMenuActions, type CommitMenuActions, type GitMenuActions, type GroupMenuActions } from '../src/client/gitMenus.ts'
 
 type Item = Extract<MenuEntry, { kind: 'item' }>
 
@@ -32,7 +32,7 @@ function commitFileActions(): CommitFileMenuActions {
   return { openDiff: vi.fn(), copyPath: vi.fn() } as unknown as CommitFileMenuActions
 }
 
-const MENU_ACTION_KEYS = ['refresh', 'pull', 'push', 'fetch', 'sync', 'clone', 'checkout', 'commitStaged', 'commitAll', 'undoCommit', 'stageAll', 'unstageAll', 'discardAll', 'branchCreate', 'branchRename', 'branchDelete', 'branchMerge', 'branchRebase', 'openGraph', 'remoteAdd', 'remoteRemove', 'stashPush', 'stashApply', 'stashPop', 'stashDrop', 'tagCreate', 'tagDelete', 'tagPush', 'copyBranch', 'copyRepository', 'toggleTree', 'sortByPath', 'sortByName', 'loadMore', 'showOutput'] as const
+const MENU_ACTION_KEYS = ['refresh', 'pull', 'push', 'fetch', 'sync', 'clone', 'checkout', 'commitStaged', 'commitAll', 'undoCommit', 'stageAll', 'unstageAll', 'discardAll', 'branchCreate', 'branchRename', 'branchDelete', 'branchMerge', 'branchRebase', 'openGraph', 'remoteAdd', 'remoteRemove', 'stashPush', 'stashApply', 'stashPop', 'stashDrop', 'tagCreate', 'tagDelete', 'tagPush', 'copyBranch', 'copyRepository', 'toggleTree', 'sortByPath', 'sortByName', 'loadMore', 'openFind', 'openBranchFilter', 'clearBranchFilter', 'showOutput'] as const
 
 function menuActions(): GitMenuActions & Record<typeof MENU_ACTION_KEYS[number], ReturnType<typeof vi.fn>> {
   return Object.fromEntries(MENU_ACTION_KEYS.map(key => [key, vi.fn()])) as unknown as GitMenuActions & Record<typeof MENU_ACTION_KEYS[number], ReturnType<typeof vi.fn>>
@@ -188,8 +188,8 @@ describe('commit graph tab menu', () => {
   const base = { busy: false, remote: true, allCommits: false, canLoadMore: true }
 
   it('nests range, branch, stash and tag submenus', () => {
-    expect(shape(graphMenuItems({ ...base, actions: menuActions() }))).toEqual([
-      'graph-refresh', 'graph-range ▸ graph-range-current,graph-range-all', 'graph-load-more', '---',
+    expect(shape(graphMenuItems({ ...base, filtered: false, actions: menuActions() }))).toEqual([
+      'graph-refresh', 'graph-find', 'graph-filter', 'graph-range ▸ graph-range-current,graph-range-all', 'graph-load-more', '---',
       'graph-checkout',
       'graph-branch-group ▸ graph-branch-create,graph-branch-delete,graph-branch-merge',
       'graph-stash-group ▸ graph-stash-push,graph-stash-apply,graph-stash-pop',
@@ -199,16 +199,16 @@ describe('commit graph tab menu', () => {
   })
 
   it('marks the active range and disables load-more at the cap', () => {
-    const all = graphMenuItems({ ...base, allCommits: true, canLoadMore: false, actions: menuActions() })
+    const all = graphMenuItems({ ...base, filtered: false, allCommits: true, canLoadMore: false, actions: menuActions() })
     expect(items(all).find(entry => entry.id === 'graph-range-all')).toMatchObject({ label: '全部分支（当前）' })
     expect(items(all).find(entry => entry.id === 'graph-load-more')).toMatchObject({ disabled: true })
   })
 
   it('disables tag push without a remote and switches the range through openGraph', () => {
-    const noRemote = items(graphMenuItems({ ...base, remote: false, actions: menuActions() }))
+    const noRemote = items(graphMenuItems({ ...base, filtered: false, remote: false, actions: menuActions() }))
     expect(noRemote.find(entry => entry.id === 'graph-tag-push')?.disabled).toBe(true)
     const actions = menuActions()
-    items(graphMenuItems({ ...base, actions })).forEach(entry => entry.onSelect())
+    items(graphMenuItems({ ...base, filtered: false, actions })).forEach(entry => entry.onSelect())
     expect(actions.openGraph).toHaveBeenCalledWith(false)
     expect(actions.openGraph).toHaveBeenCalledWith(true)
     expect(actions.copyBranch).toHaveBeenCalledTimes(1)
@@ -246,6 +246,38 @@ describe('group title menus', () => {
   })
 })
 
+describe('stash row menu', () => {
+  it('offers apply, pop, copy and a destructive drop', () => {
+    const actions = { apply: vi.fn(), pop: vi.fn(), drop: vi.fn(), copyName: vi.fn() }
+    const entries = stashMenuItems({ label: 'stash@{0}: On main: 说明', actions })
+    expect(shape(entries)).toEqual(['stash-apply', 'stash-pop', 'stash-copy', '---', 'stash-drop'])
+    expect(items(entries).filter(entry => entry.danger === true).map(entry => entry.id)).toEqual(['stash-drop'])
+    items(entries).forEach(entry => entry.onSelect())
+    expect(actions.apply).toHaveBeenCalledTimes(1)
+    expect(actions.copyName).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('graph find and branch filter entries', () => {
+  const base = { busy: false, remote: true, allCommits: false, canLoadMore: true }
+
+  it('shows the branch-filter entry in the clear state when a filter is active', () => {
+    expect(shape(graphMenuItems({ ...base, filtered: false, actions: menuActions() }))).toContain('graph-filter')
+    expect(items(graphMenuItems({ ...base, filtered: true, actions: menuActions() })).find(entry => entry.id === 'graph-filter')?.label).toBe('清除分支过滤')
+  })
+
+  it('wires find and filter to their actions', () => {
+    const actions = menuActions()
+    const entries = items(graphMenuItems({ ...base, filtered: false, actions }))
+    entries.find(entry => entry.id === 'graph-find')?.onSelect()
+    entries.find(entry => entry.id === 'graph-filter')?.onSelect()
+    expect(actions.openFind).toHaveBeenCalledTimes(1)
+    expect(actions.openBranchFilter).toHaveBeenCalledTimes(1)
+    const clear = items(graphMenuItems({ ...base, filtered: true, actions }))
+    clear.find(entry => entry.id === 'graph-filter')?.onSelect()
+    expect(actions.clearBranchFilter).toHaveBeenCalledTimes(1)
+  })
+})
 describe('git menu labels', () => {
   const chinese = /[\u4e00-\u9fff]/
 
@@ -257,7 +289,8 @@ describe('git menu labels', () => {
       commitMenuItems({ commit: { hash: 'a1b2c3d', subject: 'feat: 中文提交说明' }, expanded: false, actions: commitActions() }),
       commitFileMenuItems({ path: 'src/a.ts', actions: commitFileActions() }),
       scm(),
-      graphMenuItems({ busy: false, remote: true, allCommits: false, canLoadMore: true, actions: menuActions() }),
+      graphMenuItems({ busy: false, remote: true, allCommits: false, canLoadMore: true, filtered: false, actions: menuActions() }),
+      stashMenuItems({ label: 'stash@{0}: On main: 说明', actions: { apply: vi.fn(), pop: vi.fn(), drop: vi.fn(), copyName: vi.fn() } }),
       groupMenuItems({ group: 'changes', busy: false, count: 1, allCommits: false, canLoadMore: true, expandedCommit: false, actions: groupActions() }),
       groupMenuItems({ group: 'graph', busy: false, count: 1, allCommits: false, canLoadMore: true, expandedCommit: false, actions: groupActions() }),
     ]

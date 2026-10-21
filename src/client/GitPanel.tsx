@@ -65,7 +65,7 @@ function GraphTracksBase({row}:{row:GraphRow}) {
   </svg>
 }
 /** 行级 SVG 只在 row 变化时重画：展开/收起某个提交时其余 99 行不用重算路径。 */
-const GraphTracks = memo(GraphTracksBase)
+export const GraphTracks = memo(GraphTracksBase)
 
 function GraphContinuationBase({row}:{row:GraphRow}) {
   const width=graphWidth(row)

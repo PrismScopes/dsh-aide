@@ -37,6 +37,10 @@ export function QuickPick(props: {
   /** 输入模式是否允许空串（例如可选的贮藏说明）。 */
   allowEmpty?: boolean
   onPick?(item: QuickPickItem): void
+  /** 多选模式：点一行调用 onToggle 且不关闭选择器（分支过滤用）。 */
+  onToggle?(item: QuickPickItem): void
+  /** 多选模式下已勾选的 id。 */
+  selectedIds?: readonly string[]
   onClose(): void
   emptyText?: string
 }) {
@@ -63,6 +67,7 @@ export function QuickPick(props: {
     if (event.key !== 'Enter') return
     event.preventDefault()
     const item = visible[active]
+    if (item !== undefined && props.onToggle !== undefined) { props.onToggle(item); return }
     if (item !== undefined && props.onPick !== undefined && filter.trim() === '') { pick(item); return }
     if (props.onSubmit !== undefined) { submit(); return }
     if (item !== undefined) pick(item)
@@ -77,8 +82,8 @@ export function QuickPick(props: {
       {showCreate && <button className="dvw-quickpick-item dvw-quickpick-create" onClick={submit}><Icon name="add"/><span>{createLabel}</span></button>}
       {props.onPick !== undefined && <div className="dvw-quickpick-list">
         {visible.map((item, index) => <button className="dvw-quickpick-item" key={item.id} data-active={index === active || undefined}
-          onMouseDown={event => event.preventDefault()} onClick={() => pick(item)}>
-          {item.current === true ? <Icon name="check"/> : <span className="dvw-quickpick-blank" aria-hidden="true"/>}
+          onMouseDown={event => event.preventDefault()} onClick={() => { if (props.onToggle !== undefined) props.onToggle(item); else pick(item) }}>
+          {(item.current === true || props.selectedIds?.includes(item.id) === true) ? <Icon name="check"/> : <span className="dvw-quickpick-blank" aria-hidden="true"/>}
           <span className="dvw-quickpick-name">{item.label}</span>
           {item.detail !== undefined && <span className="dvw-quickpick-meta">{item.detail}</span>}
         </button>)}

@@ -50,6 +50,15 @@ export interface SearchReplaceRequest extends SearchRequest {
 export interface SearchReplaceResult { files: string[]; replacements: number }
 /** One working tree change. */
 export interface GitChange { path: string; originalPath?: string; index: string; worktree: string; staged: boolean; untracked: boolean }
+/**
+ * 提交详情里单个文件的统计（提交详情面板用）。
+ *
+ * 与 GitCommitFile 的区别是带上了 +/− 行数：diff-tree/diff 的 --numstat 输出。
+ */
+export interface GitCommitFileDetail { path: string; previousPath?: string; status: string; additions: number; deletions: number; binary: boolean }
+/** 一次提交的完整信息：作者、日期、完整说明正文，以及带增删行数的文件列表。 */
+export interface GitCommitDetail { hash: string; parents: string[]; author: string; email: string; date: string; subject: string; body: string; files: GitCommitFileDetail[] }
+
 /** Local repository state. */
 export interface GitStatus { repository: string; branch: string; ahead: number; behind: number; changes: GitChange[] }
 /**

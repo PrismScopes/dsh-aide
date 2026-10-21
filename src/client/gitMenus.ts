@@ -176,6 +176,10 @@ export interface GitMenuActions {
   toggleTree(): void
   sortByPath(): void
   sortByName(): void
+  /** 打开提交图里的查找框 / 分支过滤选择器；清除已选的分支过滤。 */
+  openFind(): void
+  openBranchFilter(): void
+  clearBranchFilter(): void
   /** 提交图多取一页（只有图表标签页/图表分组用得到）。 */
   loadMore(): void
   showOutput(): void
@@ -287,6 +291,8 @@ export interface GraphMenuContext {
   busy: boolean
   /** 是否配置了远程：推送标签需要远程。 */
   remote: boolean
+  /** 当前是否有分支过滤（决定菜单里是「分支过滤…」还是「清除分支过滤」）。 */
+  filtered: boolean
   /** 提交图当前是否显示全部分支。 */
   allCommits: boolean
   canLoadMore: boolean
@@ -295,9 +301,11 @@ export interface GraphMenuContext {
 
 /** 提交图标签页标题上的 `...` 菜单：范围、分页、提交/分支/贮藏/标记操作。 */
 export function graphMenuItems(context: GraphMenuContext): MenuEntry[] {
-  const { busy, remote, allCommits, canLoadMore, actions } = context
+  const { busy, remote, filtered, allCommits, canLoadMore, actions } = context
   return [
     item({ id: 'graph-refresh', label: '刷新提交图', disabled: busy, onSelect: actions.refresh }),
+    item({ id: 'graph-find', label: '查找提交…', onSelect: actions.openFind }),
+    item({ id: 'graph-filter', label: filtered ? '清除分支过滤' : '分支过滤…', onSelect: filtered ? actions.clearBranchFilter : actions.openBranchFilter }),
     item({
       id: 'graph-range', label: '提交范围', submenu: [
         item({ id: 'graph-range-current', label: allCommits ? '仅当前分支' : '仅当前分支（当前）', disabled: busy, onSelect: () => actions.openGraph(false) }),
@@ -380,5 +388,32 @@ export function groupMenuItems(context: GroupMenuContext): MenuEntry[] {
     item({ id: 'graph-toggle-all', label: allCommits ? '仅显示当前分支' : '显示全部分支', disabled: busy, onSelect: actions.toggleAllCommits }),
     item({ id: 'graph-load-more', label: '加载更多提交', disabled: busy || !canLoadMore, onSelect: actions.loadMore }),
     item({ id: 'graph-collapse-commit', label: '收起提交文件', disabled: expandedCommit === false, onSelect: actions.collapseCommit }),
+  ]
+}
+
+/** 贮藏行右键菜单的动作。 */
+export interface StashMenuActions {
+  apply(): void
+  pop(): void
+  drop(): void
+  /** 复制 `stash@{n}` 这个名字，方便在终端里直接用。 */
+  copyName(): void
+}
+
+interface StashMenuContext {
+  /** 展示用的名字，例如 `stash@{0}: On main: 说明`。 */
+  label: string
+  actions: StashMenuActions
+}
+
+/** 提交图里贮藏节点的菜单：应用 / 弹出 / 删除（危险）/ 复制名字。 */
+export function stashMenuItems(context: StashMenuContext): MenuEntry[] {
+  const { actions } = context
+  return [
+    item({ id: 'stash-apply', label: '应用贮藏', onSelect: actions.apply }),
+    item({ id: 'stash-pop', label: '弹出贮藏', onSelect: actions.pop }),
+    item({ id: 'stash-copy', label: '复制贮藏名', onSelect: actions.copyName }),
+    separator(),
+    item({ id: 'stash-drop', label: '删除贮藏', danger: true, onSelect: actions.drop }),
   ]
 }

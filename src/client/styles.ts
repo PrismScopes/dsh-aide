@@ -258,6 +258,30 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-graph-open:hover{background:var(--dvw-hover);color:var(--dvw-text)}
 .dvw-graph-open .codicon{font-size:14px}
 
+/* ---- 提交图标签页：详情面板 / 查找框 / 未提交与贮藏行 ---- */
+.dvw-gitgraph-body{flex:1;min-height:0;display:flex}
+.dvw-gitgraph-list{flex:1;min-width:0;overflow:auto;padding:4px 0}
+.dvw-gitgraph-detail{flex:none;width:340px;min-height:0;overflow:auto;border-left:1px solid var(--dvw-border);background:var(--dvw-surface-1)}
+.dvw-gittab-find{width:200px;height:24px;padding:0 8px;font-size:12px}
+.dvw-graph-row[data-active=true]{background:var(--dvw-active);box-shadow:inset 2px 0 0 var(--dvw-accent)}
+.dvw-git-detail{padding:10px;display:flex;flex-direction:column;gap:8px}
+.dvw-git-detail-head{display:flex;align-items:center;gap:2px}
+.dvw-git-detail-title{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dvw-git-detail-meta{font-size:11px;line-height:1.5;color:var(--dvw-text-3);word-break:break-all}
+.dvw-git-detail-body{margin:0;padding:8px;max-height:180px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--dvw-text-2);background:var(--dvw-surface-2);border-radius:var(--dvw-radius-xs)}
+.dvw-git-detail-files{display:flex;flex-direction:column}
+.dvw-git-detail-file{width:100%;border:0;background:transparent;color:var(--dvw-text);display:flex;align-items:center;gap:6px;padding:4px 6px;text-align:left;font:inherit;cursor:pointer;border-radius:var(--dvw-radius-xs)}
+.dvw-git-detail-file:hover{background:var(--dvw-hover)}
+.dvw-git-detail-file .dvw-graph-subject{flex:1;min-width:0}
+.dvw-git-detail-empty{padding:6px;font-size:12px;color:var(--dvw-text-3)}
+.dvw-file-stat{flex:none;display:flex;gap:6px;font-size:11px;font-variant-numeric:tabular-nums}
+.dvw-stat-add{color:var(--dvw-success)}.dvw-stat-del{color:var(--dvw-error)}
+.dvw-git-uncommitted{border-bottom:1px solid var(--dvw-border-soft)}
+.dvw-uncommitted-dot{width:10px;height:10px;margin:0 8px 0 4px;flex:none;border-radius:50%;border:2px solid var(--dvw-warn)}
+.dvw-uncommitted-files{padding:0 10px 6px 30px;display:flex;flex-direction:column;gap:2px}
+.dvw-uncommitted-file{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dvw-text-2)}
+.dvw-stash-dot{width:10px;height:10px;margin:0 8px 0 4px;flex:none;border-radius:50%;border:2px dashed var(--dvw-text-3)}
+
 `
 
 

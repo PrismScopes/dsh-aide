@@ -39,3 +39,64 @@ export function shortHash(hash: string): string { return hash.slice(0, 7) }
 export function graphSubtitle(commit: Pick<GitCommit, 'author' | 'hash'>): string {
   return `${commit.author} · ${shortHash(commit.hash)}`
 }
+
+/**
+ * 提交搜索：空格分隔的多个关键词必须全部命中（说明 / 作者 / 哈希 / 引用名）。
+ * 与原版 Git Graph 的 Find Widget 一样，大小写不敏感。
+ */
+export function matchCommit(commit: Pick<GitCommit, 'subject' | 'author' | 'hash' | 'refs'>, query: string): boolean {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return true
+  const haystack = `${commit.subject} ${commit.author} ${commit.hash} ${commit.refs.join(' ')}`.toLowerCase()
+  return words.every(word => haystack.includes(word))
+}
+
+/** 按关键词过滤提交（保持原顺序）；空查询返回原数组。 */
+export function filterCommits<T extends Pick<GitCommit, 'subject' | 'author' | 'hash' | 'refs'>>(commits: readonly T[], query: string): T[] {
+  if (query.trim() === '') return [...commits]
+  return commits.filter(commit => matchCommit(commit, query))
+}
+
+/**
+ * 从给定 tip 哈希沿父提交链向上走，返回**加载窗口内**可达的提交集合。
+ *
+ * 这是分支过滤的近似：原版 Git Graph 让 host 用 `git log <branches>` 取数，我们已有全部分支的窗口，
+ * 就地在窗口内算可达集合，避免为每次勾选再跑一次 git；超出窗口的提交本来也看不到。
+ */
+export function reachableCommits(commits: readonly Pick<GitCommit, 'hash' | 'parents'>[], tips: readonly string[]): Set<string> {
+  const byHash = new Map(commits.map(commit => [commit.hash, commit]))
+  const seen = new Set<string>()
+  const stack = [...tips]
+  while (stack.length > 0) {
+    const hash = stack.pop()!
+    if (seen.has(hash)) continue
+    const commit = byHash.get(hash)
+    if (commit === undefined) continue
+    seen.add(hash)
+    for (const parent of commit.parents) if (!seen.has(parent)) stack.push(parent)
+  }
+  return seen
+}
+
+/** 选中分支名对应的 tip 哈希：引用标签等于分支名，或 `远程名/分支名` 的后半段等于它。 */
+export function branchTips(commits: readonly Pick<GitCommit, 'hash' | 'refs'>[], branches: ReadonlySet<string>): string[] {
+  if (branches.size === 0) return []
+  return commits.filter(commit => commit.refs.some(ref => {
+    if (ref.startsWith('tag: ')) return false // 标签不是分支过滤的对象
+    const label = refLabel(ref)
+    return branches.has(label) || branches.has(label.replace(/^[^/]+\//, ''))
+  })).map(commit => commit.hash)
+}
+
+/** 提交图列表的条目类型：未提交更改 / 贮藏 / 提交（顺序与原版一致：未提交在最上，然后贮藏，再提交）。 */
+export type GraphListKind = 'uncommitted' | 'stash' | 'commit'
+export interface GraphListEntry { kind: GraphListKind; index: number }
+
+/** 构造提交图列表条目；`index` 对 stash 是贮藏序号、对 commit 是提交下标（未提交为 -1）。 */
+export function buildGraphList(options: { commitCount: number; stashCount: number; hasUncommitted: boolean }): GraphListEntry[] {
+  const entries: GraphListEntry[] = []
+  if (options.hasUncommitted) entries.push({ kind: 'uncommitted', index: -1 })
+  for (let index = 0; index < options.stashCount; index++) entries.push({ kind: 'stash', index })
+  for (let index = 0; index < options.commitCount; index++) entries.push({ kind: 'commit', index })
+  return entries
+}

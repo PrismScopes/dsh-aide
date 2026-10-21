@@ -5,7 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, reso
 import { access, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import type { HostContext } from './context.ts'
-import type { FileDocument, FileEntry, GitBranchList, GitChange, GitCommit, GitCommitFile, GitDiff, GitStash, GitStatus, GitTag, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
+import type { FileDocument, FileEntry, GitBranchList, GitChange, GitCommit, GitCommitDetail, GitCommitFile, GitCommitFileDetail, GitDiff, GitStash, GitStatus, GitTag, SearchMatch, SearchReplaceRequest, SearchReplaceResult, SearchRequest, SearchResult } from './types.ts'
 import { inside, resolveCreatableWorkspacePath, resolveExistingWorkspacePath, type WorkspacePathErrors } from './paths.ts'
 import { WorkbenchError } from './wire.ts'
 
@@ -521,13 +521,7 @@ async function commitFilesWithParent(repository: string, hash: string, runner: P
     ? await runner('git',['diff','--name-status','-z','-M',parent.stdout.trim(),hash,'--'],repository)
     : await runner('git', ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', '-z', '-M', hash], repository)
   if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 409)
-  const tokens = result.stdout.split('\0').filter(Boolean); const files: GitCommitFile[] = []
-  for (let index = 0; index < tokens.length;) {
-    const status = tokens[index++] ?? ''; const code = status[0] ?? ''
-    if (code === 'R' || code === 'C') { const previousPath=tokens[index++]??'';const path=tokens[index++]??'';files.push({path,previousPath,status:code}) }
-    else { const path=tokens[index++]??'';files.push({path,status:code}) }
-  }
-  return { files, parent }
+  return { files: parseNameStatus(result.stdout), parent }
 }
 
 async function commitFiles(repository: string, hash: string, runner: ProcessRunner = run): Promise<GitCommitFile[]> {
@@ -650,6 +644,72 @@ async function cloneRepository(cwd: string, path: string | undefined, url: strin
   const result = await runner('git', ['clone', '--', url, target], cwd)
   if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 409)
   return { cloned: true }
+}
+
+/** `git --name-status -z` 的解析：R/C 记录后面跟「旧路径 + 新路径」两个 token。 */
+function parseNameStatus(stdout: string): GitCommitFile[] {
+  const tokens = stdout.split('\0').filter(Boolean)
+  const files: GitCommitFile[] = []
+  for (let index = 0; index < tokens.length;) {
+    const status = tokens[index++] ?? ''
+    const code = status[0] ?? ''
+    if (code === 'R' || code === 'C') { const previousPath = tokens[index++] ?? ''; const path = tokens[index++] ?? ''; files.push({ path, previousPath, status: code }) }
+    else { const path = tokens[index++] ?? ''; files.push({ path, status: code }) }
+  }
+  return files
+}
+
+/**
+ * `--numstat -z` 的解析。
+ *
+ * 为什么要和 name-status 的文件列表配对：-z 模式下 numstat 把路径拆成独立 token（重命名还会多一个旧路径），
+ * 单看 numstat 无法可靠区分「普通文件」与「重命名」；而 name-status 里已经知道哪些记录是 R/C，
+ * 按同一顺序消费 token 就是确定的。两个命令必须用同一套 `-M` 与提交区间，否则顺序可能不同。
+ */
+function parseNumstat(stdout: string, files: readonly GitCommitFile[]): GitCommitFileDetail[] {
+  // 实测格式（git 2.52，-z）：普通文件是 `adds\tdels\tpath` 一个 token；重命名是 `adds\tdels\t` + 旧路径 + 新路径。
+  const tokens = stdout.split('\0').filter(token => token !== '')
+  let cursor = 0
+  return files.map(file => {
+    const header = tokens[cursor++] ?? ''
+    const parts = header.split('\t')
+    const adds = parts[0] ?? '0'
+    const dels = parts[1] ?? '0'
+    let path = parts.slice(2).join('\t')
+    let previousPath: string | undefined
+    if (path === '') { previousPath = tokens[cursor++] ?? undefined; path = tokens[cursor++] ?? '' }
+    const binary = adds === '-' || dels === '-'
+    return { status: file.status, path: path === '' ? file.path : path, ...(previousPath === undefined ? {} : { previousPath }), binary, additions: binary ? 0 : Number.parseInt(adds, 10) || 0, deletions: binary ? 0 : Number.parseInt(dels, 10) || 0 }
+  })
+}
+async function numstatFiles(runGit: (args: string[]) => Promise<ProcessResult>, args: string[], files: readonly GitCommitFile[]): Promise<GitCommitFileDetail[]> {
+  if (files.length === 0) return []
+  const result = await runGit(args)
+  if (result.code !== 0) throw new WorkbenchError('git-failed', result.stderr || result.stdout, 409)
+  return parseNumstat(result.stdout, files)
+}
+
+/** 一次提交的完整详情（提交详情面板）：元信息 + 完整正文 + 每个文件的增删行数。 */
+async function commitDetail(repository: string, hash: string, runner: ProcessRunner): Promise<GitCommitDetail> {
+  const runGit = (gitArgs: string[]) => runner('git', gitArgs, repository)
+  const meta = await runGit(['log', '-1', '--date=iso-strict', '--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b', hash])
+  if (meta.code !== 0) throw new WorkbenchError('git-failed', meta.stderr || meta.stdout, 409)
+  const [fullHash = '', parents = '', author = '', email = '', date = '', subject = '', body = ''] = meta.stdout.split('\x1f')
+  const { files, parent } = await commitFilesWithParent(repository, hash, runner)
+  // 根提交没有父：diff-tree --root 才能列出首次提交的文件（与 commitFilesWithParent 的根分支同一套参数）。
+  const stats = await numstatFiles(runGit, parent.code === 0
+    ? ['diff', '--numstat', '-z', '-M', parent.stdout.trim(), hash]
+    : ['diff-tree', '--root', '--no-commit-id', '-r', '--numstat', '-z', '-M', hash], files)
+  return { hash: fullHash.trim() || hash, parents: parents.split(' ').filter(Boolean), author, email, date, subject, body: body.trimEnd(), files: stats }
+}
+
+/** 两个提交之间的文件变更（提交对比视图）。 */
+async function compareFiles(repository: string, from: string, to: string, runner: ProcessRunner): Promise<GitCommitFileDetail[]> {
+  const runGit = (gitArgs: string[]) => runner('git', gitArgs, repository)
+  const nameStatus = await runGit(['diff', '--name-status', '-z', '-M', from, to])
+  if (nameStatus.code !== 0) throw new WorkbenchError('git-failed', nameStatus.stderr || nameStatus.stdout, 409)
+  const files = parseNameStatus(nameStatus.stdout)
+  return numstatFiles(runGit, ['diff', '--numstat', '-z', '-M', from, to], files)
 }
 
 export async function gitAction(cwd: string, action: string, path?: string, value?: string, runner: ProcessRunner = run): Promise<unknown> {
@@ -808,6 +868,22 @@ export async function gitAction(cwd: string, action: string, path?: string, valu
       const original=file.status==='A'||parent.code!==0?'':await gitObject(repository,`${parent.stdout.trim()}:${file.previousPath??target}`, runner)
       const modified=file.status==='D'?'':await gitObject(repository,`${hash}:${target}`, runner)
       return {diff:shown.stdout,original,modified} satisfies GitDiff
+    }
+    case 'commit.detail': return commitDetail(repository, validateCommitHash(value), runner)
+    case 'compare.files': return compareFiles(repository, validateCommitHash(path), validateCommitHash(value), runner)
+    /**
+     * 提交对比里打开单个文件的差异：path = 文件，value = `from..to` 两个哈希。
+     * 与原版 Git Graph 的 Commit Comparison View 一样，diff 走编辑器里现成的差异标签。
+     */
+    case 'range.file.diff': {
+      const target = validateGitPath(repository, path)
+      const [rawFrom = '', rawTo = ''] = (value ?? '').split('..')
+      const from = validateCommitHash(rawFrom); const to = validateCommitHash(rawTo)
+      const shown = await runGit(['diff', '--no-ext-diff', '--find-renames', '--patch', '--no-color', from, to, '--', target])
+      if (shown.code !== 0) throw new WorkbenchError('git-failed', shown.stderr || shown.stdout, 409)
+      const original = await gitObject(repository, `${from}:${target}`, runner)
+      const modified = await gitObject(repository, `${to}:${target}`, runner)
+      return { diff: shown.stdout, original, modified } satisfies GitDiff
     }
     case 'commit.checkout': args = ['switch', '--detach', validateCommitHash(value)]; break
     // path 在这里复用为「新分支名」，value 是基准提交（与 commit.show / commit.files 一样把哈希放 value）。
