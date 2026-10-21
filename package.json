@@ -1,6 +1,6 @@
 {
   "name": "dsh-aide",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "AIDE (AI + IDE): VS Code-style local IDE for DeepSeek Harness with Monaco, explorer, search, Git and terminal",
   "type": "module",
   "license": "MIT",
@@ -34,6 +34,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "dino",
     "lib",
     "src",
     "cordis.patch.yml",

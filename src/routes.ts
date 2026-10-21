@@ -6,7 +6,7 @@ import { createWorkspaceWatcher, RESCAN_EVENT, type WatchHandle } from './watch.
 import { WebSocket, WebSocketServer } from 'ws'
 import type { HostContext } from './context.ts'
 import { codiconAsset, cwdFor, fileIconAsset, katexAsset, monacoAsset, onigWasmAsset, pdfWorkerAsset, uploadFile, workspacePreviewFile } from './host.ts'
-import { readGrammar } from './assets.ts'
+import { dinoAsset, readGrammar } from './assets.ts'
 import { authorize, readBinaryBody, readBody, send, sendError, WorkbenchError } from './wire.ts'
 import { localBase } from './terminal.ts'
 import { dispatch } from './api.ts'
@@ -186,6 +186,8 @@ export function createFilesChangedBatcher(workspace: string, send: (message: Fil
 export function registerWorkbenchRoutes(ctx: HostContext): void {
   registerImmutableAssetRoute(ctx, { label: 'dsh-aide: Codicon font', kind: 'exact', path: '/dsh-vscode/codicons/codicon.ttf', resolve: () => codiconAsset() })
   registerImmutableAssetRoute(ctx, { label: 'dsh-aide: PDF.js worker', kind: 'exact', path: '/dsh-vscode/pdfjs/worker.mjs', resolve: () => pdfWorkerAsset() })
+  // 小恐龙彩蛋：原样提供 vendored 的 MIT 实现（见 dino/ATTRIBUTION.md）。
+  registerImmutableAssetRoute(ctx, { label: 'dsh-aide: dino game', kind: 'prefix', path: '/dsh-vscode/dino', resource: pathname => decodeURIComponent(pathname.slice('/dsh-vscode/dino/'.length)), resolve: async resource => dinoAsset(resource) })
 
   // TextMate 语法按需提供：全部语法约 2.5MB，留在宿主侧就不会进客户端 bundle。
   // 客户端只在真正需要某种语言时取一次，之后由 immutable 缓存接管。

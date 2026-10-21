@@ -311,15 +311,13 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-git-dialog-empty{font-size:12px;color:var(--dvw-text-3);padding:2px 0}
 .dvw-git-dialog-note{font-size:11px;color:var(--dvw-text-3)}
 
-/* ---- 编辑器空状态里的彩蛋：小恐龙 ---- */
-.dvw-empty-dino{cursor:pointer}
-.dvw-empty-dino:hover strong{color:var(--dvw-text)}
-.dvw-dino-teaser{display:block;margin-top:10px;font-size:12px;color:var(--dvw-text-3)}
-.dvw-dino{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;background:var(--dvw-base)}
-.dvw-dino-bar{width:100%;max-width:760px;display:flex;align-items:center;gap:8px}
+/* ---- 编辑器空状态里的彩蛋：小恐龙（vendored 开源实现，iframe 铺满编辑器） ---- */
+.dvw-dino-teaser{display:block;margin:10px auto 0;padding:2px 8px;border:0;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text-3);font:inherit;font-size:12px;cursor:pointer}
+.dvw-dino-teaser:hover{color:var(--dvw-accent);background:var(--dvw-hover)}
+.dvw-dino{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--dvw-base)}
+.dvw-dino-bar{flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--dvw-border-soft)}
 .dvw-dino-title{flex:1;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dvw-text-2)}
-.dvw-dino-canvas{width:100%;max-width:760px;height:auto;border:1px solid var(--dvw-border-soft);border-radius:var(--dvw-radius-sm);background:var(--dvw-surface-1);image-rendering:pixelated;cursor:pointer}
-.dvw-dino-hint{font-size:11px;color:var(--dvw-text-3)}
+.dvw-dino-frame{flex:1;width:100%;min-height:0;border:0;background:#fff}
 
 `
 

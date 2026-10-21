@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import { dirname, extname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { WorkbenchError } from './wire.ts'
@@ -113,4 +114,28 @@ export async function readGrammar(raw: string): Promise<unknown> {
   if (match === null) throw new WorkbenchError('asset-invalid', 'unexpected grammar format', 500)
   // 文件里那一段是 JSON 字符串字面量的内容，先反转义成 JSON 文本，再解析。
   return JSON.parse(JSON.parse(`"${match[1]}"`)) as unknown
+}
+
+/**
+ * 小恐龙游戏的静态文件：`dino/` 目录是原样 vendored 的开源实现（MIT）。
+ *
+ * 用**白名单**而不是目录拼接：URL 里的路径永远只可能是这 9 个文件之一，
+ * 既挡住了 `..` 穿越，也保证不会把 LICENSE/构建产物之类的文件暴露出去。
+ */
+const DINO_ROOT = fileURLToPath(new URL('../dino/', import.meta.url))
+const DINO_FILES: Record<string, string> = {
+  'index.html': 'text/html; charset=utf-8',
+  'style.css': 'text/css; charset=utf-8',
+  'js/helpers.js': 'text/javascript; charset=utf-8',
+  'js/game.js': 'text/javascript; charset=utf-8',
+  'js/objects/background.js': 'text/javascript; charset=utf-8',
+  'js/objects/cactus.js': 'text/javascript; charset=utf-8',
+  'js/objects/dinosaur.js': 'text/javascript; charset=utf-8',
+  'js/objects/game-object.js': 'text/javascript; charset=utf-8',
+  'js/objects/score.js': 'text/javascript; charset=utf-8',
+}
+export function dinoAsset(resource: string): { path: string; type: string } {
+  const type = DINO_FILES[resource]
+  if (type === undefined) throw new WorkbenchError('not-found', 'dino asset not found', 404)
+  return { path: resolve(DINO_ROOT, resource), type }
 }
