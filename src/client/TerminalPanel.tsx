@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import { copyText, readClipboard } from './clipboard.ts'
@@ -137,7 +136,7 @@ function XtermView({ workspace, id, colorScheme, hidden, onReady, onContextMenu 
 }
 
 /** Render interactive terminal tabs in the workbench bottom panel. */
-export function TerminalPanel({ sessionId, colorScheme, header, visible }: BottomPanelProps) {
+export function TerminalPanel({ sessionId, colorScheme, visible }: BottomPanelProps) {
   const workspaceRef = useRef<{ sessionId: string; value: TerminalWorkspaceController }>()
   if (workspaceRef.current?.sessionId !== sessionId) workspaceRef.current = { sessionId, value: new TerminalWorkspaceController(sessionId) }
   const workspace = workspaceRef.current.value
@@ -294,8 +293,8 @@ export function TerminalPanel({ sessionId, colorScheme, header, visible }: Botto
       clear: () => menuTerminal(menu.id)?.clear(),
     },
   })
-  // 顶部标签栏。渲染进面板头里留给面板的那块容器（见 service.ts 的 BottomPanelProps.header）：
-  // 标签状态属于终端面板，上提到 Workbench 只为了挪个位置会把职责弄乱。
+  // 终端会话标签条：画在面板内容区顶部（见下方 return），不再 portal 到面板头 ——
+  // 面板头现在是「问题 / 输出 / 终端」这些视图标签的位置。标签状态仍属于终端面板。
   const renameInput = (id: string, className: string) => <input className={className} value={renaming?.value ?? ''} autoFocus aria-label="终端名称"
     onChange={event => setRenaming({ id, value: event.target.value, where: renaming?.where ?? 'tab' })}
     onKeyDown={event => { if (event.key === 'Enter') saveRename(id); if (event.key === 'Escape') setRenaming(undefined) }}
@@ -317,8 +316,8 @@ export function TerminalPanel({ sessionId, colorScheme, header, visible }: Botto
   </div>
   const error = snapshot.error ?? actionError
   return <div className="dvw-terminal-root">
-    {header !== undefined && header !== null && createPortal(tabs, header)}
     <div className="dvw-terminal-main">
+      {snapshot.terminals.length > 0 && <div className="dvw-terminal-tabbar">{tabs}</div>}
       {error !== undefined && <div className="dvw-terminal-error">{error}</div>}
       <div className="dvw-terminal-panes" data-split={shown.length > 1 || undefined}>
         {snapshot.terminals.length === 0 && pending === 0

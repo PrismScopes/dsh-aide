@@ -4,8 +4,8 @@ import { registerEditorMenuContribution } from './editorMenuRegistry.ts'
 
 export type WorkbenchView = 'explorer' | 'search' | 'git'
 /**
- * `header` 是面板头里那块留给面板自己用的容器。终端面板把标签渲染进去：标签的状态（当前是哪一个、
- * 拆分了哪几个）属于终端面板，把状态上提到 Workbench 只为了让标签出现在头部，会让职责变乱。
+ * `header` 是面板头里那块留给面板自己用的容器（当前工作台不再传入：视图标签统一由工作台绘制，
+ * 终端会话标签也在终端视图内部）。字段保留，供工作台以外的面板实现继续挂自定义头部内容。
  */
 export interface BottomPanelProps { sessionId: string; cwd: string; visible: boolean; colorScheme: 'dark' | 'light'; header?: HTMLElement | null }
 export interface BottomPanelContribution { id: string; title: string; component: ComponentType<BottomPanelProps> }

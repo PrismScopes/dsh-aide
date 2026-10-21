@@ -22,6 +22,8 @@ import type {
   LanguageRange,
   LanguageRenameResult,
   LanguageScanState,
+  LanguageServerInfo,
+  LanguageServerState,
   LanguageSignatureHelp,
   LanguageSymbolInformation,
   LanguageWorkspaceEdit,
@@ -29,6 +31,7 @@ import type {
 import { diagnosticsStoreFor, type DiagnosticsStore } from './diagnostics.ts'
 import { modelForPath, monacoRange } from './models.ts'
 import { pathKey } from './paths.ts'
+import { appendOutput } from '../output.ts'
 
 /** 输入合并窗口：停止输入这么久之后再把正文推给宿主。 */
 export const SYNC_DEBOUNCE_MS = 260
@@ -42,6 +45,24 @@ export const SYNC_DEBOUNCE_MS = 260
 const MAX_SYNC_CHARS = 600_000
 /** WebSocket 断线重连间隔。 */
 const RECONNECT_MS = 2000
+
+/** 服务器状态的中文说明，写进「输出」面板的摘要行。 */
+const SERVER_STATE_TEXT: Record<LanguageServerState, string> = {
+  builtin: '内置', idle: '待启动', starting: '启动中', running: '运行中',
+  failed: '失败', missing: '未安装', disabled: '已关闭',
+}
+
+/** 把当前语言能力汇总成一行，写给「输出」面板；只在内容变化时输出，重连不会刷屏。 */
+function describeLanguage(info: LanguageInfo): string {
+  const version = info.builtin.version === undefined || info.builtin.version === '' ? '' : ` ${info.builtin.version}`
+  const builtin = info.builtin.enabled
+    ? `内置 TypeScript${version}（${info.builtin.state === 'ready' ? '已就绪' : info.builtin.state === 'loading' ? '加载中' : '失败'}）`
+    : '内置 TypeScript 已关闭'
+  const servers = info.servers.length === 0
+    ? '未发现外部语言服务器'
+    : `外部服务器：${info.servers.map(server => `${server.name}（${SERVER_STATE_TEXT[server.state]}）`).join('、')}`
+  return `语言服务${info.enabled ? '已启用' : '已关闭'}：${builtin}；${servers}`
+}
 
 interface SyncMessage { kind: 'open' | 'change' | 'close'; path: string; languageId: string; version: number; content: string }
 
@@ -61,6 +82,10 @@ export class LanguageWorkspace {
   /** info 还没到（或当时该语言不受支持）时先记下打开的文档，拿到能力集合后补发。 */
   private readonly pendingOpens = new Map<string, { path: string; languageId: string; content: string }>()
   private queue: Promise<unknown> = Promise.resolve()
+  /** 上一次写进「输出」面板的能力摘要；内容没变就不重复刷（WebSocket 重连会重拉 info）。 */
+  private infoLog: string | undefined
+  /** 上次看到的服务器状态，用于只在状态变化时写「输出」面板。 */
+  private readonly serverStates = new Map<string, LanguageServerState>()
 
   constructor(sessionId: string, cwd: string) {
     this.sessionId = sessionId
@@ -101,9 +126,16 @@ export class LanguageWorkspace {
       if (!info.enabled) this.store.clearDiagnostics()
       this.flushPendingOpens()
       window.dispatchEvent(new CustomEvent('dvw-language-info', { detail: info }))
+      const summary = describeLanguage(info)
+      if (summary !== this.infoLog) {
+        this.infoLog = summary
+        appendOutput('language', summary)
+      }
       return info
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       console.warn('[dvw] 语言服务信息读取失败：', error)
+      appendOutput('language', `读取语言服务信息失败：${message}`, 'error')
       return undefined
     }
   }
@@ -145,7 +177,13 @@ export class LanguageWorkspace {
   }
 
   scan(signal?: AbortSignal): Promise<{ supported: boolean; state?: LanguageScanState }> {
-    return this.request<{ supported: boolean; state?: LanguageScanState }>('language.scan', {}, signal, { supported: false })
+    appendOutput('language', '开始扫描工作区')
+    return this.request<{ supported: boolean; state?: LanguageScanState }>('language.scan', {}, signal, { supported: false }).then(result => {
+      const state = result.state
+      if (state === undefined) appendOutput('language', '扫描没有返回结果', 'warn')
+      else appendOutput('language', `扫描完成：检查 ${state.checked} 个文件，${state.errors} 个错误，${state.warnings} 个警告`)
+      return result
+    })
   }
 
   /** 读取宿主语言服务知道、但工作台文件 API 不一定能读的只读文件（跳转目标）。 */
@@ -248,7 +286,10 @@ export class LanguageWorkspace {
     return api<T>(method, { sessionId: this.sessionId, ...params }, signal).catch(error => {
       // 路径不存在、能力不支持这类错误对用户没有意义（例如跳转目标刚被删），记一条日志即可。
       const message = error instanceof Error ? error.message : String(error)
-      if (!/aborted/i.test(message)) console.warn(`[dvw] ${method} 失败：`, message)
+      if (!/aborted/i.test(message)) {
+        console.warn(`[dvw] ${method} 失败：`, message)
+        appendOutput('language', `${method.replace(/^language\./, '')} 请求失败：${message}`, 'warn')
+      }
       return fallback
     })
   }
@@ -283,7 +324,9 @@ export class LanguageWorkspace {
   /** 串行发送，保证同一文档的 open → change → close 顺序与调用顺序一致。 */
   private enqueue(message: SyncMessage): void {
     this.queue = this.queue.then(() => this.sendSync(message)).catch(error => {
+      const text = error instanceof Error ? error.message : String(error)
       console.warn('[dvw] 语言服务文档同步失败：', error)
+      appendOutput('language', `文档同步失败（${message.kind} ${message.path}）：${text}`, 'warn')
     })
   }
 
@@ -314,18 +357,25 @@ export class LanguageWorkspace {
       this.socket = socket
       // 设置变更后宿主会重置语言服务并断开这条连接；重连成功后必须重拉能力集合，
       // 否则客户端还按旧的「哪些语言有服务器」注册特性。
-      socket.onopen = () => { if (!this.disposed) void this.refreshInfo() }
+      socket.onopen = () => {
+        if (this.disposed) return
+        appendOutput('language', '语言服务连接已建立')
+        void this.refreshInfo()
+      }
       socket.onmessage = event => this.receive(event.data)
       socket.onclose = () => {
         this.socket = undefined
         if (this.disposed) return
+        appendOutput('language', `语言服务连接已断开，${RECONNECT_MS / 1000} 秒后重连`, 'warn')
         this.reconnectTimer = setTimeout(() => {
           if (!this.disposed && typeof document !== 'undefined' && document.visibilityState !== 'hidden') this.connect()
         }, RECONNECT_MS)
       }
       socket.onerror = () => { /* onclose 会接着触发，统一在那里重连 */ }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       console.warn('[dvw] 语言服务 WebSocket 连接失败：', error)
+      appendOutput('language', `语言服务 WebSocket 连接失败：${message}`, 'error')
       this.reconnectTimer = setTimeout(() => this.connect(), RECONNECT_MS)
     }
   }
@@ -341,11 +391,22 @@ export class LanguageWorkspace {
     }
     if (message.type === 'status') {
       this.store.applyStatus(message)
+      this.logServerStates(message.servers)
       return
     }
     if (message.type === 'log') {
+      appendOutput('language', message.message, message.level)
       const method = message.level === 'error' ? 'error' : message.level === 'warn' ? 'warn' : 'info'
       console[method]('[dvw] 语言服务：', message.message)
+    }
+  }
+
+  /** 服务器状态变化写进「输出」面板；同一状态重复推送不刷屏。 */
+  private logServerStates(servers: readonly LanguageServerInfo[]): void {
+    for (const server of servers) {
+      if (this.serverStates.get(server.id) === server.state) continue
+      this.serverStates.set(server.id, server.state)
+      appendOutput('language', `语言服务器 ${server.name}：${SERVER_STATE_TEXT[server.state]}`, server.state === 'failed' ? 'error' : 'info')
     }
   }
 }

@@ -62,7 +62,7 @@ describe('debug console wiring', () => {
     expect(clientIndex).toContain('DebugConsolePanel')
   })
 
-  it('puts the ⋯ button in the terminal panel header, left of the + / ▾ split button', () => {
+  it('puts the ⋯ button in the panel title bar, left of the + / ▾ split button', () => {
     const more = workbench.indexOf('dvw-bottom-more')
     const split = workbench.indexOf('<TerminalNewButton')
     expect(more).toBeGreaterThan(-1)
