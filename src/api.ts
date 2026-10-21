@@ -5,6 +5,7 @@ import { completionIndexFor, completionTelemetry, resolveProvider } from './comp
 import { completionSettings } from './completion/settings.ts'
 import { groupForSession, paramsForGroup } from './completion/experiment.ts'
 import { DEFAULT_SECURITY_RULES } from './completion/security.ts'
+import { dispatchLanguage } from './language/api.ts'
 import { WorkbenchError, stringField } from './wire.ts'
 
 /**
@@ -13,6 +14,8 @@ import { WorkbenchError, stringField } from './wire.ts'
  */
 export async function dispatch(ctx: HostContext, method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   const sessionId = stringField(body, 'sessionId'); const cwd = cwdFor(ctx, sessionId)
+  // 语言服务的方法单独一个分发器：它参数多、形状各异，塞进这个 switch 会把文件 API 淹没。
+  if (method.startsWith('language.')) return dispatchLanguage(ctx, method, body, cwd, signal)
   switch (method) {
     case 'workspace': return { cwd, name: cwd.split(/[\\/]/).at(-1) || cwd }
     // 补全参数与提供方由宿主下发，客户端不写死这些值（文档第七节的要求）。

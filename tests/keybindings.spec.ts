@@ -129,8 +129,8 @@ describe('快捷键注册表', () => {
     expect(rows).toHaveLength(BINDING_COMMANDS.length + FIXED_SHORTCUTS.length)
     expect(rows[0]).toMatchObject({ id: 'editor.save', fixed: false, binding: { code: 'KeyS', ctrl: true } })
     expect(rows.at(-1)).toMatchObject({ fixed: true })
-    // 分组顺序来自定义顺序：编辑器 → 导航 → 终端 → DSH。
-    expect([...new Set(rows.filter(row => !row.fixed).map(row => row.group))]).toEqual(['编辑器', '导航', '终端', 'DSH'])
+    // 分组顺序来自定义顺序：编辑器 → 导航 → 终端 → DSH → 语言服务。
+    expect([...new Set(rows.filter(row => !row.fixed).map(row => row.group))]).toEqual(['编辑器', '导航', '终端', 'DSH', '语言服务'])
   })
 
   it('searches by command name or by the keys currently bound', () => {
@@ -141,7 +141,8 @@ describe('快捷键注册表', () => {
     expect(searchShortcutRows('ctrl shift f').map(row => row.label)).toEqual(['搜索并聚焦输入框'])
     // 固定键位也能按键帽搜到（Ctrl+F 是编辑器内查找）；先命中可改命令，再列固定项。
     expect(searchShortcutRows('ctrl f').map(row => row.label)).toEqual(['搜索并聚焦输入框', '编辑器内查找'])
-    expect(searchShortcutRows('查找').map(row => row.label)).toEqual(['编辑器内查找'])
+    // 「查找」同时命中语言服务的「查找所有引用」与编辑器内置查找；先可改命令、后固定键位。
+    expect(searchShortcutRows('查找').map(row => row.label)).toEqual(['查找所有引用', '编辑器内查找'])
     // 未绑定的命令也能按「未绑定」搜到。
     const memory = storage()
     const store = new KeybindingsStore(memory)

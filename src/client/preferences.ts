@@ -58,6 +58,10 @@ export interface WorkbenchPreferences {
   editorAutoSaveDelayMs: number
   /** 终端（xterm）字号（px）。只写偏好，由终端面板读取后应用。 */
   terminalFontSize: number
+  /** 语言服务的悬停提示（跨文件类型信息）。关闭后悬停只剩 Monaco 的同类词高亮。 */
+  languageHover: boolean
+  /** 语言服务的补全与签名提示。关闭后只有 AI 行内补全，不再向宿主发补全请求。 */
+  languageCompletion: boolean
 }
 
 /**
@@ -99,6 +103,8 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   editorAutoSave: 'off',
   editorAutoSaveDelayMs: 1000,
   terminalFontSize: 13,
+  languageHover: true,
+  languageCompletion: true,
 }
 
 /** 键名带 v1：老版本存进去的就是这一份结构。新增字段从默认值补齐，不需要换 key。 */
@@ -170,6 +176,8 @@ export function normalizePreferences(value: unknown): WorkbenchPreferences {
     editorAutoSave: enumValue(record['editorAutoSave'], ['off', 'afterDelay'] as const, DEFAULT_PREFERENCES.editorAutoSave),
     editorAutoSaveDelayMs: clampNumber(record['editorAutoSaveDelayMs'], PREFERENCE_LIMITS.editorAutoSaveDelayMs, DEFAULT_PREFERENCES.editorAutoSaveDelayMs),
     terminalFontSize: clampNumber(record['terminalFontSize'], PREFERENCE_LIMITS.terminalFontSize, DEFAULT_PREFERENCES.terminalFontSize),
+    languageHover: booleanValue(record['languageHover'], DEFAULT_PREFERENCES.languageHover),
+    languageCompletion: booleanValue(record['languageCompletion'], DEFAULT_PREFERENCES.languageCompletion),
   }
 }
 

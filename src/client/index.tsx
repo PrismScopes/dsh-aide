@@ -11,7 +11,9 @@ import { Icon } from './Icon.tsx'
 import type { VscodeWorkbench } from './service.ts'
 import { WorkbenchController } from './service.ts'
 import { TerminalPanel } from './TerminalPanel.tsx'
+import { ProblemsPanel } from './ProblemsPanel.tsx'
 import { SettingsPanel } from './SettingsPanel.tsx'
+import { installLanguageActions } from './language/actions.ts'
 import { Workbench } from './Workbench.tsx'
 import { installStyles } from './styles.ts'
 import { handleTerminalShortcut } from './shortcuts.ts'
@@ -268,6 +270,10 @@ export function apply(ctx: ClientContext): void {
     entries: target => target.hasSelection ? [dshHarnessEntry(target)] : [],
   }), 'dsh-aide: dsh editor menu')
   ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-aide: terminal panel')
+  // 「问题」面板：语言服务把诊断推到客户端 store，面板只负责渲染与跳转。
+  ctx.effect(() => service.registerBottomPanel({ id: 'problems', title: '问题', component: ProblemsPanel }), 'dsh-aide: problems panel')
+  // 语言服务的全局按键与 Ctrl+点击。装在 window 捕获阶段，才能压过 Monaco 内置的 F12 / Ctrl+点击。
+  ctx.effect(() => installLanguageActions(), 'dsh-aide: language actions')
   ctx.effect(() => service.registerCommand({ id: 'terminal.new', run() { window.dispatchEvent(new Event('dvw-terminal-new')) } }), 'dsh-aide: terminal command')
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'dsh-aide-overlay', inject: () => ({ service }) }, Overlay))
   // 侧栏“全局面板”入口：与下方 main 面板成对注册。

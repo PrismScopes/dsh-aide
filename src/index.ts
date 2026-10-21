@@ -3,6 +3,7 @@ import type { HostContext } from './context.ts'
 import { registerWorkbenchRoutes } from './routes.ts'
 import { installTerminal } from './terminal.ts'
 import { setCompletionSettings } from './completion/settings.ts'
+import { setLanguageSettings } from './language/settings.ts'
 
 export { WorkbenchError } from './wire.ts'
 
@@ -29,6 +30,8 @@ export function apply(ctx: HostContext, config?: unknown): void {
   // 加载器未必把配置作为第二个参数传进来（实测如此）：再从 cordis 的 entry 选项里取一次。
   // 两处都取不到就按没有配置处理，行为与之前一致。
   setCompletionSettings(config ?? entryConfig(ctx))
+  // 语言服务与补全共用插件配置入口；设置文件与环境变量的覆盖在各自模块里处理。
+  setLanguageSettings(config ?? entryConfig(ctx))
   installTerminal(ctx)
   registerWorkbenchRoutes(ctx)
 }

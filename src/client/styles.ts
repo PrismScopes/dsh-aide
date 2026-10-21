@@ -1,3 +1,5 @@
+import { PROBLEMS_STYLES } from './problemStyles.ts'
+
 const CSS = String.raw`
 @font-face{font-family:codicon;font-display:block;src:url('/dsh-vscode/codicons/codicon.ttf') format('truetype')}
 .codicon{display:inline-block;font:normal normal normal 16px/1 codicon;text-align:center;text-decoration:none;text-rendering:auto;-webkit-font-smoothing:antialiased;user-select:none}
@@ -9,6 +11,8 @@ const CSS = String.raw`
 /* 提交图 / 存储 / 标记相关字形（Git 面板与 Git 输出标签页）。 */
 .codicon-graph:before{content:"\eb03"}.codicon-git-commit:before{content:"\eafc"}.codicon-git-merge:before{content:"\eafe"}.codicon-tag:before{content:"\ea66"}.codicon-archive:before{content:"\ea98"}.codicon-history:before{content:"\ea82"}
 .codicon-repo:before{content:"\ea62"}
+/* 语言服务：问题面板/状态栏/快速修复用的字形。 */
+.codicon-warning:before{content:"\ea6c"}.codicon-error:before{content:"\ea87"}.codicon-info:before{content:"\ea74"}.codicon-lightbulb:before{content:"\ea61"}
 /* 工作台显示期间，把 DSH 侧栏底部那个账户/设置入口整行收起来。
    那一行在 (10, 948)–(270, 990)，伸进工作台活动栏（x 0–48）；被 overlay 盖住后既收不到点击
    （命中测试落在活动栏上），里面的图标又会从接缝里透出来，看起来就是「两个图标重叠」。
@@ -357,6 +361,25 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-dino-failed{margin:24px auto 0;font-size:12px;color:var(--dvw-text-3)}
 /* 小恐龙自己的样式由 react-chrome-dino 组件在挂载时以 <style> 注入，这里不再重复。 */
 
+/* ── 语言服务：活动栏角标 / 状态栏计数 ──
+   角标贴在活动栏图标右下角；数字用容器查询不了，所以固定最小宽度并按内容撑开。
+   颜色只依赖令牌：错误用 --dvw-error，警告用 --dvw-warn。 */
+.dvw-act{position:relative}
+/* 活动栏角标独立命名的原因：dvw-badge 已经是 Git 面板里「文件状态字母」的样式
+   （内联小字、跟随 --dvw-warn）。这里如果把绝对定位/红底写进同名类，会把 Git 面板的
+   状态字母也变成浮在行尾的红色圆点。 */
+.dvw-act-badge{position:absolute;right:2px;bottom:2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--dvw-error);color:var(--dvw-base);font:600 9px/14px var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);text-align:center;pointer-events:none}
+.dvw-act-badge[data-severity=warning]{background:var(--dvw-warn)}
+/* 状态栏的问题计数：两个可点区域过小会难点，所以做成按钮、左右各留 4px 命中区。 */
+.dvw-status-problem{display:flex;align-items:center;gap:8px;height:100%;padding:0 4px;border:0;background:transparent;color:var(--dvw-text-2);font:inherit;cursor:pointer}
+.dvw-status-problem:hover{color:var(--dvw-text)}
+.dvw-status-problem[data-severity=error]{color:var(--dvw-error)}
+.dvw-status-problem span[data-severity=error]{color:var(--dvw-error)}
+.dvw-status-problem span[data-severity=warning]{color:var(--dvw-warn)}
+.dvw-status-lang{color:var(--dvw-text-3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+
+/* 问题面板样式在 problemStyles.ts 里独立维护，这里只做插值，避免与语言服务其它样式抢同一段字符串。 */
+${PROBLEMS_STYLES}
 `
 
 

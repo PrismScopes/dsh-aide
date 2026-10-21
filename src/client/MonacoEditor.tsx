@@ -9,6 +9,11 @@ import { editorChrome, editorModelOptions, editorOptions, highlightThemeColors, 
 import { ContextMenu, separator, type MenuEntry } from './ContextMenu.tsx'
 import { copyText, readClipboard } from './clipboard.ts'
 import { contributionEntries, type EditorMenuTarget } from './editorMenuRegistry.ts'
+import { registerLanguageEditor } from './language/actions.ts'
+import { activeLanguageWorkspace } from './language/client.ts'
+import { installLanguageMonaco } from './language/monaco.ts'
+import { diagnosticsStoreFor, flushMarkersForPath } from './language/diagnostics.ts'
+import { registerModelPath, unregisterModel } from './language/models.ts'
 import {
   copyFallbackText,
   diffMenuItems,
@@ -208,6 +213,8 @@ export function loadMonaco(): Promise<Monaco> {
       loader(['vs/editor/editor.main'], () => {
         if (window.monaco === undefined) { reject(new Error('Monaco failed to initialize')); return }
         configureTypeScriptDiagnostics(window.monaco)
+        // 语言服务接管 TS/JS 的语言特性：先关掉 Monaco 自带的（避免两套结果并存），再注册我们的 provider。
+        installLanguageMonaco(window.monaco)
         resolve(window.monaco)
       })
     }
@@ -596,7 +603,25 @@ function evictModels(monaco: Monaco, currentUri: string, keepPaths: readonly str
   return evicted
 }
 
-export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' | 'light'; line?: number; column?: number; sessionId?: string; keepModelPaths?: readonly string[]; dirtyModelPaths?: readonly string[]; onChange(value: string): void; onSave(): void }) {
+export function MonacoEditor(props: {
+  uri: string
+  value: string
+  theme: 'dark' | 'light'
+  line?: number
+  column?: number
+  sessionId?: string
+  /**
+   * 文件绝对路径（语言服务的文档主键）。工作区文件由 Workbench 用 cwd 拼出来；
+   * 跳转到工作区外的只读文件（lib.d.ts 等）时是那个文件的绝对路径。
+   */
+  absolutePath?: string
+  /** 只读视图（外部文件的只读标签用它；仍允许选中/复制/跳转）。 */
+  readOnly?: boolean
+  keepModelPaths?: readonly string[]
+  dirtyModelPaths?: readonly string[]
+  onChange(value: string): void
+  onSave(): void
+}) {
   const root = useRef<HTMLDivElement>(null)
   const editor = useRef<MonacoEditorInstance>()
   const callbacks = useRef({ onChange: props.onChange, onSave: props.onSave })
@@ -624,6 +649,8 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       const uri = monaco.Uri.parse(`file:///${props.uri.replace(/^\/+/, '')}`)
       const uriText = uri.toString()
       model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(props.value, undefined, uri)
+      // 语言服务需要「模型 ↔ 绝对路径」的登记：URI 反解在不同平台写法不一，编辑器是唯一知道真相的一方。
+      if (props.absolutePath !== undefined) registerModelPath(model, props.absolutePath)
       if (!ownedModels.has(uriText)) ownedModels.add(uriText)
       touchModel(uriText)
       // 切文件/新建模型之后回收一次：保留当前模型 + Workbench 传来的打开/脏标签（见 pruneModels 注释），
@@ -648,6 +675,8 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
         theme: dshMonacoTheme(monaco, props.theme),
         // 关掉 Monaco 内置的英文右键菜单，改用工作台统一的中文 ContextMenu（原因见 editorMenus.ts）。
         contextmenu: false,
+        // 外部只读文件（跳转目标在 node_modules / lib.d.ts）不能编辑，但允许选中、复制与继续跳转。
+        readOnly: props.readOnly === true,
       })
       // tabSize / insertSpaces 是模型级选项：创建参数里的值不保证落到已有模型上，显式写一次。
       model.updateOptions(editorModelOptions(editorPreferences))
@@ -684,7 +713,41 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
       if (props.line !== undefined) { instance.setPosition({ lineNumber: props.line, column: props.column ?? 1 }); instance.revealLineInCenter(props.line); instance.focus() }
       // 行内补全跟着编辑器实例走：没有 sessionId（比如预览场景）就不接。
       const detachCompletion = props.sessionId === undefined ? undefined : attachInlineCompletion(monaco, instance, { sessionId: props.sessionId })
-      return () => { detachCompletion?.(); change.dispose(); dom?.removeEventListener('keydown', saveKeydown, true) }
+      /**
+       * 语言服务的文档同步。
+       *
+       * 为什么监听 dvw-language-ready：MonacoEditor 是 Workbench 的子组件，React 先跑子组件的 effect，
+       * 此刻 LanguageWorkspace 可能还没建好。工作台建好后派发一次事件，这里再补一次 didOpen；
+       * 重复 open 是幂等的（宿主按版本号覆盖）。
+       */
+      const detachLanguageEditor = props.absolutePath === undefined ? undefined : registerLanguageEditor(instance, props.absolutePath)
+      // 只读的外部文件（跳转目标）不参与文档同步：宿主按「工作区文档」管理 didOpen/didChange，
+      // 工作区外的文件由语言服务自己的程序提供内容，表达式/悬停请求仍按绝对路径走。
+      const openLanguageDocument = () => {
+        const workspace = activeLanguageWorkspace()
+        const current = model
+        if (workspace === undefined || props.absolutePath === undefined || current === undefined || props.readOnly === true) return
+        workspace.openDocument(props.absolutePath, current.getLanguageId(), current.getValue())
+        flushMarkersForPath(props.absolutePath, diagnosticsStoreFor(workspace.cwd).diagnosticsOf(props.absolutePath))
+      }
+      openLanguageDocument()
+      window.addEventListener('dvw-language-ready', openLanguageDocument)
+      // 正文变化只在停手之后推给宿主（LanguageWorkspace 内部还有一层合并窗口 + 串行队列）。
+      const languageChange = instance.onDidChangeModelContent(() => {
+        const workspace = activeLanguageWorkspace()
+        const current = model
+        if (workspace === undefined || props.absolutePath === undefined || current === undefined || props.readOnly === true) return
+        workspace.changeDocument(props.absolutePath, current.getLanguageId(), instance.getValue())
+      })
+      return () => {
+        detachCompletion?.()
+        change.dispose()
+        languageChange.dispose()
+        detachLanguageEditor?.()
+        window.removeEventListener('dvw-language-ready', openLanguageDocument)
+        dom?.removeEventListener('keydown', saveKeydown, true)
+        if (props.absolutePath !== undefined && model !== undefined) unregisterModel(model)
+      }
     }).catch(error => setError(error instanceof Error ? error.message : String(error)))
     return () => { disposed = true; editor.current?.dispose(); editor.current = undefined }
   }, [props.uri])
@@ -709,9 +772,9 @@ export function MonacoEditor(props: { uri: string; value: string; theme: 'dark' 
   useEffect(() => {
     const instance = editor.current
     if (instance === undefined) return
-    instance.updateOptions({ ...editorChrome(preferences), ...editorOptions(preferences) })
+    instance.updateOptions({ ...editorChrome(preferences), ...editorOptions(preferences), readOnly: props.readOnly === true })
     instance.getModel()?.updateOptions(editorModelOptions(preferences))
-  }, [preferences])
+  }, [preferences, props.readOnly])
   const entries = menu === undefined || editor.current === undefined
     ? undefined
     : buildEditorMenuEntries(editor.current, () => callbacks.current.onSave())

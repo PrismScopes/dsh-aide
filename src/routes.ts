@@ -13,6 +13,8 @@ import { dispatch } from './api.ts'
 import { completionTelemetry, registerCompletionRoute, resolveProvider } from './completion/register.ts'
 import { completionSettingsView, SettingsWriteError, updateCompletionSettings, type CompletionSettingsPatch } from './completion/settings.ts'
 import { registerModelRoutes } from './modelRoutes.ts'
+import { languageHostFor } from './language/host.ts'
+import { LanguageSettingsWriteError, updateLanguageSettings } from './language/settings.ts'
 
 /**
  * 宿主侧的全部 HTTP / WebSocket 路由。
@@ -88,6 +90,8 @@ function settingsPayload(ctx: HostContext): unknown {
       effective: { source: resolved.source, model: resolved.model },
       lastFailure: completionTelemetry.failure() ?? null,
     },
+    // 语言服务的开关与服务器发现结果：设置页在「还没选会话」时也要能显示。
+    language: languageHostFor(ctx).settingsView(),
   }
 }
 
@@ -230,7 +234,34 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
           if (typeof body['fallback'] !== 'boolean') throw new WorkbenchError('invalid-argument', 'fallback must be a boolean')
           patch.fallback = body['fallback']
         }
+        // 语言服务开关：与补全设置共用同一个设置端点，但落在不同的设置文件里。
+        let languagePatch: { enabled?: boolean; builtinTypescript?: boolean } | undefined
+        if ('language' in body) {
+          const raw = body['language']
+          if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new WorkbenchError('invalid-argument', 'language must be an object')
+          const language = raw as Record<string, unknown>
+          languagePatch = {}
+          if ('enabled' in language) {
+            if (typeof language['enabled'] !== 'boolean') throw new WorkbenchError('invalid-argument', 'language.enabled must be a boolean')
+            languagePatch.enabled = language['enabled']
+          }
+          if ('builtinTypescript' in language) {
+            if (typeof language['builtinTypescript'] !== 'boolean') throw new WorkbenchError('invalid-argument', 'language.builtinTypescript must be a boolean')
+            languagePatch.builtinTypescript = language['builtinTypescript']
+          }
+        }
         updateCompletionSettings(patch)
+        if (languagePatch !== undefined) {
+          const host = languageHostFor(ctx)
+          try {
+            updateLanguageSettings(languagePatch, undefined, undefined, host.servers())
+          } catch (error) {
+            if (error instanceof LanguageSettingsWriteError) throw new WorkbenchError('language-settings-write', error.message)
+            throw error
+          }
+          // 语言服务开关变了：重建工作区记录（关掉已启动的服务器），客户端重连后拿到新能力。
+          host.reset()
+        }
         send(res, 200, { ok: true, value: settingsPayload(ctx) })
       } catch (error) {
         // 路由格式写错、数据目录不可写：这两类要给出可读的提示，而不是一句 internal。
@@ -289,5 +320,28 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
       })
     },
   }), 'dsh-aide: file watcher')
+
+  /**
+   * 语言服务的推送通道。
+   *
+   * 请求仍走 HTTP（一跳一答、天然可重试）；诊断、服务器状态这类「宿主主动说」的消息走这条
+   * WebSocket 推到同一个工作区的客户端。客户端隐藏工作台时会断开，回来重连后立刻收到一次状态。
+   */
+  const languageHost = languageHostFor(ctx)
+  ctx.effect(() => ctx.webServer.registerUpgrade({
+    path: '/dsh-vscode/ws/language', handler(req, socket, head) {
+      if (ctx.connection.requestRejection(req) !== undefined) { socket.destroy(); return }
+      wss.handleUpgrade(req as IncomingMessage, socket as Duplex, head, (ws) => {
+        const sessionId = new URL(req.url ?? '/', 'http://dsh.local').searchParams.get('sessionId')
+        if (sessionId === null) { ws.close(1008, 'sessionId required'); return }
+        let workspace: string
+        try { workspace = cwdFor(ctx, sessionId) }
+        catch { ws.close(1008, 'session workspace unavailable'); return }
+        languageHost.attach(workspace, ws)
+        ws.on('close', () => languageHost.detach(workspace, ws))
+      })
+    },
+  }), 'dsh-aide: language websocket')
+  ctx.effect(() => () => { languageHost.dispose() }, 'dsh-aide: language teardown')
   ctx.effect(() => () => { watches.closeAll(); wss.close() }, 'dsh-aide: watcher teardown')
 }

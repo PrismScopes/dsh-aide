@@ -1,3 +1,12 @@
+/**
+ * 语言服务设置是宿主与客户端共用的协议（`src/language/protocol.ts`，纯类型、不 import Node 或 Monaco），
+ * 这里直接复用而不是在本文件再抄一份：设置页展示的字段名必须与宿主 GET 的响应逐字一致。
+ * `export type` 只做类型再导出，运行时没有任何模块依赖。
+ */
+import type { LanguageSettingsView } from '../language/protocol.ts'
+
+export type { LanguageSettingsView } from '../language/protocol.ts'
+
 export class ApiError extends Error {
   constructor(public code: string, message: string) { super(message) }
 }
@@ -109,7 +118,35 @@ export interface CompletionSettingsView {
   lastFailure: string | null
 }
 
-export interface WorkbenchSettingsView { completion: CompletionSettingsView }
+/**
+ * 设置页能改的语言服务开关。
+ *
+ * 只包含两个布尔开关：外部语言服务器列表（`servers`）是用户手写的配置，设置页只读展示、不覆盖它，
+ * 所以写入补丁里也没有这个字段。宿主侧对应的形状见 `language/settings.ts` 的 LanguageSettingsPatch。
+ */
+export interface LanguageSettingsPatch {
+  enabled?: boolean
+  builtinTypescript?: boolean
+}
+
+export interface WorkbenchSettingsView {
+  completion: CompletionSettingsView
+  /** 语言服务总开关、内置 TypeScript 开关、设置文件位置与已发现的服务器。 */
+  language: LanguageSettingsView
+}
+
+/**
+ * 写入补丁。
+ *
+ * 补全设置与语言服务开关共用 `/dsh-vscode/settings` 这一个端点（设置页在「还没选会话」时也要能用，
+ * 所以没并进需要会话工作目录的 /api），但宿主把它们落在两个不同的设置文件里：
+ * 补全写 AIDE 设置文件，语言服务写 `%DSH_HOME%/language.settings.json`。
+ */
+export interface WorkbenchSettingsPatch {
+  route?: string | null
+  fallback?: boolean
+  language?: LanguageSettingsPatch
+}
 
 /** 与 api() 不同：设置页不依赖会话，所以走独立的端点，也不做会话未就绪的重试。 */
 export async function readWorkbenchSettings(signal?: AbortSignal): Promise<WorkbenchSettingsView> {
@@ -117,7 +154,7 @@ export async function readWorkbenchSettings(signal?: AbortSignal): Promise<Workb
   return readAnswer<WorkbenchSettingsView>(response)
 }
 
-export async function writeWorkbenchSettings(patch: { route?: string | null; fallback?: boolean }): Promise<WorkbenchSettingsView> {
+export async function writeWorkbenchSettings(patch: WorkbenchSettingsPatch): Promise<WorkbenchSettingsView> {
   const response = await fetch('/dsh-vscode/settings', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
   })

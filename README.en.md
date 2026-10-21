@@ -33,6 +33,7 @@
 - **Reliable and live**: atomic saves and revision checks prevent silent overwrites, while WebSocket updates flag external workspace changes.
 - **Visual Git workflow**: status, staging, commits, branches, diffs, commit files, and a swimlane commit graph.
 - **Persistent workspace context**: restore the tree, views, panels, and widths per workspace; terminals support multiple sessions, splits, and rename.
+- **Language services**: a built-in TypeScript/JavaScript language service plus any external LSP server, with diagnostics, hover, go-to-definition, references, rename, symbols, and completion.
 - **Built for DSH**: reuse the DSH conversation surface on the right and follow the DSH theme instead of shipping a second color scheme.
 
 ## Features
@@ -44,7 +45,7 @@
 - **Source control**: stage, unstage, discard, commit, branches, diffs, and commit files. The panel title `...` menu is nested like VS Codes (view & sort / commit / changes / pull-push / branch / remote / stash / tags) and every submenu entry works: pull, push, sync, fetch, clone, bulk stage or discard, checkout / create / rename / delete / merge / rebase branches, add or remove remotes, stash push-apply-pop-drop, create/delete/push tags, and undo the last commit. Branches, stashes and tags are picked through searchable quick picks. **The commit graph is its own editor tab** (opened from the commit-graph icon in the Source Control title bar — it uses Git Graph's own SVG icon), coloured like the VS Code Git Graph extension. The graph shows uncommitted changes and stashes; clicking a commit opens a detail panel on the right (author, full message, per-file +/− counts, click a file for its diff), Ctrl(⌘)-clicking a second commit compares the two, and the toolbar offers find (Ctrl+F over message/author/hash/refs) and multi-select branch filtering. It also supports check out, create a branch or tag, reset or drop a commit, cherry-pick, and revert; author/date/hash columns can be shown, hidden and resized; commit messages support emoji shortcodes and issue links (GitHub/GitLab/Bitbucket inferred from the remote URL); repository settings let you edit, fetch and prune remotes, configure issue links and the pull-request target branch, and export the view configuration; the `...` menu opens the provider-specific pull-request creation page (GitHub compare / GitLab merge_requests / Bitbucket pull-requests); the view menu clears code-review marks; files in the commit details can be marked reviewed (opening a diff marks it automatically, persisted for 90 days); show all branches and load more commits are still there. In-tab shortcuts: `Ctrl+F` find, `Ctrl+H` jump to HEAD, `Ctrl+R` refresh, `↑`/`↓` move between commits, `Esc` close the details. "Show Git Output" opens a log of the git operations the workbench ran.
 - **Terminal**: `node-pty` and xterm with up to eight sessions, rename, a right-side switcher, splits, ANSI output, and Ctrl+C. The host pre-warms the default shell when the panel opens, so a new terminal usually already has its prompt in the replay buffer; collapsing the panel or switching tabs keeps the xterm instances instead of rebuilding and replaying them.
 - **Layout and DSH**: the primary view, terminal panel, and DSH conversation sidebar can be shown and resized independently; widths are dragged and double-clicked back to default in place, so they are not duplicated as settings.
-- **Settings page**: the "AIDE" page under DSH settings is one scrolling page grouped into Editor / AI completion / Terminal / Shortcuts / About and diagnostics, using the same type scale as DSH settings (row title 14/20, hint 12/18, controls 14/32px). Editor: font size, line height, tab size and insert-spaces, word wrap (off/on/bounded), minimap, overview ruler, occurrence highlight, whitespace rendering, cursor style, smooth scrolling, sticky scroll, auto save and delay. AI completion: master switch, trigger delay, model route (**listed from the models DSH already has configured**, free-form allowed), failure fallback, plus the model actually in use and the last failure. Also terminal font size, a **shortcut panel** (one "view" row on the page that opens a searchable, rebindable panel: click a keycap to record in place, conflict warnings, per-row and reset-all defaults; Monaco's built-in editor keys stay read-only), and reset-to-defaults.
+- **Settings page**: the "AIDE" page under DSH settings is one scrolling page grouped into Editor / AI completion / Language services / Terminal / Shortcuts / About and diagnostics, using the same type scale as DSH settings (row title 14/20, hint 12/18, controls 14/32px). Editor: font size, line height, tab size and insert-spaces, word wrap (off/on/bounded), minimap, overview ruler, occurrence highlight, whitespace rendering, cursor style, smooth scrolling, sticky scroll, auto save and delay. AI completion: master switch, trigger delay, model route (**listed from the models DSH already has configured**, free-form allowed), failure fallback, plus the model actually in use and the last failure. Language services: master switch, built-in TypeScript switch, hover/completion toggles, discovered-server states, and the settings-file path. Also terminal font size, a **shortcut panel** (one "view" row on the page that opens a searchable, rebindable panel: click a keycap to record in place, conflict warnings, per-row and reset-all defaults; Monaco's built-in editor keys stay read-only), and reset-to-defaults.
 - **Occurrence highlight and overview ruler**: selecting or double-clicking a word highlights every occurrence in the document the way VS Code does, and a three-lane overview ruler appears on the right (selection, occurrences, and find matches are drawn in the scrollbar strip). Ruler markers use the foreground color (white on dark themes, no longer the blue accent), and the scrollbar slider is translucent so it never hides them.
 - **Close confirmation and auto save**: closing a tab, bulk-closing (others/right/saved/all), or returning to DSH with unsaved edits opens a VS Code-style dialog (single: Save / Don't Save / Cancel; multiple: Save All / Don't Save All / Cancel with the file list). Files that fail to save stay open and report the error, and returning to DSH is blocked while any save failed. An optional delayed auto save is available too.
 - **Localized context menus**: the explorer, tabs, code editor, terminal, and source control all have VS Code-style menus in Chinese — new/upload/cut/copy/paste/rename/delete, copy relative or absolute path, open in terminal, tab close-others/right/saved, editor undo-redo and find-replace, terminal copy/paste and clear, Git stage/unstage/discard/copy commit hash. Monaco's built-in English menu is disabled (`contextmenu:false`); menu contents are pure data (unit-tested) over one shared shell.
@@ -54,6 +55,17 @@
   and a local retrieval index that never leaves the workspace directory.
   See [docs/inline-completion.md](docs/inline-completion.md) for implementation and verification status.
   Note: host-side code loads at process start, so **restart the app** after changes (a page reload is enough for the client side).
+- **Language services (LSP / diagnostics / navigation)**: a built-in TypeScript/JavaScript service reads `tsconfig.json` and
+  resolves workspace `node_modules` types, while external LSP servers are discovered on `PATH` (pyright/pylsp, rust-analyzer,
+  gopls, clangd, yaml-language-server, bash-language-server, lua-language-server, intelephense, solargraph, …) or configured in
+  the settings file. `F12` / `Ctrl+Click` go to definition, `Shift+F12` finds references, `F2` renames across files,
+  `Ctrl+Shift+O` lists document symbols, `Ctrl+T` searches workspace symbols, and `Ctrl+.` offers quick fixes (including
+  organize imports); hover shows cross-file types and completion/signature help come from the language service. Diagnostics are
+  live (260 ms debounce) and surface in the editor, the activity bar "Problems" badge, the status bar counts, and a grouped,
+  filterable Problems panel where clicking jumps to the location and `F8` / `Shift+F8` step through them. "Scan workspace" in
+  the panel checks every built-in TS project file. Jumping into `node_modules` or TypeScript's `lib.*.d.ts` opens a read-only tab
+  that still supports hover and further jumps. Settings expose the master switch, the built-in TS switch, and hover/completion
+  toggles; external servers and custom configuration are documented in [docs/language-services.md](docs/language-services.md).
 - **Sync and restore**: workspace file changes stream to the UI, while reload restores views, expanded directories, panels, layout, and **the file tabs from your previous session**
   (stored locally per workspace root: leaving to the DSH main page, reloading the page, or restarting the app all bring the tab bar back; contents are re-read from disk when you switch to a tab, and unsaved drafts are not restored across sessions. Files that changed on disk while AIDE was hidden are reloaded when you return).
 
@@ -76,6 +88,7 @@ replace or disable `ui-layout`.
   in DSH client chunks (`lib/client.pdf.js` 487 KB, `lib/client.docx.js` 243 KB) loaded same-origin on first preview. The main
   bundle drops from 2.65 MB to **1.75 MB** (gzip 584 KB → 375 KB) and V8 compile from 28 ms to 18 ms; neither chunk is
   downloaded unless you open a PDF or Word document.
+- **Language services**: fully lazy — TypeScript is not loaded and no external server is started until a file of that language is opened; diagnostics run 260 ms after typing stops and the client coalesces refreshes for 80 ms, so hundreds of diagnostics do not re-render the Problems panel per message.
 - **Completion**: request bodies carry only the cursor window (about 20 KB for a 1 MB document, with the prompt byte-identical
   to sending the whole document); response headers no longer wait for the retrieval index; snippets are read by line range and
   multiple hits in one file share a single scan.
@@ -173,10 +186,18 @@ find/replace/goto-line/comment/format keys come from Monaco and are shown read-o
 | `Ctrl+Right` | Accept the next segment |
 | `Ctrl+Alt+Right` | Accept the next line |
 | `Alt+[` / `Alt+]` | Previous or next candidate |
+| `F12` / `Ctrl+Click` | Go to definition |
+| `Shift+F12` | Find all references |
+| `F2` | Rename symbol |
+| `Ctrl+Shift+O` | Go to symbol in file |
+| `Ctrl+T` | Go to symbol in workspace |
+| `Ctrl+.` | Quick fix / code action |
+| `Ctrl+Shift+M` | Toggle the Problems panel |
+| `F8` / `Shift+F8` | Next / previous problem |
 
 ## Security
 
-The host accepts only paths relative to the active DSH session workspace and rejects traversal and symlink escape. Saves use revision checks and atomic replacement. Git and ripgrep run with argument arrays rather than shell-concatenated commands. The terminal accepts same-origin loopback requests only, starts in the session workspace, and removes API keys, tokens, secrets, and similar environment variables.
+The host accepts only paths relative to the active DSH session workspace and rejects traversal and symlink escape. Saves use revision checks and atomic replacement. Git and ripgrep run with argument arrays rather than shell-concatenated commands. The terminal accepts same-origin loopback requests only, starts in the session workspace, and removes API keys, tokens, secrets, and similar environment variables. Language services only start external servers that were discovered on `PATH` or explicitly configured by the user (argument arrays, no shell); files outside the workspace can only be read when they are `SourceFile`s inside the language service's own program (used for read-only navigation tabs), so this cannot be used to read arbitrary disk files.
 
 ## Development
 

@@ -34,6 +34,15 @@ export type CommandId =
   | 'terminal.toggle'
   | 'terminal.new'
   | 'view.chat'
+  | 'language.definition'
+  | 'language.references'
+  | 'language.rename'
+  | 'language.documentSymbols'
+  | 'language.workspaceSymbols'
+  | 'language.quickFix'
+  | 'view.problems'
+  | 'problems.next'
+  | 'problems.previous'
 
 /** 一条可改命令。`defaultBinding` 为 `null` 表示默认不上绑（当前没有这种命令，留着便于以后加）。 */
 export interface BindingCommand {
@@ -44,7 +53,7 @@ export interface BindingCommand {
 }
 
 /** 分组标题（设置页里按它分段）。固定键位单列一组，和可改命令区分开。 */
-export type ShortcutGroup = '编辑器' | '导航' | '终端' | 'DSH' | '编辑器内置（不可改）'
+export type ShortcutGroup = '编辑器' | '导航' | '终端' | 'DSH' | '语言服务' | '编辑器内置（不可改）'
 
 /** 由编辑器内置提供、不可改的键位；只用于展示与冲突判定。 */
 export interface FixedShortcut {
@@ -77,6 +86,16 @@ export const BINDING_COMMANDS: readonly BindingCommand[] = [
   { id: 'terminal.toggle', label: '显示或隐藏终端', group: '终端', defaultBinding: { code: 'Backquote', ctrl: true } },
   { id: 'terminal.new', label: '新建终端', group: '终端', defaultBinding: { code: 'Backquote', ctrl: true, shift: true } },
   { id: 'view.chat', label: '显示或隐藏右侧 DSH 对话栏', group: 'DSH', defaultBinding: { code: 'KeyB', ctrl: true, alt: true } },
+  // 语言服务：默认键位对齐 VS Code，用户照样可以按自己的习惯改掉。
+  { id: 'language.definition', label: '转到定义', group: '语言服务', defaultBinding: { code: 'F12' } },
+  { id: 'language.references', label: '查找所有引用', group: '语言服务', defaultBinding: { code: 'F12', shift: true } },
+  { id: 'language.rename', label: '重命名符号', group: '语言服务', defaultBinding: { code: 'F2' } },
+  { id: 'language.documentSymbols', label: '转到文件中的符号', group: '语言服务', defaultBinding: { code: 'KeyO', ctrl: true, shift: true } },
+  { id: 'language.workspaceSymbols', label: '转到工作区中的符号', group: '语言服务', defaultBinding: { code: 'KeyT', ctrl: true } },
+  { id: 'language.quickFix', label: '快速修复', group: '语言服务', defaultBinding: { code: 'Period', ctrl: true } },
+  { id: 'view.problems', label: '显示或隐藏问题面板', group: '语言服务', defaultBinding: { code: 'KeyM', ctrl: true, shift: true } },
+  { id: 'problems.next', label: '下一个问题', group: '语言服务', defaultBinding: { code: 'F8' } },
+  { id: 'problems.previous', label: '上一个问题', group: '语言服务', defaultBinding: { code: 'F8', shift: true } },
 ]
 
 /** 编辑器内置、不可改的键位。 */
@@ -90,6 +109,8 @@ export const FIXED_SHORTCUTS: readonly FixedShortcut[] = [
   { id: 'fixed.editor.gotoLine', label: '转到行', binding: { code: 'KeyG', ctrl: true } },
   { id: 'fixed.editor.comment', label: '注释或取消注释当前行', binding: { code: 'Slash', ctrl: true } },
   { id: 'fixed.editor.format', label: '格式化文档', binding: { code: 'KeyF', shift: true, alt: true } },
+  // 鼠标手势也列出来：它和 F12 是同一件事，用户在快捷键面板里查「转到定义」时应当看到。
+  { id: 'fixed.language.ctrlClick', label: '按住 Ctrl 点击标识符转到定义', binding: { code: 'Mouse0', ctrl: true } },
 ]
 
 /** 组合键前缀里各项的显示名。 */
@@ -100,7 +121,7 @@ const KEY_LABELS: Readonly<Record<string, string>> = {
   Backquote: '`', Slash: '/', Comma: ',', Period: '.', Semicolon: ';', Quote: "'", Minus: '-', Equal: '=',
   BracketLeft: '[', BracketRight: ']', Backslash: '\\', Space: '空格', Enter: 'Enter', Escape: 'Esc', Tab: 'Tab',
   Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End',
-  PageUp: 'PageUp', PageDown: 'PageDown',
+  PageUp: 'PageUp', PageDown: 'PageDown', Mouse0: '点击',
   ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
 }
 

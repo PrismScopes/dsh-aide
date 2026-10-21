@@ -4,6 +4,7 @@ type CodiconName =  | 'add' | 'archive' | 'case-sensitive' | 'check' | 'chevron-
   | 'diff' | 'diff-sidebyside' | 'diff-single' | 'discard' | 'ellipsis' | 'expand-all' | 'file' | 'file-code' | 'file-media' | 'file-pdf' | 'file-zip'
   | 'files' | 'folder' | 'folder-opened' | 'git-branch' | 'git-commit' | 'git-merge' | 'graph' | 'history' | 'home' | 'list-tree' | 'new-file'
   | 'layout-sidebar-right' | 'layout-sidebar-right-off' | 'new-folder' | 'preserve-case' | 'preview' | 'refresh' | 'regex' | 'remove' | 'repo' | 'replace' | 'replace-all' | 'search' | 'settings' | 'source-control' | 'split-horizontal' | 'tag' | 'terminal' | 'trash' | 'whole-word'
+  | 'warning' | 'error' | 'info' | 'lightbulb'
 
 /** Render one glyph from Microsoft's VS Code Codicon font. */
 export function Icon({ name, className = '' }: { name: CodiconName; className?: string }) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CompletionSettingsView, WorkbenchSettingsView } from './api.ts'
+import type { CompletionSettingsView, LanguageSettingsPatch, LanguageSettingsView, WorkbenchSettingsPatch, WorkbenchSettingsView } from './api.ts'
 import { ApiError, readWorkbenchSettings, writeWorkbenchSettings } from './api.ts'
 import { ShortcutSettingsRow } from './ShortcutSettings.tsx'
 import { listDshModelRoutes } from './dshModels.ts'
@@ -20,14 +20,16 @@ import { WORKBENCH_VERSION } from './version.ts'
  * 注册进 DSH 设置导航（settings.section），渲染在设置面板的内容列里，所以必须贴合 DSH 的观感 ——
  * 颜色一律取 --dsw-alias-* 令牌，不写死色值，深浅色由 DSH 自己切换。
  *
- * 布局是**单列滚动 + 分组标题**（编辑器 / AI 补全 / 终端 / 快捷键 / 关于与诊断）。曾经做过一版
+ * 布局是**单列滚动 + 分组标题**（编辑器 / AI 补全 / 语言服务 / 终端 / 快捷键 / 关于与诊断）。曾经做过一版
  * 页面内左侧分类子菜单 + 右侧面板，但那一栏在 DSH 设置的内容列里既挤又难看，而且 DSH 自己的设置页
  * 就是单列滚动、靠分组标题分段；字号也统一成 DSH 设置页的规格（行标题 14px/20px、说明 12px/18px、
  * 控件文字 14px），不再出现「输入框比标签大一号」的不一致。
  *
  * 落点分两类，别混淆：
- *   1. 界面偏好（localStorage，见 preferences.ts）—— 编辑器排版、补全开关与触发节奏、终端字号；
- *   2. 宿主设置（DSH 数据目录，读写 /dsh-vscode/settings）—— 补全模型路由与失败兜底。
+ *   1. 界面偏好（localStorage，见 preferences.ts）—— 编辑器排版、补全开关与触发节奏、终端字号、
+ *      语言服务的悬停提示与补全；
+ *   2. 宿主设置（DSH 数据目录，读写 /dsh-vscode/settings）—— 补全模型路由与失败兜底、
+ *      语言服务总开关与内置 TypeScript。
  * 宿主不可用时第二类只读不可改，第一类照常可用 —— 界面偏好不能因为宿主端点缺失就一起废掉。
  *
  * 早前那五项布局设置（左右栏与状态栏显隐、两个栏宽）不再出现：它们在工作台里本来就有就地控件
@@ -260,12 +262,12 @@ function EditorGroup({ preferences }: { preferences: ReturnType<typeof usePrefer
 }
 
 /**
- * 宿主设置（模型路由 / 失败兜底）的读写状态。
+ * 宿主设置（模型路由 / 失败兜底 / 语言服务开关）的读写状态。
  *
- * 放在页面的顶层而不是各分组里：AI 补全分组要改它，关于分组要展示其中的设置文件路径，
- * 两处各拉一次会出现「同一份数据两个 owner」，写完一处另一处还是旧值。
+ * 放在页面的顶层而不是各分组里：AI 补全分组要改它，语言服务分组要改它，关于分组要展示其中的
+ * 设置文件路径，几处各拉一次会出现「同一份数据两个 owner」，写完一处另一处还是旧值。
  */
-interface WorkbenchSettingsState {
+export interface WorkbenchSettingsState {
   view: WorkbenchSettingsView | undefined
   loadError: string | undefined
   writeError: string | undefined
@@ -273,11 +275,16 @@ interface WorkbenchSettingsState {
   routeDraft: string
   setRouteDraft(value: string): void
   commitRoute(): void
-  commit(patch: { route?: string | null; fallback?: boolean }): void
+  commit(patch: WorkbenchSettingsPatch): void
+  /**
+   * 写语言服务开关。宿主设置不可用（没读到、或旧宿主没返回 language 字段）时直接忽略：
+   * 那时控件本来就是禁用的，这里再守一道，避免往一个不支持它的端点写。
+   */
+  commitLanguage(patch: LanguageSettingsPatch): void
 }
 
 function useWorkbenchSettings(): WorkbenchSettingsState {
-  // 还没读到（或旧宿主没有这个端点）时 view 为 undefined，此时只禁用宿主侧那两项。
+  // 还没读到（或旧宿主没有这个端点）时 view 为 undefined，此时只禁用宿主侧那几项。
   const [view, setView] = useState<WorkbenchSettingsView>()
   const [loadError, setLoadError] = useState<string>()
   const [writeError, setWriteError] = useState<string>()
@@ -293,7 +300,7 @@ function useWorkbenchSettings(): WorkbenchSettingsState {
     return () => controller.abort()
   }, [])
 
-  const commit = async (patch: { route?: string | null; fallback?: boolean }) => {
+  const commit = async (patch: WorkbenchSettingsPatch) => {
     setSaving(true); setWriteError(undefined)
     try {
       const next = await writeWorkbenchSettings(patch)
@@ -308,8 +315,12 @@ function useWorkbenchSettings(): WorkbenchSettingsState {
     if (next === stored) return
     void commit({ route: next === '' ? null : next })
   }
+  const commitLanguage = (patch: LanguageSettingsPatch): void => {
+    if (saving || view?.language === undefined) return
+    void commit({ language: patch })
+  }
 
-  return { view, loadError, writeError, saving, routeDraft, setRouteDraft, commitRoute, commit }
+  return { view, loadError, writeError, saving, routeDraft, setRouteDraft, commitRoute, commit, commitLanguage }
 }
 
 /** AI 补全分组：客户端开关与节奏走 preferences；模型路由与兜底走宿主设置文件。 */
@@ -382,6 +393,92 @@ function CompletionGroup({ preferences, settings }: { preferences: ReturnType<ty
   </section>
 }
 
+/** 语言服务器的状态文案。宿主给的是稳定的英文状态，界面上一律换中文。 */
+const LANGUAGE_SERVER_STATE_LABELS: Readonly<Record<LanguageSettingsView['servers'][number]['state'], string>> = {
+  builtin: '内置',
+  idle: '已发现',
+  starting: '启动中',
+  running: '运行中',
+  failed: '启动失败',
+  missing: '未安装',
+  disabled: '已关闭',
+}
+
+/**
+ * 环境变量覆盖的警告文案。
+ *
+ * 优先级是「环境变量 > 设置文件 > 插件配置 > 默认值」，所以只要环境变量非空，设置页里的开关
+ * 就不会生效。这里把实际生效的变量名列出来，用户才知道该先去改哪一个（而不是反复点开关）。
+ */
+function languageEnvOverrideText(env: NonNullable<LanguageSettingsView['env']>): string {
+  const names: string[] = []
+  if (env.enabled !== undefined) names.push(`DSH_AIDE_LANGUAGE=${env.enabled}`)
+  if (env.builtinTypescript !== undefined) names.push(`DSH_AIDE_LANGUAGE_BUILTIN=${env.builtinTypescript}`)
+  if (env.servers !== undefined) names.push('DSH_AIDE_LANGUAGE_SERVERS')
+  // env 存在但三个字段都空（未来宿主可能的形状）：仍要提示优先级，避免拼出双空格。
+  const source = names.length === 0 ? '环境变量' : `环境变量 ${names.join('、')}`
+  return `${source} 正在覆盖此处的开关；要在这里改，先取消对应的环境变量再重启 DSH。`
+}
+
+/**
+ * 语言服务分组。
+ *
+ * 同一个分组里有两类落点，语义必须分清：
+ *   - 「启用语言服务」「内置 TypeScript」是**宿主**开关（%DSH_HOME%/language.settings.json），
+ *     改完宿主会立刻重置语言服务，客户端 WebSocket 会断开重连；
+ *   - 「悬停提示」「语言补全」是**客户端**偏好（preferences.ts），只影响当前浏览器里的编辑器。
+ * 服务器列表与设置文件路径是只读信息：servers 由用户在设置文件里手写，设置页不覆盖它。
+ *
+ * 为什么导出：设置页的宿主视图在 useEffect 里异步拉取，静态渲染（SSR）拿不到，
+ * 单测需要直接渲染这个分组并注入一份视图，才能覆盖服务器状态映射与环境变量警告。
+ */
+export function LanguageGroup({ preferences, settings }: { preferences: ReturnType<typeof usePreferences>; settings: WorkbenchSettingsState }) {
+  const language = settings.view?.language
+  const unavailable = language === undefined
+  // 还没拿到宿主响应（静态渲染 / 旧宿主）时按默认开启显示，避免开关莫名是「关」的观感。
+  const enabled = language?.enabled ?? true
+  const builtin = language?.builtinTypescript ?? true
+  const servers = language?.servers ?? []
+
+  return <section className="dvw-set-group">
+    <h3 className="dvw-set-group-title">语言服务</h3>
+    <Row title="启用语言服务" description="诊断、跳转、补全由宿主语言服务提供；关闭后编辑器只剩语法高亮。">
+      <Switch checked={enabled} label="启用语言服务" disabled={unavailable || settings.saving}
+        onChange={value => settings.commitLanguage({ enabled: value })}/>
+    </Row>
+    <Row title="内置 TypeScript" description="为 .ts/.js 提供项目级诊断与跳转；外部语言服务器不受影响。">
+      {/* 总开关关闭时内置服务也不会启动：此时禁用而不是让它看起来还能单独打开。 */}
+      <Switch checked={builtin} label="内置 TypeScript" disabled={unavailable || settings.saving || !enabled}
+        onChange={value => settings.commitLanguage({ builtinTypescript: value })}/>
+    </Row>
+    <Row title="悬停提示" description="悬停时显示类型信息与文档；关闭后只剩编辑器自带的同类词高亮。">
+      <Switch checked={preferences.languageHover} label="悬停提示" onChange={value => updatePreferences({ languageHover: value })}/>
+    </Row>
+    <Row title="语言补全" description="宿主语言服务给出的补全与签名提示；与 AI 行内补全互相独立。">
+      <Switch checked={preferences.languageCompletion} label="语言补全" onChange={value => updatePreferences({ languageCompletion: value })}/>
+    </Row>
+    <div className="dvw-set-row dvw-set-row-stack">
+      <div className="dvw-set-text">
+        <span className="dvw-set-title">语言服务器</span>
+        <span className="dvw-set-desc">宿主发现的服务器及其运行状态；启停与新增在 language.settings.json 里配置，改完立即生效。</span>
+      </div>
+      {servers.length === 0
+        ? <Info label="语言服务器" value="没有发现外部语言服务器（可在 language.settings.json 配置）"/>
+        : servers.map(server => <Info key={server.id} label={server.name}
+          value={`${server.languages.join('、')} · ${LANGUAGE_SERVER_STATE_LABELS[server.state]}${server.detail === undefined ? '' : `（${server.detail}）`}`}/>)}
+    </div>
+    <div className="dvw-set-row dvw-set-row-stack">
+      <div className="dvw-set-text">
+        <span className="dvw-set-title">设置文件</span>
+        <span className="dvw-set-desc">两个开关写入这个文件；手动编辑其中的 servers 可以添加外部语言服务器。</span>
+      </div>
+      <Info label="路径" value={language?.file ?? '未设置 DSH_HOME，数据目录未知；只能通过环境变量开关语言服务，无法写入设置文件'}/>
+    </div>
+    {language?.env !== undefined && <Info tone="warn" label="环境变量覆盖" value={languageEnvOverrideText(language.env)}/>}
+    {settings.view !== undefined && language === undefined && <Info tone="warn" label="语言服务设置不可用" value="当前宿主没有返回语言服务设置，请更新 DSH 后重启。"/>}
+  </section>
+}
+
 /** 终端分组。终端字号只写偏好，由终端面板读取后应用（接线在工作台侧）。 */
 function TerminalGroup({ preferences }: { preferences: ReturnType<typeof usePreferences> }) {
   return <section className="dvw-set-group">
@@ -443,9 +540,10 @@ export function SettingsPanel() {
   return <div className="dvw-settings-panel">
     <EditorGroup preferences={preferences}/>
     <CompletionGroup preferences={preferences} settings={settings}/>
+    <LanguageGroup preferences={preferences} settings={settings}/>
     <TerminalGroup preferences={preferences}/>
     <ShortcutsGroup/>
     <AboutGroup settingsFile={settings.view?.completion.file}/>
-    <p className="dvw-set-footnote">界面偏好保存在本机浏览器里；补全的模型路由与兜底写入 DSH 数据目录，重启后仍然有效。</p>
+    <p className="dvw-set-footnote">界面偏好保存在本机浏览器里；补全的模型路由与兜底、语言服务的开关写入 DSH 数据目录，重启后仍然有效。</p>
   </div>
 }

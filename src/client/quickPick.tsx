@@ -41,6 +41,11 @@ export function QuickPick(props: {
   onToggle?(item: QuickPickItem): void
   /** 多选模式下已勾选的 id。 */
   selectedIds?: readonly string[]
+  /**
+   * 输入变化回调（动态搜索用：工作区符号这类结果由远端返回，不在本地过滤）。
+   * 提供它时列表仍会按本地过滤再收窄一遍，所以远端结果可以是宽集。
+   */
+  onFilterChange?(value: string): void
   onClose(): void
   emptyText?: string
 }) {
@@ -78,7 +83,7 @@ export function QuickPick(props: {
     <div className="dvw-quickpick" role="dialog" aria-label={props.title} onMouseDown={event => event.stopPropagation()}>
       <div className="dvw-quickpick-head">{props.title}</div>
       <input className="dvw-input" autoFocus value={filter} aria-label={props.title} placeholder={props.placeholder ?? props.title}
-        onChange={event => setFilter(event.target.value)} onKeyDown={onKeyDown}/>
+        onChange={event => { setFilter(event.target.value); props.onFilterChange?.(event.target.value) }} onKeyDown={onKeyDown}/>
       {showCreate && <button className="dvw-quickpick-item dvw-quickpick-create" onClick={submit}><Icon name="add"/><span>{createLabel}</span></button>}
       {props.onPick !== undefined && <div className="dvw-quickpick-list">
         {visible.map((item, index) => <button className="dvw-quickpick-item" key={item.id} data-active={index === active || undefined}
