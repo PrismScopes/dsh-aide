@@ -28,8 +28,10 @@ describe('提交图标签页', () => {
     expect(workbench).toContain('GIT_GRAPH_PATH')
     expect(workbench).toContain("title:'提交图'")
     expect(workbench).toContain('activeTab.path===GIT_GRAPH_PATH')
-    // 活动栏上有一个独立入口（用户要的「git graph 单独分出来一个按钮」）。
-    expect(workbench).toContain('title="提交图"')
+    // 入口在 Git 侧边面板里（用户明确要求），活动栏不再多一个图标按钮。
+    expect(workbench).not.toContain('data-active={active===GIT_GRAPH_PATH')
+    const panel = readFileSync(new URL('../src/client/GitPanel.tsx', import.meta.url), 'utf8')
+    expect(panel).toContain('dvw-graph-open')
     expect(GIT_GRAPH_PATH).toBe('git:graph')
   })
 })

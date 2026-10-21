@@ -13,12 +13,19 @@ const source = readFileSync(new URL('../src/client/GitPanel.tsx', import.meta.ur
 const commands = readFileSync(new URL('../src/client/gitCommands.tsx', import.meta.url), 'utf8')
 
 describe('源代码管理面板', () => {
-  it('draws the title bar with the graph shortcut, refresh and the more-actions menu', () => {
+  it('draws the title bar with refresh and the more-actions menu', () => {
     expect(html).toContain('源代码管理')
-    expect(html).toContain('aria-label="打开提交图"')
     expect(html).toContain('aria-label="刷新"')
     expect(html).toContain('aria-label="更多操作"')
     expect(html).toContain('aria-haspopup="menu"')
+  })
+
+  it('puts the commit-graph entry inside this panel as a labelled button', () => {
+    // 用户明确要求入口在 Git 侧边面板里，而不是活动栏上多一个图标。
+    expect(source).toContain('dvw-graph-open')
+    expect(source).toContain('提交图</button>')
+    expect(source).toContain('props.onOpenGraph(false)')
+    expect(html).not.toContain('aria-label="打开提交图"')
   })
 
   it('selects branches through the quick pick instead of window.prompt', () => {
