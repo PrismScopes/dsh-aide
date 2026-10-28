@@ -65,7 +65,8 @@
   organize imports); hover shows cross-file types and completion/signature help come from the language service. Diagnostics are
   live (260 ms debounce) and surface in the editor, the activity bar "Problems" badge, the status bar counts, and a grouped,
   filterable Problems panel where clicking jumps to the location and `F8` / `Shift+F8` step through them. "Scan workspace" in
-  the panel checks every built-in TS project file. The panel also offers grouped/flat views, a current-file filter, single/multi-line
+  the panel type-checks the whole program once (instead of re-checking the program per file) in a dedicated worker, so
+  completion, Git, terminal and save operations stay responsive while it runs. The panel also offers grouped/flat views, a current-file filter, single/multi-line
   messages, arrow-key navigation, a context menu (copy / quick fix / add to conversation), virtualized rendering for thousands of
   diagnostics, and an "Add to AI" button. Jumping into `node_modules` or TypeScript's `lib.*.d.ts` opens a read-only tab
   that still supports hover and further jumps. Settings expose the master switch, the built-in TS switch, and hover/completion

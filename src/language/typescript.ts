@@ -18,8 +18,11 @@
  * 输出时转换成 0 基行列（见 protocol.ts）。行列都从 0 开始。
  */
 import { readdir, stat } from 'node:fs/promises'
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { Worker } from 'node:worker_threads'
+import { scanProject, type ScanOptions } from './scan.ts'
 import type { LanguageProvider, LanguageProviderInfo, LanguageProviderOptions, LanguageScanResult } from './provider.ts'
 import {
   BUILTIN_TYPESCRIPT_ID,
@@ -87,6 +90,17 @@ interface OpenDocument {
 }
 
 const EMPTY_SCAN: LanguageScanResult = { checked: 0, errors: 0, warnings: 0 }
+
+/** 生产构建里由 tsdown 额外产出的扫描 worker；源码测试环境不存在，走进程内回退。 */
+const SCAN_WORKER_URL = new URL('./scan-worker.js', import.meta.url)
+let scanWorkerAvailable: boolean | undefined
+
+/** worker 只回三种消息；类型写在宿主侧，避免为了类型把 worker 模块（及其 typescript 运行时）import 进来。 */
+type ScanWorkerMessage =
+  | { type: 'total'; total: number }
+  | { type: 'file'; file: { path: string; diagnostics: readonly LanguageDiagnostic[] } }
+  | { type: 'done'; result: LanguageScanResult }
+  | { type: 'error'; message: string }
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -775,7 +789,7 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
    * 只扫程序内**非声明文件**：lib.*.d.ts 与 node_modules 里的 .d.ts 不是用户代码，把它们的错误报出来
    * 只会淹没真正的问题。每个文件之间让出事件循环（setImmediate），这样扫描期间路由仍能响应、也能被取消。
    */
-  async workspaceDiagnostics(onFile: (path: string, diagnostics: readonly LanguageDiagnostic[]) => void, signal?: AbortSignal): Promise<LanguageScanResult> {
+  async workspaceDiagnostics(onFile: (path: string, diagnostics: readonly LanguageDiagnostic[]) => void, signal?: AbortSignal, onTotal?: (total: number) => void): Promise<LanguageScanResult> {
     if (this.disposed) return EMPTY_SCAN
     let ready
     try {
@@ -786,30 +800,77 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
     }
     if (ready === undefined) return EMPTY_SCAN
     if (isAborted(signal)) return EMPTY_SCAN
-    const { ts, service } = ready
-    const program = service.getProgram()
-    if (program === undefined) return EMPTY_SCAN
-    const files = program.getSourceFiles().filter(sourceFile => !sourceFile.isDeclarationFile)
-    let checked = 0
-    let errors = 0
-    let warnings = 0
-    for (const [index, sourceFile] of files.entries()) {
-      if (isAborted(signal)) break
-      const fileName = this.absolute(sourceFile.fileName)
-      const diagnostics = this.computeDiagnostics(ts, service, fileName).diagnostics
-      checked++
-      const counts = diagnosticCounts(diagnostics)
-      errors += counts.errors
-      warnings += counts.warnings
-      try {
-        onFile(fileName, diagnostics)
-      } catch (error) {
-        this.warn(`工作区扫描回调失败：${messageOf(error)}`)
-      }
-      // 每处理若干文件让出一次事件循环：单个大文件的语义检查本身无法中断，但文件之间可以。
-      if (index % 8 === 7) await new Promise<void>(resolveYield => setImmediate(resolveYield))
+    const { ts } = ready
+    const options: ScanOptions = {
+      workspace: this.workspace,
+      rootFiles: this.scriptFileNames(),
+      compilerOptions: this.settings,
+      openDocuments: [...this.openDocuments.values()].map(document => ({
+        path: document.path, languageId: document.languageId, version: document.version, content: document.content,
+      })),
     }
-    return { checked, errors, warnings }
+    // 生产构建优先用 worker：CPU 密集的语义检查不占用宿主事件循环。源码/测试环境没有
+    // lib/scan-worker.js，自动回退到同一个 scanProject 实现。
+    if (this.canUseScanWorker()) {
+      try {
+        return await this.workspaceDiagnosticsInWorker(options, onFile, signal, onTotal)
+      } catch (error) {
+        if (isAborted(signal)) return EMPTY_SCAN
+        this.warn(`工作区扫描 worker 失败，回退到进程内扫描：${messageOf(error)}`)
+      }
+    }
+    return await scanProject(ts, options, onFile, signal, onTotal)
+  }
+
+  /** worker 产物只存在于构建后的 lib/；存在性缓存一次，避免每次扫描 stat。 */
+  private canUseScanWorker(): boolean {
+    if (scanWorkerAvailable === undefined) {
+      try { scanWorkerAvailable = existsSync(fileURLToPath(SCAN_WORKER_URL)) } catch { scanWorkerAvailable = false }
+    }
+    return scanWorkerAvailable
+  }
+
+  private async workspaceDiagnosticsInWorker(
+    options: ScanOptions,
+    onFile: (path: string, diagnostics: readonly LanguageDiagnostic[]) => void,
+    signal?: AbortSignal,
+    onTotal?: (total: number) => void,
+  ): Promise<LanguageScanResult> {
+    const worker = new Worker(SCAN_WORKER_URL, { workerData: options })
+    let checked = 0, errors = 0, warnings = 0
+    let settled = false
+    return await new Promise<LanguageScanResult>((resolveScan, rejectScan) => {
+      const finish = (result: LanguageScanResult, error?: unknown): void => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener('abort', abort)
+        void worker.terminate()
+        if (error === undefined) resolveScan(result)
+        else rejectScan(error)
+      }
+      const abort = (): void => finish({ checked, errors, warnings })
+      signal?.addEventListener('abort', abort, { once: true })
+      worker.on('message', (message: ScanWorkerMessage) => {
+        if (message.type === 'file') {
+          const diagnostics = message.file.diagnostics
+          checked++
+          for (const diagnostic of diagnostics) {
+            if (diagnostic.severity === 'error') errors++
+            else if (diagnostic.severity === 'warning') warnings++
+          }
+          try { onFile(message.file.path, diagnostics) } catch { /* 回调失败不终止扫描 */ }
+          return
+        }
+        if (message.type === 'done') { finish(message.result); return }
+        if (message.type === 'error') finish({ checked, errors, warnings }, new Error(message.message))
+        if (message.type === 'total') onTotal?.(message.total)
+      })
+      worker.on('error', error => finish({ checked, errors, warnings }, error))
+      worker.on('exit', code => {
+        // 正常 done 已 settle；异常退出（含 abort 的 terminate）保留已收集结果，不把扫描变成 500。
+        if (!settled) finish({ checked, errors, warnings }, code === 0 ? undefined : new Error(`scan worker exited with ${code}`))
+      })
+    })
   }
 
   /**

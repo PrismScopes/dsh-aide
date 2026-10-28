@@ -281,9 +281,12 @@ export class LanguageManager {
         errors += counts.errors
         warnings += counts.warnings
         checked++
-        this.scanState = { running: true, checked, total: 0, errors, warnings }
+        this.scanState = { running: true, checked, total: this.scanState?.total ?? 0, errors, warnings }
         if (checked % SCAN_STATUS_EVERY === 0) this.emitStatus(true)
-      }, signal)
+      }, signal, total => {
+        this.scanState = { running: true, checked: this.scanState?.checked ?? 0, total, errors, warnings }
+        this.emitStatus(true)
+      })
       this.scanState = { running: false, checked: result.checked, total: result.checked, errors: result.errors, warnings: result.warnings }
     } catch (error) {
       this.log('warn', `工作区诊断扫描失败：${errorMessage(error)}`)

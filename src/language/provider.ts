@@ -82,8 +82,8 @@ export interface LanguageProvider {
   /** 范围参数是 0 基坐标；诊断由管理器按该范围筛好后传入（快速修复要靠错误码）。 */
   codeActions?(path: string, range: LanguageRange, diagnostics: readonly LanguageDiagnostic[], signal?: AbortSignal): Promise<readonly LanguageCodeAction[]>
 
-  /** 工作区级诊断扫描：只为内置服务提供。`onFile` 每算完一个文件回调一次。 */
-  workspaceDiagnostics?(onFile: (path: string, diagnostics: readonly LanguageDiagnostic[]) => void, signal?: AbortSignal): Promise<LanguageScanResult>
+  /** 工作区级诊断扫描：只为内置服务提供。`onFile` 每算完一个文件回调一次；`onTotal` 给出总数。 */
+  workspaceDiagnostics?(onFile: (path: string, diagnostics: readonly LanguageDiagnostic[]) => void, signal?: AbortSignal, onTotal?: (total: number) => void): Promise<LanguageScanResult>
 
   /**
    * 读取语言服务「知道」的只读文件内容。

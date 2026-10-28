@@ -93,6 +93,13 @@ export function dshPackage(packageName: string): UserConfig[] {
         footer: 'return module.exports; } });',
       },
     },
+    // 工作区扫描的 CPU 密集部分放到 worker：宿主事件循环不能被 TypeScript 语义检查占住。
+    {
+      entry: { 'scan-worker': './src/language/scan-worker.ts' },
+      outDir: './lib', format: 'esm', platform: 'node', dts: false, sourcemap: true, clean: false,
+      deps: { neverBundle: true },
+      outputOptions: { entryFileNames: 'scan-worker.js' },
+    },
     // 冷启动瘦身：PDF 与 DOCX 的渲染栈只在打开对应文件时才需要，移出首包。
     clientChunk(packageName, 'client.pdf.js', './src/client/chunks/pdf.ts'),
     clientChunk(packageName, 'client.docx.js', './src/client/chunks/docx.ts', { 'docx-preview': DOCX_MIN, ...(JSZIP_MIN === undefined ? {} : { jszip: JSZIP_MIN }) }),

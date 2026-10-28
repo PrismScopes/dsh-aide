@@ -62,7 +62,9 @@ describe('client chunk loader', () => {
 describe('chunk build wiring', () => {
   it('emits pdf/docx chunks with the loader registration banner', () => {
     const configs = dshPackage('dsh-aide')
-    const chunks = configs.slice(2)
+    // [host, client, scan-worker, pdf, docx]；后面两个才是浏览器按需 chunk。
+    expect(Object.keys((configs[2]?.entry ?? {}) as Record<string, string>)).toEqual(['scan-worker'])
+    const chunks = configs.slice(3)
     expect(chunks).toHaveLength(2)
     const banners = chunks.map(config => outputOf(config).banner ?? '')
     const files = banners.map(banner => /chunk: "([^"]+)"/.exec(banner)?.[1] ?? '')
