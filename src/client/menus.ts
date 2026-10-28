@@ -45,6 +45,8 @@ export interface ExplorerMenuActions {
   copyPath(entry: FileEntry, absolute: boolean): void
   copyWorkspacePath(): void
   openTerminal(directory: string): void
+  /** 把文件作为上下文卡片加入 DSH 对话；未接线时不显示这一项。 */
+  addToConversation?(entry: FileEntry): void
   refresh(): void
 }
 
@@ -103,6 +105,9 @@ export function explorerMenuItems(context: ExplorerMenuContext): MenuEntry[] {
     item({ id: 'copy-relative-path', label: '复制相对路径', onSelect: () => actions.copyPath(entry, false) }),
     item({ id: 'copy-absolute-path', label: '复制绝对路径', disabled: absolute === undefined, onSelect: () => actions.copyPath(entry, true) }),
     separator(),
+    ...(entry.kind === 'file' && actions.addToConversation !== undefined
+      ? [item({ id: 'add-conversation', label: '添加到对话', onSelect: () => actions.addToConversation!(entry) })]
+      : []),
     item({ id: 'open-terminal', label: entry.kind === 'directory' ? '在终端中打开' : '在终端中打开所在目录', onSelect: () => actions.openTerminal(entry.kind === 'directory' ? entry.path : parentDirectory(entry.path)) }),
   )
   return entries

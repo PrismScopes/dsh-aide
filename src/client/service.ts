@@ -6,8 +6,11 @@ export type WorkbenchView = 'explorer' | 'search' | 'git'
 /**
  * `header` 是面板头里那块留给面板自己用的容器（当前工作台不再传入：视图标签统一由工作台绘制，
  * 终端会话标签也在终端视图内部）。字段保留，供工作台以外的面板实现继续挂自定义头部内容。
+ *
+ * `activePath` 是编辑器当前标签的工作区相对路径（没有活动标签时为 undefined）。问题面板的
+ * 「仅当前文件」过滤、输出面板的文件链接都靠它，面板自身不去读别的组件状态。
  */
-export interface BottomPanelProps { sessionId: string; cwd: string; visible: boolean; colorScheme: 'dark' | 'light'; header?: HTMLElement | null }
+export interface BottomPanelProps { sessionId: string; cwd: string; visible: boolean; colorScheme: 'dark' | 'light'; header?: HTMLElement | null; activePath?: string }
 export interface BottomPanelContribution { id: string; title: string; component: ComponentType<BottomPanelProps> }
 export interface WorkbenchCommand { id: string; run(): void }
 export interface WorkbenchSnapshot { visible: boolean; view: WorkbenchView; bottomPanel?: string }

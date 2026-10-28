@@ -16,6 +16,8 @@ const line = (): MenuSeparator => ({ kind: 'separator' })
 export interface DshMenuActions {
   /** 把当前选区以引用形式写进对话输入框（不发送）。 */
   addToConversation(): void
+  /** 把当前选区作为结构化上下文卡片（DSH 引用 chip）加入对话输入框。 */
+  addContextCard(): void
   /** 按类型询问 DSH；`ask` 表示「询问 DSH…」（由调用方弹框收集自定义问题）。 */
   ask(kind: DshAskKind): void
   /** 只把选区复制成 Markdown 引用，不碰 DSH。 */
@@ -45,6 +47,7 @@ export function dshMenuEntries(context: DshMenuContext): readonly MenuEntry[] {
   const canAsk = hasSelection && available
   return [
     item({ id: 'dsh-add', label: '添加至对话', disabled: !canAsk, onSelect: actions.addToConversation }),
+    item({ id: 'dsh-add-card', label: '添加为上下文卡片', disabled: !canAsk, onSelect: actions.addContextCard }),
     line(),
     item({ id: 'dsh-ask', label: '询问 DSH…', disabled: !canAsk, onSelect: () => actions.ask('ask') }),
     item({ id: 'dsh-explain', label: '解释这段代码', disabled: !canAsk, onSelect: () => actions.ask('explain') }),

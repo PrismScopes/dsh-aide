@@ -15,6 +15,7 @@ function fakeActions(): { calls: string[]; actions: DshMenuActions } {
     calls,
     actions: {
       addToConversation: () => { calls.push('add') },
+      addContextCard: () => { calls.push('add-card') },
       ask: (kind: DshAskKind) => { calls.push(`ask:${kind}`) },
       copyQuote: () => { calls.push('copy') },
     },
@@ -30,6 +31,7 @@ describe('dsh menu entries', () => {
     const entries = dshMenuEntries(context())
     expect(items(entries).map(entry => entry.id)).toEqual([
       'dsh-add',
+      'dsh-add-card',
       'dsh-ask',
       'dsh-explain',
       'dsh-fix',
@@ -41,7 +43,7 @@ describe('dsh menu entries', () => {
     ])
     // 分隔线把「添加至对话」「询问动作」「复制为引用」分成三组。
     expect(entries.map(entry => entry.kind)).toEqual([
-      'item', 'separator',
+      'item', 'item', 'separator',
       'item', 'item', 'item', 'item', 'item', 'item', 'item',
       'separator',
       'item',
@@ -52,6 +54,7 @@ describe('dsh menu entries', () => {
     const entries = dshMenuEntries(context())
     expect(items(entries).map(entry => entry.label)).toEqual([
       '添加至对话',
+      '添加为上下文卡片',
       '询问 DSH…',
       '解释这段代码',
       '修复这段代码',
@@ -89,6 +92,7 @@ describe('dsh menu entries', () => {
     for (const entry of items(dshMenuEntries(context({}, actions)))) entry.onSelect()
     expect(calls).toEqual([
       'add',
+      'add-card',
       'ask:ask',
       'ask:explain',
       'ask:fix',

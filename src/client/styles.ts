@@ -1,4 +1,6 @@
+
 import { PROBLEMS_STYLES } from './problemStyles.ts'
+import { OUTPUT_STYLES } from './outputStyles.ts'
 
 const CSS = String.raw`
 @font-face{font-family:codicon;font-display:block;src:url('/dsh-vscode/codicons/codicon.ttf') format('truetype')}
@@ -216,20 +218,6 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-debug-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:100%;padding:24px;text-align:center}
 .dvw-debug-empty-title{margin:0;font-size:13px;font-weight:600;color:var(--dvw-text-2)}
 .dvw-debug-empty-note{max-width:460px;margin:0;font-size:12px;line-height:18px;color:var(--dvw-text-3)}
-/* ---- 输出（Output）：语言服务 / Git 日志通道，只读 ---- */
-.dvw-output{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dvw-base);color:var(--dvw-text)}
-.dvw-output-toolbar{flex:none;display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid var(--dvw-border)}
-.dvw-output-channel{height:24px;max-width:220px;padding:0 6px;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-xs);background:var(--dvw-surface-2);color:var(--dvw-text);font:inherit;outline:0}
-.dvw-output-channel:focus{border-color:var(--dvw-accent)}
-.dvw-output-clear{margin-left:auto;height:24px;padding:0 10px;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text-2);font:inherit;cursor:pointer}
-.dvw-output-clear:hover:not(:disabled){background:var(--dvw-hover);color:var(--dvw-text)}
-.dvw-output-clear:disabled{opacity:.5;cursor:default}
-.dvw-output-log{flex:1;min-height:0;overflow:auto;padding:4px 0;font:12px/18px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
-.dvw-output-line{display:flex;gap:8px;padding:0 10px;white-space:pre-wrap;overflow-wrap:anywhere}
-.dvw-output-time{flex:none;color:var(--dvw-text-3)}
-.dvw-output-line[data-level=warn] .dvw-output-text{color:var(--dvw-warn)}
-.dvw-output-line[data-level=error] .dvw-output-text{color:var(--dvw-error)}
-.dvw-output-empty{padding:16px 12px;color:var(--dvw-text-3);font-size:12px;line-height:18px;white-space:pre-wrap}
 
 
 
@@ -409,6 +397,8 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 
 /* 问题面板样式在 problemStyles.ts 里独立维护，这里只做插值，避免与语言服务其它样式抢同一段字符串。 */
 ${PROBLEMS_STYLES}
+/* 输出面板样式同理，独立在 outputStyles.ts。 */
+${OUTPUT_STYLES}
 `
 
 

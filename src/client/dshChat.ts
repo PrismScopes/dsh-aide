@@ -231,6 +231,23 @@ async function copyFallback(text: string, deps: DshChatDeps | undefined, reason:
 
 //#endregion
 
+/**
+ * 供上下文卡片等调用方复用：把文本插入 DSH 对话输入框（不发送）。
+ * 与菜单动作共用同一条降级链（execCommand → paste → 剪贴板）。
+ */
+export async function insertTextIntoComposer(text: string, deps?: DshChatDeps): Promise<DshActionResult> {
+  return insertIntoComposer(text, deps)
+}
+
+/** 聚焦当前可见的 DSH composer；找不到时返回 false。 */
+export function focusDshComposer(deps?: DshChatDeps): boolean {
+  const doc = currentDocument(deps)
+  if (doc === undefined) return false
+  const composer = findComposer(doc)
+  if (composer === undefined) return false
+  try { focusComposer(composer, doc); return true } catch { return false }
+}
+
 //#region 平台小工具
 
 /** 派发展开对话栏事件（Workbench 监听后把右侧对话栏显示出来）。失败不影响后续动作。 */

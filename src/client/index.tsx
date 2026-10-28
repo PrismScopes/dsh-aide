@@ -19,6 +19,7 @@ import { installLanguageActions } from './language/actions.ts'
 import { Workbench } from './Workbench.tsx'
 import { NoSessionPrompt } from './NoSessionPrompt.tsx'
 import { installStyles } from './styles.ts'
+import { installContextCards } from './contextCards.ts'
 import { handleTerminalShortcut } from './shortcuts.ts'
 import { bindingMatches, bindingOf } from './keybindings.ts'
 import { mainViewSession } from './session.ts'
@@ -28,6 +29,7 @@ import type { DshAskKind, DshActionResult, DshSelection } from './dshChat.ts'
 import { addSelectionToConversation, askDsh, dshChatStatus, formatSnippetQuote } from './dshChat.ts'
 import { dshMenuEntries } from './dshMenus.ts'
 import { copyText } from './clipboard.ts'
+import { requestContextCard } from './contextRequest.ts'
 
 export type { BottomPanelContribution, BottomPanelProps, VscodeWorkbench, WorkbenchCommand, WorkbenchSnapshot, WorkbenchView } from './service.ts'
 
@@ -236,6 +238,18 @@ function dshHarnessEntry(target: EditorMenuTarget): MenuEntry {
     const extra = question.trim() === '' ? undefined : question.trim()
     void askDsh('ask', selection, extra).then(reportDshResult)
   }
+  /** 上下文卡片：优先作为 DSH 引用 chip 插入；没有 composer 服务时回落到旧的文本插入。 */
+  const addContextCard = () => {
+    void requestContextCard({
+      kind: 'selection',
+      ...(target.filePath === undefined ? {} : { path: target.filePath }),
+      ...(target.language === undefined ? {} : { language: target.language }),
+      lineStart: target.lineStart,
+      lineEnd: target.lineEnd,
+      text: target.selectionText,
+      title: target.filePath?.split(/[\\/]/).at(-1),
+    }).then(ok => { if (!ok) void addSelectionToConversation(selection).then(reportDshResult) })
+  }
   return {
     kind: 'item',
     id: 'dsh-harness',
@@ -247,6 +261,7 @@ function dshHarnessEntry(target: EditorMenuTarget): MenuEntry {
       available: dshChatStatus().available,
       actions: {
         addToConversation: () => { void addSelectionToConversation(selection).then(reportDshResult) },
+        addContextCard,
         ask,
         copyQuote: () => { void copyText(formatSnippetQuote(selection)) },
       },
@@ -264,6 +279,9 @@ export function apply(ctx: ClientContext): void {
   // shortcuts 服务的类型在绑定的旧版官方类型里还没有，按运行时形状取（同 layout 的做法）。
   shortcutsService = (ctx as unknown as { shortcuts?: unknown }).shortcuts
   ctx.effect(() => installStyles(), 'dsh-aide: styles')
+  // 输入框上下文卡片：注册 DSH `@` 源并准备 composer chip 通路（服务缺失时自动回落到文本插入）。
+  // installContextCards 自己用 ctx.effect 注册/清理 source，这里不需要再包一层。
+  installContextCards(ctx as unknown as Parameters<typeof installContextCards>[0])
   ctx.effect(() => { const dispose = ctx.reflect.provide('vscodeWorkbench', service); return () => { void dispose() } }, 'dsh-aide: service')
   // 编辑器右键菜单的「DeepSeek Harness」子菜单：注册成置顶贡献。
   // 它的动作只把引用/指令插入 DSH 对话输入框（不直接发送），因此不需要注入任何 DSH 客户端服务；
