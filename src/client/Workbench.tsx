@@ -34,7 +34,7 @@ import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
 import { explorerMenuItems, panelMoreMenuItems, parentDirectory, tabMenuItems, workspaceAbsolutePath, type ExplorerMenuActions, type FileClipboard } from './menus.ts'
 import { copyText } from './clipboard.ts'
 import { requestTerminal } from './terminal.ts'
-import { bindingMatches, bindingOf } from './keybindings.ts'
+import { bindingMatches, bindingOf, formatBinding } from './keybindings.ts'
 import { REVEAL_CHAT_EVENT } from './dshChat.ts'
 import { LanguageWorkspace, setActiveLanguageWorkspace } from './language/client.ts'
 import { useDiagnostics } from './language/diagnostics.ts'
@@ -294,6 +294,7 @@ function Tree(props: TreeProps) {
     </>}
     {rows.map(row => <div key={row.path}>
       <div className="dvw-tree-row"
+        data-tree-path={row.path}
         data-dvw-upload-directory={row.kind === 'directory' ? row.path : undefined}
         data-selected={row.path === selected || row.path === selectedDirectory || row.path === focused}
         data-drop-target={dropTarget && row.kind === 'directory'}
@@ -316,7 +317,7 @@ function Tree(props: TreeProps) {
         {renaming?.path === row.path
           ? <input className="dvw-tree-rename" value={renaming.value} autoFocus onClick={event => event.stopPropagation()} onChange={event => props.onRenamingChange(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); props.onRenamingSubmit() } if (event.key === 'Escape') { event.preventDefault(); props.onRenamingCancel() } }} onBlur={props.onRenamingCancel}/>
           : <>{row.kind === 'file' && dirty.has(row.path) && <span className="dvw-tree-dirty" title="有未保存的更改"/>}<span className="dvw-tree-name">{row.name}</span></>}
-        {row.kind === 'file' && statuses.has(row.path) && <span className="dvw-tree-status" data-status={statuses.get(row.path)} title={statuses.get(row.path)}/>}
+        {row.kind === 'file' && statuses.has(row.path) && <span className="dvw-tree-status" data-status={statuses.get(row.path)} title={statusLabel(statuses.get(row.path))} aria-label={statusLabel(statuses.get(row.path))}>{statuses.get(row.path)}</span>}
       </div>
       {row.kind === 'directory' && expanded.has(row.path) && <Tree {...props} path={row.path} depth={depth + 1}/>}
     </div>)}
@@ -333,6 +334,8 @@ function Tree(props: TreeProps) {
 function Explorer(props: { sessionId: string; cwd?: string; selected?: string; dirty: Set<string>; onOpen(path: string, pin?: boolean): void }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [revision, setRevision] = useState(0)
+  /** 根层文件数：只用于空状态，不在树内部重复维护。 */
+  const [rootRows, setRootRows] = useState<readonly FileEntry[]>()
   const [statuses, setStatuses] = useState<Map<string, string>>(new Map())
   const [dropTarget, setDropTarget] = useState(false)
   const [selectedDirectory, setSelectedDirectory] = useState('')
@@ -347,6 +350,41 @@ function Explorer(props: { sessionId: string; cwd?: string; selected?: string; d
   const uploadDirectory = useRef('')
   useEffect(() => { if (props.cwd) { try { setExpanded(new Set(JSON.parse(localStorage.getItem(`dvw:tree:${props.cwd}`) ?? '[]') as string[])) } catch { setExpanded(new Set()) } } }, [props.cwd])
   useEffect(() => { if (props.cwd) localStorage.setItem(`dvw:tree:${props.cwd}`, JSON.stringify([...expanded])) }, [props.cwd, expanded])
+  // 根目录单独取一次：只用于「工作区为空」的引导态，不复用递归 Tree 的内部状态。
+  useEffect(() => {
+    if (props.cwd === undefined || props.cwd === '') { setRootRows(undefined); return }
+    let live = true
+    void api<FileEntry[]>('fs.list', { sessionId: props.sessionId, path: '' })
+      .then(rows => { if (live) setRootRows(rows) })
+      .catch(() => { if (live) setRootRows(undefined) })
+    return () => { live = false }
+  }, [props.cwd, props.sessionId, revision])
+  /**
+   * 在资源管理器中定位当前文件：展开所有祖先目录，选中并滚到可见位置。
+   * 这是显式动作，不在标签切换时自动触发，避免用户正在浏览别处时被强行跳走。
+   */
+  const revealActive = (): void => {
+    const target = props.selected
+    if (target === undefined || target === '' || target.startsWith('/') || /^[A-Za-z]:[\\/]/.test(target)) return
+    const directories = treeAncestors(target)
+    setExpanded(current => {
+      const next = new Set(current)
+      for (const directory of directories) next.add(directory)
+      return next
+    })
+    setFocused(target)
+    setSelectedDirectory(directories.at(-1) ?? '')
+    if (typeof requestAnimationFrame !== 'function') return
+    // 子目录要等各自的 fs.list 回来才挂载；轮询几次直到目标行出现，避免只展开不滚动。
+    let tries = 0
+    const scrollToTarget = (): void => {
+      const rows = [...document.querySelectorAll<HTMLElement>('.dvw-tree-row[data-tree-path]')]
+      const row = rows.find(candidate => candidate.dataset.treePath === target)
+      if (row !== undefined) { row.scrollIntoView({ block: 'nearest' }); return }
+      if (tries++ < 20) window.setTimeout(scrollToTarget, 50)
+    }
+    requestAnimationFrame(scrollToTarget)
+  }
   const refreshStatus = useCallback(() => {
     void api<GitStatus>('git.status', { sessionId: props.sessionId })
       .then(status => setStatuses(new Map(status.changes.map(change => [change.path, gitStatusCode(change)]))))
@@ -415,7 +453,6 @@ function Explorer(props: { sessionId: string; cwd?: string; selected?: string; d
     return () => { clearTarget(); document.removeEventListener('dragenter', intercept, true); document.removeEventListener('dragover', intercept, true); document.removeEventListener('dragleave', intercept, true); document.removeEventListener('drop', intercept, true); window.removeEventListener('dvw-upload-files', uploadFiles) }
   }, [upload])
   const drop = (event: DragEvent) => { event.preventDefault(); setDropTarget(false); if (event.dataTransfer.files.length > 0) void upload('', event.dataTransfer.files) }
-  const destination = uploadDestination(selectedDirectory)
   const treeDrag = (event: DragEvent) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.stopPropagation(); setDropTarget(true) } }
   /**
    * 粘贴。复制走 fs.copy（目标已存在会 409，不覆盖）；剪切走 fs.move（宿主用原子 rename）。
@@ -481,18 +518,32 @@ function Explorer(props: { sessionId: string; cwd?: string; selected?: string; d
     addToConversation: entry => { void requestContextCard({ kind: 'file', path: entry.path }) },
     refresh,
   }
+  const workspaceName = props.cwd === undefined || props.cwd === '' ? '资源管理器' : baseName(props.cwd)
+  const emptyWorkspace = props.cwd !== undefined && props.cwd !== '' && rootRows !== undefined && rootRows.length === 0
   return <>
-    <div className="dvw-side-head">资源管理器
+    <div className="dvw-side-head" title={props.cwd ?? '资源管理器'}>
+      <span className="dvw-side-title"><Icon name="folder-opened"/><span className="dvw-side-title-text">{workspaceName}</span></span>
       <div className="dvw-toolbar">
         <input ref={picker} className="dvw-file-picker" type="file" accept="*/*" multiple onChange={event => { if (event.currentTarget.files) void upload(uploadDirectory.current, event.currentTarget.files); event.currentTarget.value = '' }}/>
-        <button className="dvw-icon" title={`上传文件到 ${destination || '工作区根目录'}`} onClick={() => { uploadDirectory.current = selectedDirectory; picker.current?.click() }}><Icon name="cloud-upload"/></button>
-        <button className="dvw-icon" title="新建文件" onClick={() => startCreating('file', selectedDirectory)}><Icon name="new-file"/></button>
-        <button className="dvw-icon" title="新建文件夹" onClick={() => startCreating('directory', selectedDirectory)}><Icon name="new-folder"/></button>
-        <button className="dvw-icon" title="刷新" onClick={refresh}><Icon name="refresh"/></button>
+        <button className="dvw-icon" title="新建文件" aria-label="新建文件" onClick={() => startCreating('file', selectedDirectory)}><Icon name="new-file"/></button>
+        <button className="dvw-icon" title="新建文件夹" aria-label="新建文件夹" onClick={() => startCreating('directory', selectedDirectory)}><Icon name="new-folder"/></button>
+        <button className="dvw-icon" title="在资源管理器中定位当前文件" aria-label="定位当前文件" disabled={props.selected === undefined} onClick={revealActive}><Icon name="list-tree"/></button>
+        <button className="dvw-icon" title="全部折叠" aria-label="全部折叠" disabled={expanded.size === 0} onClick={() => setExpanded(new Set())}><Icon name="collapse-all"/></button>
+        <button className="dvw-icon" title="刷新" aria-label="刷新" onClick={refresh}><Icon name="refresh"/></button>
       </div>
     </div>
-    <div className="dvw-tree" data-dvw-upload-directory="" data-drop-target={dropTarget} key={revision} onDragEnter={treeDrag} onDragOver={treeDrag} onDragLeave={() => setDropTarget(false)} onDrop={drop} onContextMenu={event => { event.preventDefault(); openMenu(event, null) }}>
+    <div className="dvw-tree" data-empty={emptyWorkspace||undefined} data-dvw-upload-directory="" data-drop-target={dropTarget} key={revision} onDragEnter={treeDrag} onDragOver={treeDrag} onDragLeave={() => setDropTarget(false)} onDrop={drop} onContextMenu={event => { event.preventDefault(); openMenu(event, null) }}>
       <Tree sessionId={props.sessionId} path="" depth={0} expanded={expanded} selected={props.selected} focused={focused} selectedDirectory={selectedDirectory} statuses={statuses} dirty={props.dirty} creating={creating} renaming={renaming} onToggle={path => setExpanded(current => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next })} onSelectDirectory={setSelectedDirectory} onSelectPath={setFocused} onOpen={props.onOpen} onUpload={(directory, files) => void upload(directory, files)} onContextMenu={openMenu} onCreatingChange={value => setCreating(current => current && ({ ...current, value, error: undefined }))} onCreatingCancel={() => setCreating(undefined)} onCreatingSubmit={() => void submitCreating()} onRenamingChange={value => setRenaming(current => current && { ...current, value })} onRenamingCancel={() => setRenaming(undefined)} onRenamingSubmit={() => void submitRename()}/>
+      {emptyWorkspace && <div className="dvw-explorer-empty" role="status">
+        <Icon name="files"/>
+        <strong>工作区还没有文件</strong>
+        <span>新建文件、文件夹，或把文件拖进来开始。</span>
+        <div className="dvw-explorer-empty-actions">
+          <button type="button" onClick={() => startCreating('file', '')}>新建文件</button>
+          <button type="button" onClick={() => startCreating('directory', '')}>新建文件夹</button>
+          <button type="button" onClick={() => { uploadDirectory.current = ''; picker.current?.click() }}>上传文件…</button>
+        </div>
+      </div>}
     </div>
     {menu !== undefined && <ContextMenu position={{ x: menu.x, y: menu.y }} label="文件操作" entries={explorerMenuItems({ entry: menu.entry, canPaste: fileClipboard !== undefined, ...(props.cwd === undefined ? {} : { absolute: props.cwd }), actions })} onClose={() => setMenu(undefined)}/>}
     {pendingDelete && <div className="dvw-confirm-backdrop" role="presentation"><section className="dvw-confirm" role="alertdialog" aria-modal="true" aria-labelledby="dvw-delete-title" aria-describedby="dvw-delete-message"><h2 id="dvw-delete-title">删除 {pendingDelete.kind === 'directory' ? '文件夹' : '文件'}</h2><p id="dvw-delete-message">是否删除“{pendingDelete.name}”？</p><p className="dvw-confirm-note">此操作无法撤销。</p><footer><button autoFocus onClick={() => setPendingDelete(undefined)}>取消</button><button className="dvw-danger-button" onClick={() => void remove()}>删除</button></footer></section></div>}
@@ -501,6 +552,12 @@ function Explorer(props: { sessionId: string; cwd?: string; selected?: string; d
 
 /** Return the workspace-relative directory used by the file picker. */
 export function uploadDestination(selectedDirectory?: string): string { return selectedDirectory ?? '' }
+
+/** 文件路径的祖先目录（从根到父目录），用于资源管理器「定位当前文件」逐层展开。 */
+export function treeAncestors(path: string): string[] {
+  const parts = path.split('/').filter(part => part !== '')
+  return parts.slice(0, -1).map((_part, index) => parts.slice(0, index + 1).join('/'))
+}
 
 /** Join an inline-created entry name to the currently selected Explorer directory. */
 export function createdEntryPath(directory: string, name: string): string { return directory ? `${directory}/${name}` : name }
@@ -512,6 +569,19 @@ function gitStatusCode(change: GitChange): string {
   if (change.untracked) return 'A'
   const code = change.worktree !== '.' ? change.worktree : change.index
   return code === '?' ? 'A' : code
+}
+
+/** Git 状态徽标的可读文案；资源管理器用字母比 6px 色点更易辨认，颜色仍由 data-status 提供。 */
+function statusLabel(code: string | undefined): string {
+  switch (code) {
+    case 'M': return '已修改'
+    case 'A': return '新增/未跟踪'
+    case 'D': return '已删除'
+    case 'R': return '已重命名'
+    case 'C': return '已复制'
+    case 'U': return '有冲突'
+    default: return '已更改'
+  }
 }
 
 function MarkdownOutline({headings,onClose,onHeading}:{headings:MarkdownHeading[];onClose():void;onHeading(index:number):void}) {
@@ -573,6 +643,12 @@ export function Search(props: { sessionId: string; service: VscodeWorkbench; onO
   const queryInput = useRef<HTMLInputElement>(null)
   const replaceInput = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
+  // 顶部命令入口/快捷键都走同一个聚焦动作：已经停在搜索视图时 autoFocus 不会再触发。
+  useEffect(() => {
+    const focus = (): void => { queryInput.current?.focus(); queryInput.current?.select() }
+    window.addEventListener('dvw-focus-search', focus)
+    return () => window.removeEventListener('dvw-focus-search', focus)
+  }, [])
   // onOpen 来自 Workbench 的内联箭头函数，每次渲染都会换身份；用 ref 持有最新实现，
   // 这样 F4 的命令注册（以及 step 的 useCallback）只做一次。
   const onOpenRef = useRef(props.onOpen); onOpenRef.current = props.onOpen
@@ -789,6 +865,25 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const setChatWidth = (value: number) => service.setLayout({ chatWidth: value })
   // 底部面板高度也在 layout 里（持久化）；拖动期间只写 CSS 变量，松手才走这里落库一次。
   const setBottomHeight = (value: number) => service.setLayout({ bottomHeight: value })
+  /**
+   * 顶部工作栏的响应式密度：窗口/侧栏变化后，命令入口与标签的最小宽度要跟着收。
+   * 这里只观察自身宽度（不是 window），因为对话栏开关、侧栏拖动都会改变可用宽度。
+   */
+  const topbarRef = useRef<HTMLDivElement>(null)
+  const [topbarCompact, setTopbarCompact] = useState(false)
+  useEffect(() => {
+    const element = topbarRef.current
+    if (element === null) return
+    const update = (): void => setTopbarCompact(element.clientWidth < 760)
+    update()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
   /**
    * 窗口在运行中缩小时，持久化的底部高度可能超出新视口。
    *
@@ -1314,6 +1409,14 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   // 键盘快捷键（Ctrl+` 等）收起面板则没有指针事件，只能在这里兜底。
   useEffect(()=>{if(snapshot.bottomPanel===undefined)setPanelMenu(undefined)},[snapshot.bottomPanel])
   const selectView=(view:WorkbenchView)=>{if(snapshot.view===view&&primarySideVisible){setPrimarySideVisible(false);return}setPrimarySideVisible(true);service.show(view)}
+  /** 顶部命令入口：打开搜索并聚焦输入框，不依赖当前是否已经停在搜索视图。 */
+  const openSearch = (): void => {
+    if (!primarySideVisible) setPrimarySideVisible(true)
+    service.show('search')
+    window.dispatchEvent(new Event('dvw-focus-search'))
+  }
+  const searchBinding = bindingOf('view.search')
+  const searchKeys = searchBinding === null ? '' : formatBinding(searchBinding).join('+')
   const selectHeading=(index:number)=>{if(activeTab===undefined)return;setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab));window.setTimeout(()=>window.dispatchEvent(new CustomEvent('dvw-markdown-heading',{detail:index})),50)}
   const suppressAttachmentDrop=(event:DragEvent)=>{if(!event.dataTransfer.types.includes('Files'))return;const target=event.target;const insideTree=target instanceof Element&&target.closest('.dvw-tree')!==null;if(!insideTree){event.preventDefault();event.stopPropagation()}}
   // 编辑器身份与大纲都在提前返回之前算：hooks 不能放在条件分支之后。
@@ -1354,7 +1457,19 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     <nav className="dvw-activity"><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='explorer'} title="资源管理器" onClick={()=>selectView('explorer')}><Icon name="files"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='search'} title="搜索" onClick={()=>selectView('search')}><Icon name="search"/></button><button className="dvw-act" data-active={primarySideVisible&&snapshot.view==='git'} title="源代码管理" onClick={()=>selectView('git')}><Icon name="source-control"/></button><button className="dvw-act" data-active={snapshot.bottomPanel==='problems'} title={`问题（${diagnosticsSnapshot.errors} 个错误，${diagnosticsSnapshot.warnings} 个警告）`} aria-label="问题" onClick={()=>{if(service.getPanels().some(panel=>panel.id==='problems'))service.toggleBottomPanel('problems')}}><Icon name="warning"/>{diagnosticsSnapshot.errors+diagnosticsSnapshot.warnings>0&&<span className="dvw-act-badge" data-severity={diagnosticsSnapshot.errors>0?'error':'warning'}>{diagnosticsSnapshot.errors+diagnosticsSnapshot.warnings>99?'99+':diagnosticsSnapshot.errors+diagnosticsSnapshot.warnings}</span>}</button><button className="dvw-act" data-active={snapshot.bottomPanel==='terminal'} disabled={!terminalAvailable} title={terminalAvailable?(snapshot.bottomPanel==='terminal'?'隐藏终端':'显示终端'):'终端适配器未安装'} onClick={()=>toggleTerminal(service)}><Icon name="terminal"/></button><button className="dvw-act dsh" title="返回 DSH" onClick={()=>hideWorkbench()}><Icon name="home"/></button><button className="dvw-act" title="在 DSH 设置中管理 AIDE 选项" onClick={()=>service.openDshSettings()}><Icon name="settings"/></button></nav>
     <aside className="dvw-side" data-side-width={sideWidth}>{snapshot.view==='explorer'&&<Explorer sessionId={sessionId} cwd={workspace?.cwd} selected={active} dirty={new Set(tabs.filter(tab=>tab.dirty).map(tab=>tab.path))} onOpen={(path,pin)=>void open(path,undefined,undefined,pin)}/>} {snapshot.view==='search'&&<Search sessionId={sessionId} service={service} onOpen={(path,line,column,pin)=>void open(path,line,column,pin)}/>} {snapshot.view==='git'&&<Git sessionId={sessionId} absoluteRoot={workspace?.cwd} onDiff={openDiffTab} onOpenGraph={openGitGraph} onOpenOutput={openGitOutput}/>}</aside>
     <PanelResizer className="dvw-side-resizer" label="拖动调整源码管理侧边栏宽度" width={sideWidth} min={210} max={640} defaultWidth={210} direction={1} onWidth={setSideWidth} onPreview={previewPanelWidth('sideWidth')}/>
-    <main className="dvw-main"><div className="dvw-tabs"><div className="dvw-tab-list">{tabs.map(tab=><button className="dvw-tab" data-active={tab.path===active} data-pinned={tab.pinned===true||undefined} key={tab.path} title={tab.diffSourcePath??tab.path} onClick={()=>setActive(tab.path)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setTabMenu({path:tab.path,x:event.clientX,y:event.clientY})}}><span className="dvw-tab-name">{tab.dirty?'● ':''}{tabLabel(tab)}</span><span onClick={event=>{event.stopPropagation();requestCloseTabs([tab.path])}}><Icon name="close"/></span></button>)}</div>{tabMenu!==undefined&&<ContextMenu position={{x:tabMenu.x,y:tabMenu.y}} label="标签页操作" entries={tabMenuEntries(tabMenu)} onClose={()=>setTabMenu(undefined)}/>}<div className="dvw-tab-actions">{tabs.length>0&&<button className="dvw-icon dvw-close-all" title="全部关闭" onClick={closeAll}><Icon name="close-all"/></button>}<button className="dvw-icon dvw-chat-action" data-active={chatVisible||undefined} title={chatVisible?'隐藏 DSH 对话栏 (Ctrl+Alt+B)':'显示 DSH 对话栏 (Ctrl+Alt+B)'} aria-pressed={chatVisible} onClick={()=>setChatVisible(value=>!value)}><Icon name={chatVisible?'layout-sidebar-right':'layout-sidebar-right-off'}/></button></div></div><div className="dvw-editor" data-outline={markdownPreview&&outlineVisible&&headings.length>0}>{error&&<div className="dvw-error"><button className="dvw-icon" onClick={()=>setError(undefined)}><Icon name="close"/></button>{error}</div>}{markdownPreview&&outlineVisible&&headings.length>0&&<MarkdownOutline headings={headings} onClose={()=>setOutlineVisible(false)} onHeading={selectHeading}/>} {markdown&&activeTab&&<div className="dvw-editor-toolbar"><button className="dvw-icon dvw-outline-toggle" data-active={outlineVisible} title={outlineVisible?'关闭 Markdown 大纲':'显示 Markdown 大纲'} onClick={()=>setOutlineVisible(value=>!value)}><Icon name="list-tree"/></button><button className="dvw-mode-button" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="code"/> 源码</button><button className="dvw-mode-button" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{activeTab?.diff&&<div className="dvw-editor-toolbar dvw-diff-toolbar">{diffMarkdown&&<div className="dvw-diff-preview-switch"><button className="dvw-mode-button" data-diff-view="diff" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="diff"/> 差异</button><button className="dvw-mode-button" data-diff-view="preview" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{!activeTab.preview&&<><button className="dvw-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button className="dvw-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button></>}</div>}<div className="dvw-editor-body" data-toolbar={markdown||activeTab?.diff!==undefined}>{activeTab?.tooLarge===true?<div className="dvw-editor-prompt"><strong>文件超过 5 MiB，是否加载此文件？</strong><span>{activeTab.path}（{Math.round(activeTab.size/1048576)} MiB）</span><span className="dvw-editor-prompt-note">大文件会让编辑器变慢，也会占用较多内存。</span><button type="button" className="dvw-mode-button" onClick={()=>void forceLoad(activeTab.path)}>加载此文件</button></div>:activeTab===undefined?<div className="dvw-empty"><div><strong>DSH AIDE</strong><br/>从资源管理器或搜索结果打开文件<br/><button type="button" className="dvw-dino-teaser" onClick={()=>openDino()}>或者，你想试试玩谷歌小恐龙吗？</button></div></div>:activeTab.path===GIT_GRAPH_PATH?<GitGraphTab key={activeTab.graphAll===true?'all':'current'} sessionId={sessionId} initialAllBranches={activeTab.graphAll===true} onOpenDiff={openDiffTab}/>:activeTab.path===GIT_OUTPUT_PATH?<GitOutputTab/>:activeTab.path===DINO_PATH?<DinoGame theme={colorScheme}/>:activeTab.diff?diffMarkdown&&activeTab.preview?<MarkdownPreview source={activeTab.diff.modified} sessionId={sessionId} path={activeTab.diffSourcePath??''}/>:<MonacoDiffEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} original={activeTab.diff.original} modified={activeTab.diff.modified} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.imageUrl?<div className="dvw-image-preview"><img src={activeTab.imageUrl} alt={activeTab.path}/><span>{activeTab.path}</span></div>:activeTab.documentPreview&&activeTab.documentUrl?<DocumentPreview kind={activeTab.documentPreview} src={activeTab.documentUrl} path={activeTab.path}/>:markdown&&activeTab.preview?<MarkdownPreview source={activeTab.draft} sessionId={sessionId} path={activeTab.path}/>:activeTab.externalAbsolute!==undefined?<MonacoEditor uri={activeTab.externalAbsolute.replaceAll('\\','/')} absolutePath={activeTab.externalAbsolute} readOnly value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={()=>{/* 只读：不会产生草稿 */}} onSave={()=>{/* 只读文件没有保存语义 */}}/>:<MonacoEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} absolutePath={workspace===undefined?undefined:workspaceAbsolutePath(workspace.cwd,activeTab.path)} value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={draft=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,draft,dirty:draft!==tab.content}:tab))} onSave={()=>void save(activeTab)}/>}</div></div></main>
+    <main className="dvw-main"><header className="dvw-topbar" ref={topbarRef} data-compact={topbarCompact||undefined} onDoubleClick={event=>event.preventDefault()}>
+      <div className="dvw-topbar-left" onDoubleClick={event=>event.stopPropagation()}>
+        <button type="button" className="dvw-command-center" title={`搜索文件或内容${searchKeys===''?'':`（${searchKeys}）`}`} aria-label="搜索文件或内容" onClick={openSearch}>
+          <Icon name="search"/><span>搜索文件或内容</span>{searchKeys!==''&&<kbd className="dvw-command-key">{searchKeys}</kbd>}
+        </button>
+      </div>
+      <div className="dvw-tab-list" role="tablist" aria-label="打开的编辑器">{tabs.map(tab=><button className="dvw-tab" role="tab" aria-selected={tab.path===active} data-active={tab.path===active} data-pinned={tab.pinned===true||undefined} key={tab.path} title={tab.diffSourcePath??tab.path} onClick={()=>setActive(tab.path)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setTabMenu({path:tab.path,x:event.clientX,y:event.clientY})}}><span className="dvw-tab-name">{tab.dirty?'● ':''}{tabLabel(tab)}</span><span onClick={event=>{event.stopPropagation();requestCloseTabs([tab.path])}}><Icon name="close"/></span></button>)}</div>
+      {tabMenu!==undefined&&<ContextMenu position={{x:tabMenu.x,y:tabMenu.y}} label="标签页操作" entries={tabMenuEntries(tabMenu)} onClose={()=>setTabMenu(undefined)}/>}
+      <div className="dvw-topbar-actions" onDoubleClick={event=>event.stopPropagation()}>
+        {tabs.length>0&&<button className="dvw-icon dvw-close-all" title="全部关闭" aria-label="全部关闭" onClick={closeAll}><Icon name="close-all"/></button>}
+        <button className="dvw-icon dvw-chat-action" data-active={chatVisible||undefined} title={chatVisible?'隐藏 DSH 对话栏 (Ctrl+Alt+B)':'显示 DSH 对话栏 (Ctrl+Alt+B)'} aria-pressed={chatVisible} onClick={()=>setChatVisible(value=>!value)}><Icon name={chatVisible?'layout-sidebar-right':'layout-sidebar-right-off'}/></button>
+      </div>
+    </header><div className="dvw-editor" data-outline={markdownPreview&&outlineVisible&&headings.length>0}>{error&&<div className="dvw-error"><button className="dvw-icon" onClick={()=>setError(undefined)}><Icon name="close"/></button>{error}</div>}{markdownPreview&&outlineVisible&&headings.length>0&&<MarkdownOutline headings={headings} onClose={()=>setOutlineVisible(false)} onHeading={selectHeading}/>} {markdown&&activeTab&&<div className="dvw-editor-toolbar"><button className="dvw-icon dvw-outline-toggle" data-active={outlineVisible} title={outlineVisible?'关闭 Markdown 大纲':'显示 Markdown 大纲'} onClick={()=>setOutlineVisible(value=>!value)}><Icon name="list-tree"/></button><button className="dvw-mode-button" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="code"/> 源码</button><button className="dvw-mode-button" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{activeTab?.diff&&<div className="dvw-editor-toolbar dvw-diff-toolbar">{diffMarkdown&&<div className="dvw-diff-preview-switch"><button className="dvw-mode-button" data-diff-view="diff" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="diff"/> 差异</button><button className="dvw-mode-button" data-diff-view="preview" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{!activeTab.preview&&<><button className="dvw-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button className="dvw-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button></>}</div>}<div className="dvw-editor-body" data-toolbar={markdown||activeTab?.diff!==undefined}>{activeTab?.tooLarge===true?<div className="dvw-editor-prompt"><strong>文件超过 5 MiB，是否加载此文件？</strong><span>{activeTab.path}（{Math.round(activeTab.size/1048576)} MiB）</span><span className="dvw-editor-prompt-note">大文件会让编辑器变慢，也会占用较多内存。</span><button type="button" className="dvw-mode-button" onClick={()=>void forceLoad(activeTab.path)}>加载此文件</button></div>:activeTab===undefined?<div className="dvw-empty"><div><strong>DSH AIDE</strong><br/>从资源管理器或搜索结果打开文件<br/><button type="button" className="dvw-dino-teaser" onClick={()=>openDino()}>或者，你想试试玩谷歌小恐龙吗？</button></div></div>:activeTab.path===GIT_GRAPH_PATH?<GitGraphTab key={activeTab.graphAll===true?'all':'current'} sessionId={sessionId} initialAllBranches={activeTab.graphAll===true} onOpenDiff={openDiffTab}/>:activeTab.path===GIT_OUTPUT_PATH?<GitOutputTab/>:activeTab.path===DINO_PATH?<DinoGame theme={colorScheme}/>:activeTab.diff?diffMarkdown&&activeTab.preview?<MarkdownPreview source={activeTab.diff.modified} sessionId={sessionId} path={activeTab.diffSourcePath??''}/>:<MonacoDiffEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} original={activeTab.diff.original} modified={activeTab.diff.modified} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.imageUrl?<div className="dvw-image-preview"><img src={activeTab.imageUrl} alt={activeTab.path}/><span>{activeTab.path}</span></div>:activeTab.documentPreview&&activeTab.documentUrl?<DocumentPreview kind={activeTab.documentPreview} src={activeTab.documentUrl} path={activeTab.path}/>:markdown&&activeTab.preview?<MarkdownPreview source={activeTab.draft} sessionId={sessionId} path={activeTab.path}/>:activeTab.externalAbsolute!==undefined?<MonacoEditor uri={activeTab.externalAbsolute.replaceAll('\\','/')} absolutePath={activeTab.externalAbsolute} readOnly value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={()=>{/* 只读：不会产生草稿 */}} onSave={()=>{/* 只读文件没有保存语义 */}}/>:<MonacoEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} absolutePath={workspace===undefined?undefined:workspaceAbsolutePath(workspace.cwd,activeTab.path)} value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={draft=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,draft,dirty:draft!==tab.content}:tab))} onSave={()=>void save(activeTab)}/>}</div></div></main>
     {bottomPanelId!==undefined&&<section className="dvw-bottom" style={{height:`var(--dvw-bottom-height, ${BOTTOM_HEIGHT.default}px)`,...(snapshot.bottomPanel===undefined?{display:'none'}:{})}}><div style={{height:4,cursor:'ns-resize'}} onPointerDown={dragBottomPanel}/><div className="dvw-bottom-head"><div className="dvw-panel-tabs" role="tablist" aria-label="底部面板">{BOTTOM_PANEL_TABS.map(tab=>{const available=panels.some(panel=>panel.id===tab.id);const selected=snapshot.bottomPanel===tab.id;return <button key={tab.id} type="button" role="tab" aria-selected={selected} className="dvw-panel-tab" disabled={!available} title={available?tab.label:`${tab.label}适配器未安装`} onClick={()=>selectBottomPanel(tab.id)}>{tab.label}</button>})}</div><button ref={panelMenuButton} type="button" className="dvw-icon dvw-bottom-more" title="更多操作" aria-label="更多操作" aria-haspopup="menu" aria-expanded={panelMenu!==undefined} onClick={togglePanelMenu}><Icon name="ellipsis"/></button>{snapshot.bottomPanel==='terminal'&&sessionId!==undefined&&<TerminalNewButton sessionId={sessionId}/>}<button className="dvw-icon" style={{marginLeft:'auto'}} onClick={()=>service.toggleBottomPanel(snapshot.bottomPanel!)}><Icon name="close"/></button></div><div className="dvw-bottom-body">{Panel&&cwd&&<Panel sessionId={sessionId} cwd={cwd} visible={snapshot.bottomPanel!==undefined} colorScheme={colorScheme} activePath={bottomPanelFilePath(activeTab)}/>}</div></section>}
     {panelMenu!==undefined&&<ContextMenu position={panelMenu} label="面板操作" entries={panelMenuEntries} ignorePointerDown={panelMenuButton} onClose={()=>setPanelMenu(undefined)}/>}
     <footer className="dvw-status"><span><Icon name="git-branch"/> 工作区</span><span>{workspace?.cwd??cwd??''}</span>{activeTab?.external&&<span>磁盘文件已变化</span>}<button className="dvw-status-problem" title="显示或隐藏问题面板 (Ctrl+Shift+M)" onClick={()=>{if(service.getPanels().some(panel=>panel.id==='problems'))service.toggleBottomPanel('problems')}}><span data-severity="error" aria-label={`${diagnosticsSnapshot.errors} 个错误`}>✕ {diagnosticsSnapshot.errors}</span><span data-severity="warning" aria-label={`${diagnosticsSnapshot.warnings} 个警告`}>! {diagnosticsSnapshot.warnings}</span></button><span className="dvw-status-lang" title={languageStatusTitle}>{languageStatusLabel}</span><button className="dvw-icon" style={{color:'white',marginLeft:'auto'}} onClick={()=>hideWorkbench()}>返回 DSH</button></footer>

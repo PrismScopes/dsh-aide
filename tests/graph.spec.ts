@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GitCommit } from '../src/types.ts'
-import { createdEntryPath, directoryAffected, graphRows, graphTrackPath, renamedPath, tabLabel, uploadDestination } from '../src/client/Workbench.tsx'
+import { createdEntryPath, directoryAffected, graphRows, graphTrackPath, renamedPath, tabLabel, treeAncestors, uploadDestination } from '../src/client/Workbench.tsx'
 import { markdownHeadings, markdownWorkspacePath } from '../src/client/MarkdownPreview.tsx'
 
 function commit(hash: string, parents: string[]): GitCommit {
@@ -45,6 +45,8 @@ describe('Markdown workspace links',()=>{it('resolves relative links inside the 
 describe('Editor tab labels',()=>{it('shows only the filename while paths remain distinct',()=>{expect(tabLabel({path:'Additional-Chapter/N8N_INSTALL_GUIDE.png'})).toBe('N8N_INSTALL_GUIDE.png');expect(tabLabel({path:'diff:commit:hash:docs/chapter7/README.md',diffSourcePath:'docs/chapter7/README.md'})).toBe('README.md');expect(tabLabel({path:'diff:anything',title:'nested/LICENSE.txt'})).toBe('LICENSE.txt')})})
 
 describe('Explorer upload destination',()=>{it('uses the selected directory and falls back to the workspace root',()=>{expect(uploadDestination('docs/assets')).toBe('docs/assets');expect(uploadDestination()).toBe('')})})
+
+describe('Explorer reveal ancestors',()=>{it('expands every directory on the way to the active file',()=>{expect(treeAncestors('src/client/Workbench.tsx')).toEqual(['src','src/client']);expect(treeAncestors('README.md')).toEqual([]);expect(treeAncestors('')).toEqual([])})})
 
 describe('Explorer inline creation',()=>{it('creates entries in the selected directory or workspace root',()=>{expect(createdEntryPath('docs/assets','logo.svg')).toBe('docs/assets/logo.svg');expect(createdEntryPath('','README.md')).toBe('README.md')})})
 
