@@ -553,7 +553,7 @@ export function ProblemsPanel({ cwd, activePath, visible: panelVisible }: Bottom
     ? separator()
     : { kind: 'item', id: spec.id, label: spec.label, onSelect: () => runMenuAction(spec.id, row) })
 
-  /** 扫描进度与结果由宿主推送（store → snapshot），这里只负责发起。 */
+  /** 扫描进度与结果由宿主推送（store → snapshot），这里只负责发起/取消。 */
   const scanWorkspace = (): void => {
     const workspace = activeLanguageWorkspace()
     if (workspace === undefined) {
@@ -563,6 +563,14 @@ export function ProblemsPanel({ cwd, activePath, visible: panelVisible }: Bottom
     void workspace.scan().then(result => {
       if (!result.supported) notifyLanguage('当前没有可扫描的语言服务', 'warn')
     }).catch(() => notifyLanguage('扫描工作区失败', 'error'))
+  }
+
+  const cancelWorkspaceScan = (): void => {
+    const workspace = activeLanguageWorkspace()
+    if (workspace === undefined) return
+    void workspace.cancelScan().then(result => {
+      notifyLanguage(result.cancelled ? '正在取消扫描…' : '扫描已经结束', 'info')
+    }).catch(() => notifyLanguage('取消扫描失败', 'warn'))
   }
 
   const emptyState = visible.length === 0
@@ -636,8 +644,13 @@ export function ProblemsPanel({ cwd, activePath, visible: panelVisible }: Bottom
         title="把当前问题作为上下文卡片加入 DSH 对话输入框"
         onClick={() => { void addProblemsToChat() }}
       >{aiDone ? '✓ 已添加' : '交给 AI'}</button>
-      <button type="button" className="dvw-problems-scan" disabled={scanning} onClick={scanWorkspace}>
-        {scanning ? '扫描中…' : '扫描工作区'}
+      <button
+        type="button"
+        className="dvw-problems-scan"
+        title={scanning ? '停止当前工作区扫描（已产出的诊断保留）' : '检查整个工作区（在 worker 中运行，不阻塞其它操作）'}
+        onClick={scanning ? cancelWorkspaceScan : scanWorkspace}
+      >
+        {scanning ? '取消扫描' : '扫描工作区'}
       </button>
     </div>
 

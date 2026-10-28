@@ -188,8 +188,7 @@ describe('ProblemsPanel', () => {
       scan: { running: true, checked: 3, total: 10, errors: 2, warnings: 1 },
     })
     const html = render()
-    expect(html).toContain('扫描中…')
-    expect(html).toMatch(/class="dvw-problems-scan" disabled=""/)
+    expect(html).toContain('取消扫描')
     expect(html).toContain('正在扫描工作区 3/10')
     expect(html).toContain('内置 TypeScript 5.6.3（可用）')
     expect(html).toContain('Pyright（未安装）')

@@ -170,6 +170,8 @@ export interface LanguageScanState {
   total: number
   errors: number
   warnings: number
+  /** 扫描失败/被资源上限终止时的可读原因。 */
+  error?: string
 }
 
 /** 客户端打开工作台/文件时向宿主拉取的总体信息。 */

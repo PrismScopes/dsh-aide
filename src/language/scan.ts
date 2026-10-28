@@ -32,6 +32,8 @@ export interface ScanFileResult { path: string; diagnostics: readonly LanguageDi
 export type ScanFileCallback = (path: string, diagnostics: readonly LanguageDiagnostic[]) => void
 
 const EMPTY_SCAN: LanguageScanResult = { checked: 0, errors: 0, warnings: 0 }
+/** 单文件诊断上限：生成代码/类型爆炸时避免一条文件把消息和面板撑爆。 */
+const MAX_DIAGNOSTICS_PER_FILE = 500
 
 /** Windows / macOS 文件系统大小写不敏感；同时把 TS 的 `/` 路径与 Node 的 `\` 路径归一。 */
 function keyOf(ts: TsModule, path: string): string {
@@ -78,7 +80,7 @@ export async function scanProject(
   try {
     program = ts.createProgram({ rootNames: fileNames, options: options.compilerOptions, host })
   } catch {
-    return EMPTY_SCAN
+    return { ...EMPTY_SCAN, error: 'TypeScript 程序创建失败' }
   }
   if (isAborted(signal)) return EMPTY_SCAN
 
@@ -93,7 +95,7 @@ export async function scanProject(
       ...program.getSemanticDiagnostics(),
     ]
   } catch {
-    return EMPTY_SCAN
+    return { ...EMPTY_SCAN, error: 'TypeScript 诊断计算失败' }
   }
   if (isAborted(signal)) return EMPTY_SCAN
 
@@ -147,7 +149,7 @@ function convertFileDiagnostics(ts: TsModule, sourceFile: TsSourceFile, diagnost
       ...(related.length === 0 ? {} : { related }),
     })
   }
-  return result.sort((left, right) => comparePosition(left.range.start, right.range.start) || severityRank(left.severity) - severityRank(right.severity))
+  return result.sort((left, right) => comparePosition(left.range.start, right.range.start) || severityRank(left.severity) - severityRank(right.severity)).slice(0, MAX_DIAGNOSTICS_PER_FILE)
 }
 
 function relatedInformationOf(ts: TsModule, diagnostic: TsDiagnostic): LanguageRelatedInformation[] {

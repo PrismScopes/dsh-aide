@@ -148,6 +148,8 @@ export async function dispatchLanguage(ctx: HostContext, method: string, body: R
         const state = await manager.scan(signal)
         return { supported: state !== undefined, ...(state === undefined ? {} : { state }) }
       }
+      case 'language.scanCancel':
+        return { cancelled: manager.cancelScan() }
       case 'language.read': {
         const file = await manager.readFile(pathField(), typeof body['languageId'] === 'string' ? body['languageId'] : undefined)
         if (file === undefined) throw new WorkbenchError('not-found', 'file is not available to the language service', 404)

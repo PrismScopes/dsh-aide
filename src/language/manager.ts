@@ -101,6 +101,7 @@ export class LanguageManager {
   private discovered: { available: DetectedServer[]; missing: ExternalServerDefinition[] } | undefined
   private scanState: LanguageScanState | undefined
   private scanRunning = false
+  private scanAbort: AbortController | undefined
   private lastStatusAt = 0
   private disposed = false
 
@@ -270,6 +271,11 @@ export class LanguageManager {
     if (this.scanRunning) return this.scanState
     const provider = await this.providerForLanguage('typescript')
     if (provider?.workspaceDiagnostics === undefined) return undefined
+    const controller = new AbortController()
+    const forwardAbort = (): void => controller.abort()
+    if (signal?.aborted === true) controller.abort()
+    signal?.addEventListener('abort', forwardAbort, { once: true })
+    this.scanAbort = controller
     this.scanRunning = true
     this.scanState = { running: true, checked: 0, total: 0, errors: 0, warnings: 0 }
     this.emitStatus(true)
@@ -283,19 +289,31 @@ export class LanguageManager {
         checked++
         this.scanState = { running: true, checked, total: this.scanState?.total ?? 0, errors, warnings }
         if (checked % SCAN_STATUS_EVERY === 0) this.emitStatus(true)
-      }, signal, total => {
+      }, controller.signal, total => {
         this.scanState = { running: true, checked: this.scanState?.checked ?? 0, total, errors, warnings }
         this.emitStatus(true)
       })
-      this.scanState = { running: false, checked: result.checked, total: result.checked, errors: result.errors, warnings: result.warnings }
+      const total = Math.max(this.scanState?.total ?? 0, result.checked)
+      this.scanState = { running: false, checked: result.checked, total, errors: result.errors, warnings: result.warnings, ...(result.error === undefined ? {} : { error: result.error }) }
+      if (controller.signal.aborted) this.log('info', `工作区扫描已取消（已检查 ${result.checked} 个文件）`)
+      else if (result.error !== undefined) this.log('warn', `工作区扫描未完成：${result.error}`)
     } catch (error) {
       this.log('warn', `工作区诊断扫描失败：${errorMessage(error)}`)
-      this.scanState = { running: false, checked, total: checked, errors, warnings }
+      this.scanState = { running: false, checked, total: Math.max(this.scanState?.total ?? 0, checked), errors, warnings }
     } finally {
+      signal?.removeEventListener('abort', forwardAbort)
+      if (this.scanAbort === controller) this.scanAbort = undefined
       this.scanRunning = false
       this.emitStatus(true)
     }
     return this.scanState
+  }
+
+  /** 取消正在运行的工作区扫描；worker 会被 terminate，已产出的结果保留。 */
+  cancelScan(): boolean {
+    if (!this.scanRunning) return false
+    this.scanAbort?.abort()
+    return true
   }
 
   /** 读取只读文件（跳转目标可能在 node_modules / TypeScript lib 里）。 */
@@ -349,6 +367,8 @@ export class LanguageManager {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.scanAbort?.abort()
+    this.scanAbort = undefined
     for (const timer of this.diagnosticsTimers.values()) clearTimeout(timer)
     this.diagnosticsTimers.clear()
     for (const provider of this.providers) {

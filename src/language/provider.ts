@@ -42,6 +42,8 @@ export interface LanguageScanResult {
   checked: number
   errors: number
   warnings: number
+  /** 扫描无法完成时的可读原因（例如 worker 内存上限）；正常完成时没有。 */
+  error?: string
 }
 
 /** provider 把诊断推给管理器的回调；path 为绝对路径。 */

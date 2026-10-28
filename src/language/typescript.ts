@@ -79,6 +79,13 @@ const MAX_SOURCE_FILE_BYTES = 1024 * 1024
 const MAX_READ_FILE_CHARS = 2 * 1024 * 1024
 /** lineStarts 缓存条目上限：切文件很频繁时避免无界增长。 */
 const MAX_LINE_CACHE_ENTRIES = 256
+/** worker 失败后允许宿主进程内回退的最大根文件数：再大就只报错，避免宿主 OOM。 */
+const IN_PROCESS_SCAN_MAX_FILES = 400
+/** worker 堆上限：TypeScript 大项目很容易超过 1.5GB；超限只让 worker 退出，宿主必须存活。 */
+const SCAN_WORKER_HEAP_MB = 1536
+/** 传给 worker 的打开文档上限：避免几 MB 的未保存正文被 structured clone 进 worker。 */
+const MAX_WORKER_OPEN_DOCS = 32
+const MAX_WORKER_OPEN_BYTES = 8 * 1024 * 1024
 
 /** 内部打开文档记录：正文是客户端推来的内存快照，version 由客户端保证单调。 */
 interface OpenDocument {
@@ -98,7 +105,7 @@ let scanWorkerAvailable: boolean | undefined
 /** worker 只回三种消息；类型写在宿主侧，避免为了类型把 worker 模块（及其 typescript 运行时）import 进来。 */
 type ScanWorkerMessage =
   | { type: 'total'; total: number }
-  | { type: 'file'; file: { path: string; diagnostics: readonly LanguageDiagnostic[] } }
+  | { type: 'files'; files: readonly { path: string; diagnostics: readonly LanguageDiagnostic[] }[] }
   | { type: 'done'; result: LanguageScanResult }
   | { type: 'error'; message: string }
 
@@ -307,6 +314,8 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
   /** 程序根文件（tsconfig 的 fileNames，或扫描结果）。 */
   private rootFiles: string[] = []
   private settings: TsCompilerOptions = {}
+  /** 根文件/编译设置是否已加载；扫描可在不创建宿主语言服务/程序的情况下只做这一步。 */
+  private projectLoaded = false
   private formatOptions: TsFormatCodeSettings | undefined
 
   private readonly openDocuments = new Map<string, OpenDocument>()
@@ -379,7 +388,10 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
       const ts = await import('typescript')
       if (this.disposed) return
       this.ts = ts
-      await this.loadProject(ts)
+      if (!this.projectLoaded) {
+        await this.loadProject(ts)
+        this.projectLoaded = true
+      }
       if (this.disposed) return
       this.formatOptions = ts.getDefaultFormatCodeSettings('\n')
       this.service = ts.createLanguageService(this.createHost(ts), ts.createDocumentRegistry(ts.sys.useCaseSensitiveFileNames, this.workspace))
@@ -791,23 +803,24 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
    */
   async workspaceDiagnostics(onFile: (path: string, diagnostics: readonly LanguageDiagnostic[]) => void, signal?: AbortSignal, onTotal?: (total: number) => void): Promise<LanguageScanResult> {
     if (this.disposed) return EMPTY_SCAN
-    let ready
-    try {
-      ready = await this.ensureService()
-    } catch (error) {
-      this.warn(`工作区扫描初始化失败：${messageOf(error)}`)
-      return EMPTY_SCAN
-    }
-    if (ready === undefined) return EMPTY_SCAN
+    // 扫描只需要 rootFiles/编译设置，不需要先在宿主里 createLanguageService / 建一个完整程序：
+    // 大工作区那样做会把宿主堆顶到上限，worker 还没启动就 OOM。
+    const ts = await this.tsForProject()
+    if (ts === undefined || this.disposed) return EMPTY_SCAN
     if (isAborted(signal)) return EMPTY_SCAN
-    const { ts } = ready
+    const openDocuments: { path: string; languageId: string; version: number; content: string }[] = []
+    let openBytes = 0
+    for (const document of this.openDocuments.values()) {
+      if (openDocuments.length >= MAX_WORKER_OPEN_DOCS) break
+      if (openBytes + document.content.length > MAX_WORKER_OPEN_BYTES) continue
+      openBytes += document.content.length
+      openDocuments.push({ path: document.path, languageId: document.languageId, version: document.version, content: document.content })
+    }
     const options: ScanOptions = {
       workspace: this.workspace,
       rootFiles: this.scriptFileNames(),
       compilerOptions: this.settings,
-      openDocuments: [...this.openDocuments.values()].map(document => ({
-        path: document.path, languageId: document.languageId, version: document.version, content: document.content,
-      })),
+      openDocuments,
     }
     // 生产构建优先用 worker：CPU 密集的语义检查不占用宿主事件循环。源码/测试环境没有
     // lib/scan-worker.js，自动回退到同一个 scanProject 实现。
@@ -816,7 +829,12 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
         return await this.workspaceDiagnosticsInWorker(options, onFile, signal, onTotal)
       } catch (error) {
         if (isAborted(signal)) return EMPTY_SCAN
-        this.warn(`工作区扫描 worker 失败，回退到进程内扫描：${messageOf(error)}`)
+        this.warn(`工作区扫描 worker 失败：${messageOf(error)}`)
+        // worker 失败常见原因是项目超过 worker 内存上限。大项目回退到宿主进程内扫描会把
+        // 同样大的 TypeScript 程序再建一遍，直接撑爆宿主堆（DSH 会整体崩溃）；只对小工作区回退。
+        if (options.rootFiles.length > IN_PROCESS_SCAN_MAX_FILES) {
+          return { ...EMPTY_SCAN, error: `扫描 worker 失败或超出内存上限（${messageOf(error)}）；请用 tsconfig 的 include 缩小范围后重试` }
+        }
       }
     }
     return await scanProject(ts, options, onFile, signal, onTotal)
@@ -830,13 +848,45 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
     return scanWorkerAvailable
   }
 
+  /**
+   * 扫描用的 TypeScript 环境：只加载 typescript 和项目根文件/编译设置，不创建语言服务。
+   * 这样「没有打开文件就直接扫描」的大工作区不会先在宿主里建一整份程序。
+   */
+  private async tsForProject(): Promise<TsModule | undefined> {
+    if (this.disposed) return undefined
+    let ts = this.ts
+    if (ts === undefined) {
+      try {
+        ts = await import('typescript')
+      } catch (error) {
+        this.warn(`工作区扫描无法加载 TypeScript：${messageOf(error)}`)
+        return undefined
+      }
+      if (this.disposed) return undefined
+      this.ts = ts
+    }
+    if (!this.projectLoaded) {
+      try {
+        await this.loadProject(ts)
+        this.projectLoaded = true
+      } catch (error) {
+        this.warn(`工作区扫描无法解析项目：${messageOf(error)}`)
+        return undefined
+      }
+    }
+    return ts
+  }
+
   private async workspaceDiagnosticsInWorker(
     options: ScanOptions,
     onFile: (path: string, diagnostics: readonly LanguageDiagnostic[]) => void,
     signal?: AbortSignal,
     onTotal?: (total: number) => void,
   ): Promise<LanguageScanResult> {
-    const worker = new Worker(SCAN_WORKER_URL, { workerData: options })
+    const worker = new Worker(SCAN_WORKER_URL, {
+      workerData: options,
+      resourceLimits: { maxOldGenerationSizeMb: SCAN_WORKER_HEAP_MB, maxYoungGenerationSizeMb: 128, stackSizeMb: 8 },
+    })
     let checked = 0, errors = 0, warnings = 0
     let settled = false
     return await new Promise<LanguageScanResult>((resolveScan, rejectScan) => {
@@ -851,14 +901,16 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
       const abort = (): void => finish({ checked, errors, warnings })
       signal?.addEventListener('abort', abort, { once: true })
       worker.on('message', (message: ScanWorkerMessage) => {
-        if (message.type === 'file') {
-          const diagnostics = message.file.diagnostics
-          checked++
-          for (const diagnostic of diagnostics) {
-            if (diagnostic.severity === 'error') errors++
-            else if (diagnostic.severity === 'warning') warnings++
+        if (message.type === 'files') {
+          for (const file of message.files) {
+            const diagnostics = file.diagnostics
+            checked++
+            for (const diagnostic of diagnostics) {
+              if (diagnostic.severity === 'error') errors++
+              else if (diagnostic.severity === 'warning') warnings++
+            }
+            try { onFile(file.path, diagnostics) } catch { /* 回调失败不终止扫描 */ }
           }
-          try { onFile(message.file.path, diagnostics) } catch { /* 回调失败不终止扫描 */ }
           return
         }
         if (message.type === 'done') { finish(message.result); return }
@@ -912,6 +964,7 @@ export class TypeScriptLanguageProvider implements LanguageProvider {
     this.diagnosticsCache.clear()
     this.lineCache.clear()
     this.rootFiles = []
+    this.projectLoaded = false
   }
 
   /* ───────────────────────────── 内部实现 ───────────────────────────── */

@@ -181,9 +181,15 @@ export class LanguageWorkspace {
     return this.request<{ supported: boolean; state?: LanguageScanState }>('language.scan', {}, signal, { supported: false }).then(result => {
       const state = result.state
       if (state === undefined) appendOutput('language', '扫描没有返回结果', 'warn')
+      else if (state.error !== undefined) appendOutput('language', `扫描未完成：${state.error}`, 'warn')
       else appendOutput('language', `扫描完成：检查 ${state.checked} 个文件，${state.errors} 个错误，${state.warnings} 个警告`)
       return result
     })
+  }
+
+  /** 取消正在运行的工作区扫描（已产出的诊断保留）。 */
+  cancelScan(): Promise<{ cancelled: boolean }> {
+    return this.request<{ cancelled: boolean }>('language.scanCancel', {}, undefined, { cancelled: false })
   }
 
   /** 读取宿主语言服务知道、但工作台文件 API 不一定能读的只读文件（跳转目标）。 */

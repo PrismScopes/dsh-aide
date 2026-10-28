@@ -16,7 +16,7 @@ interface ScanWorkerData extends ScanOptions {}
 
 export type ScanWorkerMessage =
   | { type: 'total'; total: number }
-  | { type: 'file'; file: ScanFileResult }
+  | { type: 'files'; files: ScanFileResult[] }
   | { type: 'done'; result: { checked: number; errors: number; warnings: number } }
   | { type: 'error'; message: string }
 
@@ -25,11 +25,20 @@ if (parentPort !== null) {
   const data = workerData as ScanWorkerData
   void (async () => {
     try {
+      let batch: ScanFileResult[] = []
+      const flush = (): void => {
+        if (batch.length === 0) return
+        port.postMessage({ type: 'files', files: batch } satisfies ScanWorkerMessage)
+        batch = []
+      }
       const result = await scanProject(ts, data, (path, diagnostics) => {
-        port.postMessage({ type: 'file', file: { path, diagnostics } } satisfies ScanWorkerMessage)
+        batch.push({ path, diagnostics })
+        // 批量回传：数千个文件逐个 postMessage 会把结果消息和宿主回调都放大成洪峰。
+        if (batch.length >= 48) flush()
       }, undefined, total => {
         port.postMessage({ type: 'total', total } satisfies ScanWorkerMessage)
       })
+      flush()
       port.postMessage({ type: 'done', result } satisfies ScanWorkerMessage)
     } catch (error) {
       port.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) } satisfies ScanWorkerMessage)
