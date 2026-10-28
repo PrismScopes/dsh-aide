@@ -10,7 +10,7 @@
  * 避免「加入卡片后源头又变了」的不一致（见方案文档 5.2 / 七）。
  */
 
-export type ContextCardKind = 'problems' | 'file' | 'selection' | 'terminal' | 'subagent'
+export type ContextCardKind = 'problems' | 'problem' | 'file' | 'selection' | 'terminal' | 'subagent'
 
 export interface ContextCardRequest {
   kind: ContextCardKind
@@ -48,9 +48,15 @@ export function requestContextCard(request: ContextCardRequest): Promise<boolean
   if (typeof window === 'undefined') return Promise.resolve(false)
   return new Promise<boolean>(resolve => {
     let settled = false
-    const finish = (ok: boolean) => { if (!settled) { settled = true; resolve(ok) } }
+    let timer: number | undefined
+    const finish = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+      resolve(ok)
+    }
     // 没有 Workbench 监听（例如测试 harness/工作台未挂载）时不能永久挂起按钮。
-    window.setTimeout(() => finish(false), 1500)
+    timer = window.setTimeout(() => finish(false), 1500)
     window.dispatchEvent(new CustomEvent<ContextCardEventDetail>(CONTEXT_CARD_EVENT, { detail: { ...request, resolve: finish } }))
   })
 }

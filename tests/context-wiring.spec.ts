@@ -29,9 +29,13 @@ describe('context card wiring', () => {
     expect(workbench).toContain('setContextCardScope(')
   })
 
-  it('passes the active editor path to bottom panels', () => {
+  it('passes a real file path (not a tab key) to bottom panels', () => {
     expect(service).toContain('activePath?: string')
-    expect(workbench).toContain('activePath={activeTab?.path}')
+    expect(workbench).toContain('activePath={bottomPanelFilePath(activeTab)}')
+    // 外部只读标签用绝对路径，diff/git/游戏等虚拟标签不传路径。
+    expect(workbench).toContain('function bottomPanelFilePath')
+    expect(workbench).toContain('tab.externalAbsolute')
+    expect(workbench).toContain("tab.path.startsWith('diff:')")
   })
 
   it('offers a context-card action in the editor DSH submenu', () => {

@@ -109,4 +109,11 @@ describe('addContextCard', () => {
     expect(candidates.some(candidate => candidate.name.startsWith('工作区问题'))).toBe(true)
     expect(candidates.every(candidate => typeof candidate.value === 'string')).toBe(true)
   })
+
+  it('serializes a single diagnostic with its 1-based position', async () => {
+    await expect(serializeContextPayload({
+      kind: 'problem', label: '问题 · a.ts:3:5', clipboardText: '问题', cwd: WS, path: A,
+      line: 3, column: 5, message: '类型“string”不能赋给“number”',
+    })).resolves.toBe(`问题：${A}:3:5 类型“string”不能赋给“number”`)
+  })
 })

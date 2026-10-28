@@ -44,6 +44,9 @@ const CHANNELS: readonly { id: OutputChannel; label: string; empty: string }[] =
 
 /** 虚拟化的固定行高；与 outputStyles.ts 里 `.dvw-output-line` 的 height/line-height 必须一致。 */
 export const OUTPUT_LINE_HEIGHT = 18
+/** 加入对话时最多携带的最近行数/字符数（防止整通道日志进草稿与模型上下文）。 */
+export const OUTPUT_CARD_LINES = 300
+export const OUTPUT_CARD_CHARS = 32000
 /** 可视区上下各多渲染的行数，减少快速滚动时的白屏。 */
 export const OUTPUT_OVERSCAN = 12
 /** 还没测量到 DOM 高度时（服务端渲染、首帧）按这个视口估高。 */
@@ -189,7 +192,7 @@ function OutputText({ text, cwd }: { text: string; cwd: string }) {
 
 /* ────────────────────────────── 面板 ────────────────────────────── */
 
-export function OutputPanel({ cwd }: BottomPanelProps) {
+export function OutputPanel({ cwd, visible: panelVisible }: BottomPanelProps) {
   const [channel, setChannel] = useState<OutputChannel>(() => readOutputChannel())
   const [filters, setFilters] = useState<OutputLevelFilters>(DEFAULT_OUTPUT_LEVEL_FILTERS)
   const [query, setQuery] = useState('')
@@ -201,6 +204,7 @@ export function OutputPanel({ cwd }: BottomPanelProps) {
   const [notice, setNotice] = useState<string | undefined>(undefined)
 
   const logRef = useRef<HTMLDivElement>(null)
+  const savedScrollTop = useRef(0)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const previousChannel = useRef(channel)
 
@@ -212,7 +216,13 @@ export function OutputPanel({ cwd }: BottomPanelProps) {
 
   const channelInfo = CHANNELS.find(entry => entry.id === channel) ?? CHANNELS[0]!
   /** 「当前可见输出」= 过滤后全部行（不是虚拟化的可视窗口），复制/加入对话都用它。 */
-  const visibleText = useMemo(() => filtered.map(line => `${formatTime(line.at)}  ${line.text}`).join('\n'), [filtered])
+  // 上下文卡片的载荷会进 composer 草稿/会话历史：只取最近的窗口，避免把 4000 行整段塞进去。
+  const visibleText = useMemo(() => {
+    const all = filtered.map(line => `${formatTime(line.at)}  ${line.text}`)
+    const kept = all.slice(-OUTPUT_CARD_LINES)
+    const text = kept.join('\n')
+    return text.length > OUTPUT_CARD_CHARS ? text.slice(-OUTPUT_CARD_CHARS) : text
+  }, [filtered])
 
   // 视口高度：面板拖拽改变高度时虚拟化窗口要跟着变。
   useEffect(() => {
@@ -234,13 +244,28 @@ export function OutputPanel({ cwd }: BottomPanelProps) {
     previousChannel.current = channel
     if (switched) {
       element.scrollTop = element.scrollHeight
+      savedScrollTop.current = element.scrollTop
       setScrollTop(element.scrollTop)
       return
     }
     if (locked || !following) return
     element.scrollTop = element.scrollHeight
+    savedScrollTop.current = element.scrollTop
     setScrollTop(element.scrollTop)
   }, [filtered, channel, locked, following])
+
+  /* 面板从 display:none 恢复时 scrollTop 被浏览器重置：跟随状态回到底部，锁定状态回上次位置。 */
+  useEffect(() => {
+    if (!panelVisible) return
+    const element = logRef.current
+    if (element === null) return
+    if (locked || !following) {
+      if (element.scrollTop !== savedScrollTop.current) element.scrollTop = savedScrollTop.current
+    } else {
+      element.scrollTop = element.scrollHeight
+    }
+    setScrollTop(element.scrollTop)
+  }, [panelVisible])
 
   useEffect(() => () => {
     if (noticeTimer.current !== undefined) clearTimeout(noticeTimer.current)
@@ -253,7 +278,9 @@ export function OutputPanel({ cwd }: BottomPanelProps) {
   }
 
   const handleScroll = (event: UIEvent<HTMLDivElement>): void => {
+    if (!panelVisible) return
     const element = event.currentTarget
+    savedScrollTop.current = element.scrollTop
     setScrollTop(element.scrollTop)
     if (element.clientHeight !== viewportHeight) setViewportHeight(element.clientHeight)
     const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_THRESHOLD_PX
@@ -278,6 +305,7 @@ export function OutputPanel({ cwd }: BottomPanelProps) {
     const element = logRef.current
     if (element === null) return
     element.scrollTop = element.scrollHeight
+    savedScrollTop.current = element.scrollTop
     setScrollTop(element.scrollTop)
   }
 

@@ -15,7 +15,7 @@
  *
  * 没有 DSH composer 服务时（旧版本/测试环境）全部路径安全退化为旧的文本插入（dshChat.ts）。
  */
-import { baseName, workspaceRelativeOf } from './language/paths.ts'
+import { baseName, samePath, workspaceRelativeOf, absolutePathOf } from './language/paths.ts'
 import { diagnosticsStoreFor } from './language/diagnostics.ts'
 import { formatSnippetQuote } from './dshChat.ts'
 import { insertTextIntoComposer, focusDshComposer } from './dshChat.ts'
@@ -39,6 +39,10 @@ interface ContextPayload {
   scope?: 'file' | 'workspace'
   lineStart?: number
   lineEnd?: number
+  /** 单条诊断的 1 基位置与消息。 */
+  line?: number
+  column?: number
+  message?: string
   text?: string
   language?: string
 }
@@ -143,18 +147,19 @@ export function serializeProblems(payload: Pick<ContextPayload, 'cwd' | 'scope' 
   const snapshot = diagnosticsStoreFor(payload.cwd).getSnapshot()
   const limit = 200
   const rows: string[] = []
+  let truncated = false
   for (const file of snapshot.files) {
-    if (payload.scope === 'file' && payload.path !== undefined && file.path !== payload.path) continue
+    if (payload.scope === 'file' && payload.path !== undefined && !samePath(file.path, payload.path)) continue
     for (const diagnostic of file.diagnostics) {
-      if (rows.length >= limit) break
+      if (rows.length >= limit) { truncated = true; break }
       const at = `${file.path}:${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}`
       const source = diagnostic.source === undefined ? '' : ` (${diagnostic.source}${diagnostic.code === undefined ? '' : `:${diagnostic.code}`})`
       rows.push(`- ${at} [${diagnostic.severity}] ${diagnostic.message}${source}`)
     }
-    if (rows.length >= limit) break
+    if (truncated) break
   }
   const where = payload.scope === 'file' ? '当前文件' : '工作区'
-  const header = `${where}诊断（${rows.length}${rows.length >= limit ? '+' : ''} 条）`
+  const header = `${where}诊断（${rows.length}${truncated ? '+' : ''} 条）`
   return rows.length === 0 ? `${header}：没有发现问题。` : `${header}：\n${rows.join('\n')}`
 }
 
@@ -171,6 +176,10 @@ export async function serializeContextPayload(payload: ContextPayload): Promise<
     })
   }
   if (payload.kind === 'problems') return serializeProblems(payload)
+  if (payload.kind === 'problem') {
+    const at = payload.path === undefined ? '' : `${payload.path}${payload.line === undefined ? '' : `:${payload.line}${payload.column === undefined ? '' : `:${payload.column}`}`}`
+    return `问题：${at}${payload.message === undefined ? '' : ` ${payload.message}`}`.trim()
+  }
   if (payload.kind === 'terminal') return payload.text ?? '（终端输出上下文）'
   if (payload.kind === 'subagent') return payload.text ?? '（子代理上下文）'
   return payload.label
@@ -183,10 +192,10 @@ function problemPayload(scopeValue: 'file' | 'workspace'): ContextPayload | unde
   if (cwd === undefined) return undefined
   const activePath = scope.activePath
   if (scopeValue === 'file' && activePath === undefined) return undefined
-  const absolute = activePath === undefined ? undefined : workspaceAbsolute(cwd, activePath)
+  const absolute = activePath === undefined ? undefined : absoluteOf(cwd, activePath)
   const snapshot = diagnosticsStoreFor(cwd).getSnapshot()
   const count = scopeValue === 'file'
-    ? (snapshot.files.find(file => file.path === absolute)?.diagnostics.length ?? 0)
+    ? (snapshot.files.find(file => absolute !== undefined && samePath(file.path, absolute))?.diagnostics.length ?? 0)
     : snapshot.errors + snapshot.warnings + snapshot.infos + snapshot.hints
   return {
     kind: 'problems',
@@ -203,7 +212,7 @@ function problemPayload(scopeValue: 'file' | 'workspace'): ContextPayload | unde
 function filePayload(path: string): ContextPayload | undefined {
   const cwd = scope.cwd
   if (cwd === undefined || path === '') return undefined
-  const absolute = workspaceAbsolute(cwd, path)
+  const absolute = absoluteOf(cwd, path)
   return {
     kind: 'file',
     cwd,
@@ -227,19 +236,35 @@ export async function addContextCard(request: ContextCardRequest, sessionId?: st
   const id = sessionId ?? scope.sessionId
   let payload: ContextPayload | undefined
   if (request.kind === 'problems') payload = problemPayload(request.scope ?? 'workspace')
+  else if (request.kind === 'problem' && request.path !== undefined) {
+    payload = {
+      kind: 'problem',
+      cwd,
+      ...(id === undefined ? {} : { sessionId: id }),
+      path: absoluteOf(cwd, request.path),
+      ...(request.line === undefined ? {} : { line: request.line }),
+      ...(request.column === undefined ? {} : { column: request.column }),
+      ...(request.message === undefined ? {} : { message: request.message }),
+      label: `问题 · ${baseName(request.path)}${request.line === undefined ? '' : `:${request.line}`}`,
+      clipboardText: `问题 ${request.path}${request.line === undefined ? '' : `:${request.line}`}`,
+      appearance: 'file',
+    }
+  }
   else if (request.kind === 'file' && request.path !== undefined) payload = filePayload(request.path)
   else if (request.kind === 'selection') {
+    // 编辑器菜单给的是 Monaco 的绝对 URI 路径；卡片按工作区相对路径展示/序列化，和文件卡片一致。
+    const path = request.path === undefined ? undefined : (workspaceRelativeOf(cwd, request.path) ?? request.path)
     payload = {
       kind: 'selection',
       cwd,
       ...(id === undefined ? {} : { sessionId: id }),
-      ...(request.path === undefined ? {} : { path: request.path }),
+      ...(path === undefined ? {} : { path }),
       ...(request.lineStart === undefined ? {} : { lineStart: request.lineStart }),
       ...(request.lineEnd === undefined ? {} : { lineEnd: request.lineEnd }),
       ...(request.text === undefined ? {} : { text: request.text }),
       ...(request.language === undefined ? {} : { language: request.language }),
-      label: `选区 · ${request.title ?? baseName(request.path ?? '选区')}`,
-      clipboardText: `选区 ${request.path ?? ''}`,
+      label: `选区 · ${request.title ?? baseName(path ?? '选区')}`,
+      clipboardText: `选区 ${path ?? ''}`,
       appearance: 'file',
     }
   } else if (request.kind === 'terminal') {
@@ -284,11 +309,10 @@ function tryInsertChip(payload: ContextPayload, sessionId: string): boolean {
   } catch { return false }
 }
 
-/** 工作区相对路径 → 绝对路径（与 menus.ts 的 workspaceAbsolutePath 同规则，避免空根）。 */
-function workspaceAbsolute(cwd: string, relative: string): string {
-  const base = cwd.replace(/[\\/]+$/, '')
-  const separator = base.includes('\\') ? '\\' : '/'
-  return `${base}${separator}${relative.split('/').join(separator)}`
+/** 工作区相对路径 → 绝对路径；已经是绝对路径（外部只读标签/Monaco URI 路径）则原样返回。 */
+function absoluteOf(cwd: string, path: string): string {
+  if (/^(?:[A-Za-z]:[\\/]|[\\/]{1,2})/.test(path)) return path
+  return absolutePathOf(cwd, path)
 }
 
 /* ────────────────────────────── `@` 候选源 ────────────────────────────── */

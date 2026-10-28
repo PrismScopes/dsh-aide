@@ -543,7 +543,10 @@ describe('panel source invariants', () => {
   })
 
   it('wires the AI context card request, quick fix and the shared context menu', () => {
-    expect(componentSource).toContain("requestContextCard({ kind: 'problems', scope })")
+    // 工具栏/文件行走 kind:'problems' + scope；单条诊断行带行列消息走 kind:'problem'。
+    expect(componentSource).toContain("kind: 'problems' as const")
+    expect(componentSource).toContain("kind: 'problem' as const")
+    expect(componentSource).toContain('requestContextCard(request)')
     expect(componentSource).toContain("from './language/actions.ts'")
     expect(componentSource).toContain('quickFix()')
     expect(componentSource).toContain("from './ContextMenu.tsx'")

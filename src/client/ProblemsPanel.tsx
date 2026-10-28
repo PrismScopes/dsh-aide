@@ -315,7 +315,7 @@ function ServerSummary({ builtin, servers }: { builtin: LanguageBuiltinInfo; ser
  * 「交给 AI」的文件范围都以它为准；`sessionId` / `colorScheme` / `header` 当前用不到（扫描走已绑定的
  * 语言服务工作区，颜色全部由 DSH 主题令牌决定，头部容器留给别的面板）。
  */
-export function ProblemsPanel({ cwd, activePath }: BottomPanelProps) {
+export function ProblemsPanel({ cwd, activePath, visible: panelVisible }: BottomPanelProps) {
   const snapshot = useDiagnostics(cwd)
   const [filters, setFilters] = useState<SeverityFilterState>(DEFAULT_SEVERITY_FILTERS)
   const [query, setQuery] = useState('')
@@ -334,6 +334,7 @@ export function ProblemsPanel({ cwd, activePath }: BottomPanelProps) {
   /** 「交给 AI」的短暂完成态（✓ 约 3 秒）。 */
   const [aiDone, setAiDone] = useState(false)
   const aiTimer = useRef<ReturnType<typeof setTimeout>>()
+  const quickFixTimer = useRef<ReturnType<typeof setTimeout>>()
 
   const listRef = useRef<HTMLDivElement>(null)
   /** 滚动位置：过滤/排序/分组重建后要恢复到这个像素位置，而不是跳回顶部。 */
@@ -402,6 +403,14 @@ export function ProblemsPanel({ cwd, activePath }: BottomPanelProps) {
     if (element.scrollTop !== savedScrollTop.current) element.scrollTop = savedScrollTop.current
   }, [rows])
 
+  /* 面板从 display:none 恢复时 scrollTop 已被浏览器重置：把保存的位置写回去。 */
+  useEffect(() => {
+    if (!panelVisible) return
+    const element = listRef.current
+    if (element === null) return
+    if (element.scrollTop !== savedScrollTop.current) element.scrollTop = savedScrollTop.current
+  }, [panelVisible])
+
   /* 面板高度变化（拖动底部分隔条、窗口缩放）时重新计算可视窗口：ResizeObserver 比 window.resize 准。 */
   useEffect(() => {
     const element = listRef.current
@@ -417,8 +426,11 @@ export function ProblemsPanel({ cwd, activePath }: BottomPanelProps) {
     return () => observer.disconnect()
   }, [])
 
-  /* 卸载时清掉「交给 AI」的复原计时器。 */
-  useEffect(() => () => { if (aiTimer.current !== undefined) clearTimeout(aiTimer.current) }, [])
+  /* 卸载时清掉「交给 AI」与快速修复的计时器。 */
+  useEffect(() => () => {
+    if (aiTimer.current !== undefined) clearTimeout(aiTimer.current)
+    if (quickFixTimer.current !== undefined) clearTimeout(quickFixTimer.current)
+  }, [])
 
   /* 行被折叠/过滤掉后，高亮回落到它所属的文件头（文件头也不在了才清空）。 */
   useEffect(() => {
@@ -428,6 +440,7 @@ export function ProblemsPanel({ cwd, activePath }: BottomPanelProps) {
   }, [rows, highlight, highlightedIndex])
 
   const onScroll = (event: ReactUIEvent<HTMLDivElement>): void => {
+    if (!panelVisible) return
     const element = event.currentTarget
     savedScrollTop.current = element.scrollTop
     setScrollTop(element.scrollTop)
@@ -493,16 +506,26 @@ export function ProblemsPanel({ cwd, activePath }: BottomPanelProps) {
     // 先跳到问题位置：actions.quickFix() 读的是当前聚焦编辑器的光标/选区。
     openLocationAt(entry.path, start.line, start.character)
     // 切标签、Monaco 挂载与聚焦都发生在下一帧之后；立即调用会拿不到活动编辑器。
-    window.setTimeout(() => {
+    if (quickFixTimer.current !== undefined) clearTimeout(quickFixTimer.current)
+    quickFixTimer.current = setTimeout(() => {
+      quickFixTimer.current = undefined
       void quickFix().catch(() => notifyLanguage('无法打开快速修复', 'warn'))
     }, 180)
   }
 
-  const addProblemsToChat = useCallback(async (): Promise<void> => {
-    // 看得见什么就交什么：开了「仅当前文件」且确实有活动文件时传 file，否则传整个工作区。
-    const scope = currentFileOnly && canUseCurrentFile ? 'file' : 'workspace'
+  const addProblemsToChat = useCallback(async (row?: ProblemRow): Promise<void> => {
+    // 单条诊断行 → 只加这一条（保留行列与消息）；工具栏/文件行 → 当前范围（文件/工作区）。
+    const request = row?.kind === 'problem'
+      ? {
+          kind: 'problem' as const,
+          path: row.entry.path,
+          line: row.entry.diagnostic.range.start.line + 1,
+          column: row.entry.diagnostic.range.start.character + 1,
+          message: row.entry.diagnostic.message,
+        }
+      : { kind: 'problems' as const, scope: currentFileOnly && canUseCurrentFile ? 'file' as const : 'workspace' as const }
     let ok = false
-    try { ok = await requestContextCard({ kind: 'problems', scope }) } catch { ok = false }
+    try { ok = await requestContextCard(request) } catch { ok = false }
     if (!ok) {
       notifyLanguage('添加到对话失败：当前没有可用的 DSH 对话输入框', 'warn')
       return
@@ -513,7 +536,7 @@ export function ProblemsPanel({ cwd, activePath }: BottomPanelProps) {
   }, [currentFileOnly, canUseCurrentFile])
 
   const runMenuAction = (action: ProblemMenuAction, row: ProblemRow): void => {
-    if (action === 'addToChat') { void addProblemsToChat(); return }
+    if (action === 'addToChat') { void addProblemsToChat(row); return }
     if (action === 'toggleFile') { if (row.kind === 'file') toggleFile(row.path); return }
     if (action === 'copyPath') { copyToClipboard(row.kind === 'file' ? row.relativePath : row.entry.relativePath, '路径'); return }
     if (row.kind !== 'problem') return
