@@ -29,7 +29,7 @@
 ## Highlights
 
 - **One integrated AIDE**: explorer, Monaco editor, search, Git, terminal, and DSH conversation in one VS Code-style interface.
-- **A denser, more useful shell**: the editor top bar has three sections (search/command entry · tabs · layout actions) and collapses the command entry to an icon when space is tight; the explorer header shows the workspace name, offers reveal-current-file / collapse-all / refresh / create actions, a guided empty state, and letter-plus-colour Git badges.
+- **A denser, more useful shell**: the editor top bar is a compact row of file-icon tabs plus layout actions; the explorer header shows the workspace name, offers reveal-current-file / collapse-all / refresh / create actions, a guided empty state, and letter-plus-colour Git badges.
 - **Complete file experience**: open text, Markdown, images, PDF, and Word files directly; the tree supports drag-and-drop uploads and common file operations.
 - **Reliable and live**: atomic saves and revision checks prevent silent overwrites, while WebSocket updates flag external workspace changes.
 - **Visual Git workflow**: status, staging, commits, branches, diffs, commit files, and a swimlane commit graph.

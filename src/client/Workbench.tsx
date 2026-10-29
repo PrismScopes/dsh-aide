@@ -34,7 +34,7 @@ import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
 import { explorerMenuItems, panelMoreMenuItems, parentDirectory, tabMenuItems, workspaceAbsolutePath, type ExplorerMenuActions, type FileClipboard } from './menus.ts'
 import { copyText } from './clipboard.ts'
 import { requestTerminal } from './terminal.ts'
-import { bindingMatches, bindingOf, formatBinding } from './keybindings.ts'
+import { bindingMatches, bindingOf } from './keybindings.ts'
 import { REVEAL_CHAT_EVENT } from './dshChat.ts'
 import { LanguageWorkspace, setActiveLanguageWorkspace } from './language/client.ts'
 import { useDiagnostics } from './language/diagnostics.ts'
@@ -227,6 +227,19 @@ function FileGlyph({ name, kind, expanded }: { name: string; kind: 'file' | 'dir
   return url === undefined
     ? <Icon name={fileIcon(name)} className="dvw-file-icon"/>
     : <img className="dvw-file-icon-img" src={url} alt="" loading="lazy" decoding="async"/>
+}
+
+/** 编辑器标签前的图标：普通文件用彩色文件图标，差异/Git 图/输出/小恐龙等虚拟标签用语义图标。 */
+function TabGlyph({ tab }: { tab: Tab }) {
+  if (tab.path === GIT_GRAPH_PATH) return <Icon name="graph" className="dvw-tab-icon"/>
+  if (tab.path === GIT_OUTPUT_PATH) return <Icon name="history" className="dvw-tab-icon"/>
+  if (tab.path === DINO_PATH) return <Icon name="preview" className="dvw-tab-icon"/>
+  if (tab.diff !== undefined) return <Icon name="diff" className="dvw-tab-icon"/>
+  const name = tab.title ?? tab.diffSourcePath ?? tab.path.split(/[\\/]/).at(-1) ?? tab.path
+  const url = fileIconUrl(name)
+  return url === undefined
+    ? <Icon name={fileIcon(name)} className="dvw-tab-icon"/>
+    : <img className="dvw-tab-icon" src={url} alt="" loading="lazy" decoding="async"/>
 }
 
 /** Return whether file changes require reloading one visible directory. */
@@ -643,12 +656,6 @@ export function Search(props: { sessionId: string; service: VscodeWorkbench; onO
   const queryInput = useRef<HTMLInputElement>(null)
   const replaceInput = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
-  // 顶部命令入口/快捷键都走同一个聚焦动作：已经停在搜索视图时 autoFocus 不会再触发。
-  useEffect(() => {
-    const focus = (): void => { queryInput.current?.focus(); queryInput.current?.select() }
-    window.addEventListener('dvw-focus-search', focus)
-    return () => window.removeEventListener('dvw-focus-search', focus)
-  }, [])
   // onOpen 来自 Workbench 的内联箭头函数，每次渲染都会换身份；用 ref 持有最新实现，
   // 这样 F4 的命令注册（以及 step 的 useCallback）只做一次。
   const onOpenRef = useRef(props.onOpen); onOpenRef.current = props.onOpen
@@ -1409,14 +1416,6 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   // 键盘快捷键（Ctrl+` 等）收起面板则没有指针事件，只能在这里兜底。
   useEffect(()=>{if(snapshot.bottomPanel===undefined)setPanelMenu(undefined)},[snapshot.bottomPanel])
   const selectView=(view:WorkbenchView)=>{if(snapshot.view===view&&primarySideVisible){setPrimarySideVisible(false);return}setPrimarySideVisible(true);service.show(view)}
-  /** 顶部命令入口：打开搜索并聚焦输入框，不依赖当前是否已经停在搜索视图。 */
-  const openSearch = (): void => {
-    if (!primarySideVisible) setPrimarySideVisible(true)
-    service.show('search')
-    window.dispatchEvent(new Event('dvw-focus-search'))
-  }
-  const searchBinding = bindingOf('view.search')
-  const searchKeys = searchBinding === null ? '' : formatBinding(searchBinding).join('+')
   const selectHeading=(index:number)=>{if(activeTab===undefined)return;setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab));window.setTimeout(()=>window.dispatchEvent(new CustomEvent('dvw-markdown-heading',{detail:index})),50)}
   const suppressAttachmentDrop=(event:DragEvent)=>{if(!event.dataTransfer.types.includes('Files'))return;const target=event.target;const insideTree=target instanceof Element&&target.closest('.dvw-tree')!==null;if(!insideTree){event.preventDefault();event.stopPropagation()}}
   // 编辑器身份与大纲都在提前返回之前算：hooks 不能放在条件分支之后。
@@ -1458,12 +1457,7 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     <aside className="dvw-side" data-side-width={sideWidth}>{snapshot.view==='explorer'&&<Explorer sessionId={sessionId} cwd={workspace?.cwd} selected={active} dirty={new Set(tabs.filter(tab=>tab.dirty).map(tab=>tab.path))} onOpen={(path,pin)=>void open(path,undefined,undefined,pin)}/>} {snapshot.view==='search'&&<Search sessionId={sessionId} service={service} onOpen={(path,line,column,pin)=>void open(path,line,column,pin)}/>} {snapshot.view==='git'&&<Git sessionId={sessionId} absoluteRoot={workspace?.cwd} onDiff={openDiffTab} onOpenGraph={openGitGraph} onOpenOutput={openGitOutput}/>}</aside>
     <PanelResizer className="dvw-side-resizer" label="拖动调整源码管理侧边栏宽度" width={sideWidth} min={210} max={640} defaultWidth={210} direction={1} onWidth={setSideWidth} onPreview={previewPanelWidth('sideWidth')}/>
     <main className="dvw-main"><header className="dvw-topbar" ref={topbarRef} data-compact={topbarCompact||undefined} onDoubleClick={event=>event.preventDefault()}>
-      <div className="dvw-topbar-left" onDoubleClick={event=>event.stopPropagation()}>
-        <button type="button" className="dvw-command-center" title={`搜索文件或内容${searchKeys===''?'':`（${searchKeys}）`}`} aria-label="搜索文件或内容" onClick={openSearch}>
-          <Icon name="search"/><span>搜索文件或内容</span>{searchKeys!==''&&<kbd className="dvw-command-key">{searchKeys}</kbd>}
-        </button>
-      </div>
-      <div className="dvw-tab-list" role="tablist" aria-label="打开的编辑器">{tabs.map(tab=><button className="dvw-tab" role="tab" aria-selected={tab.path===active} data-active={tab.path===active} data-pinned={tab.pinned===true||undefined} key={tab.path} title={tab.diffSourcePath??tab.path} onClick={()=>setActive(tab.path)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setTabMenu({path:tab.path,x:event.clientX,y:event.clientY})}}><span className="dvw-tab-name">{tab.dirty?'● ':''}{tabLabel(tab)}</span><span onClick={event=>{event.stopPropagation();requestCloseTabs([tab.path])}}><Icon name="close"/></span></button>)}</div>
+      <div className="dvw-tab-list" role="tablist" aria-label="打开的编辑器">{tabs.map(tab=><button className="dvw-tab" role="tab" aria-selected={tab.path===active} data-active={tab.path===active} data-pinned={tab.pinned===true||undefined} key={tab.path} title={tab.diffSourcePath??tab.path} onClick={()=>setActive(tab.path)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setTabMenu({path:tab.path,x:event.clientX,y:event.clientY})}}><TabGlyph tab={tab}/><span className="dvw-tab-name">{tab.dirty?'● ':''}{tabLabel(tab)}</span><span onClick={event=>{event.stopPropagation();requestCloseTabs([tab.path])}}><Icon name="close"/></span></button>)}</div>
       {tabMenu!==undefined&&<ContextMenu position={{x:tabMenu.x,y:tabMenu.y}} label="标签页操作" entries={tabMenuEntries(tabMenu)} onClose={()=>setTabMenu(undefined)}/>}
       <div className="dvw-topbar-actions" onDoubleClick={event=>event.stopPropagation()}>
         {tabs.length>0&&<button className="dvw-icon dvw-close-all" title="全部关闭" aria-label="全部关闭" onClick={closeAll}><Icon name="close-all"/></button>}
