@@ -175,9 +175,27 @@ AIDE 通过 DSH 的 `shell.overlay`、`main`、`sidebar.panellist` 与 `settings
 
 ## 安装
 
-```bash
-dsh plugin --profile web add dsh-aide
+### 在「发现」中安装
+
+DSH 的「插件 → 发现」不自动扫描 npm 或 GitHub，只读取用户添加的 format-1 索引源。在「发现 → 索引源 → 添加索引源」填入：
+
+```text
+https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/market/index.json
 ```
+
+刷新后选择 AIDE 条目安装即可。索引里的版本固定到已包含预构建 `lib/` 的提交，安装时不需要现场编译。
+
+### 直接安装（备用）
+
+```bash
+# 预构建 tarball（推荐）
+dsh plugin --profile web add https://github.com/PrismScopes/dsh-aide/releases/download/v0.12.0/dsh-aide-0.12.0.tgz
+
+# 或固定 Git 提交
+dsh plugin --profile web add github:PrismScopes/dsh-aide#29f11c09835a8560f47a6c19679eca43361cd9e6
+```
+
+插件在 `package.json` 中声明了 `dsh.bundle` 与 `engines.dsh`（`>=0.2.1-rc.2 <0.3.0`），这是市场索引校验要求的声明。
 
 ### 首次安装终端支持
 
@@ -209,7 +227,7 @@ AIDE 面向 DSH 社区发布，收录状态会持续更新：
 - **DSH Market**：[已收录](https://dsh.market/?plugin=PrismScopes%2Fdsh-aide) —— dsh.market（dshmarket）每日扫描 `dsh-plugin` topic 与社区精选列表。
 - **DSH Plugin Hub**：[已收录](https://dsh-plugin.org/zh/plugins/prismscopes/dsh-aide) —— dsh-plugin.org 社区插件市场，按 topic 自动收录，含中文条目。
 - **DSH Profile Hub**：[已收录](https://dshpluginhub.ai/zh/plugins/dsh-aide) —— dshpluginhub.ai，按 npm 小时级同步，也可浏览 / 分享 Profile。
-- **npm**：`dsh-aide` —— 尚未发布到 npm；发布后进入各索引源（`package.json` 已声明 `dsh.bundle` 清单、精确 SemVer 与 `cordis.patch.yml`）。
+- **npm**：`dsh-aide` —— 尚未发布到 npm；通过上面的 GitHub 索引源 / Release tarball 安装（`package.json` 已声明 `dsh.bundle` 清单、`engines.dsh` 兼容范围与 `cordis.patch.yml`）。
 - **dsh.so 插件市场**：[提交入口](https://www.dsh.so/zh/submit/) —— 粘贴仓库或包名，做 schema 校验与安全扫描后进入市场。
 - **awesome-dsh-plugin**：[community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) —— 一个插件一个 `data/plugins/<owner>__<repo>.yml`，满足 `dsh.bundle` + topic 后提交 PR。
 

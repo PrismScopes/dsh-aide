@@ -1,0 +1,47 @@
+{
+  "format": 1,
+  "title": {
+    "en": "AIDE Plugin Index",
+    "zh": "AIDE 插件索引"
+  },
+  "description": {
+    "en": "Installable DSH bundles published by PrismScopes.",
+    "zh": "PrismScopes 发布的 DSH 组合包。"
+  },
+  "plugins": [
+    {
+      "name": "dsh-aide",
+      "title": {
+        "en": "AIDE (AI + IDE)",
+        "zh": "AIDE（AI + IDE）"
+      },
+      "description": {
+        "en": "VS Code-style local IDE for DeepSeek Harness: Monaco editor, explorer, search, Git, terminal, and language services.",
+        "zh": "面向 DeepSeek Harness 的 VS Code 风格本地 IDE：Monaco 编辑器、资源管理器、搜索、Git、终端与语言服务。"
+      },
+      "icon": "../assets/dsh-aide-logo.svg",
+      "author": "PrismScopes",
+      "homepage": "https://github.com/PrismScopes/dsh-aide",
+      "repository": {
+        "url": "https://github.com/PrismScopes/dsh-aide"
+      },
+      "dist-tags": {
+        "latest": "0.12.0"
+      },
+      "versions": [
+        {
+          "version": "0.12.0",
+          "publishTimestamp": 1793494800,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/PrismScopes/dsh-aide",
+            "commit": "29f11c09835a8560f47a6c19679eca43361cd9e6"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        }
+      ]
+    }
+  ]
+}

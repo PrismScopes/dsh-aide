@@ -130,9 +130,27 @@ replace or disable `ui-layout`.
 
 ## Installation
 
-```bash
-dsh plugin --profile web add dsh-aide
+### Install from Discover
+
+DSH's Plugins → Discover tab does not scan npm or GitHub automatically; it only reads format-1 index sources that the user adds. Open **Discover → Index sources → Add index source** and enter:
+
+```text
+https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/market/index.json
 ```
+
+Refresh, select AIDE, and install. The index version is pinned to a commit that already contains the built `lib/`, so installation does not compile on the user's machine.
+
+### Direct install (fallback)
+
+```bash
+# Prebuilt tarball (recommended)
+dsh plugin --profile web add https://github.com/PrismScopes/dsh-aide/releases/download/v0.12.0/dsh-aide-0.12.0.tgz
+
+# Or a pinned Git commit
+dsh plugin --profile web add github:PrismScopes/dsh-aide#29f11c09835a8560f47a6c19679eca43361cd9e6
+```
+
+`package.json` declares `dsh.bundle` and `engines.dsh` (`>=0.2.1-rc.2 <0.3.0`), both required for market index validation.
 
 ### First terminal installation
 
