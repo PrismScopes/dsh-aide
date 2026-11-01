@@ -7,8 +7,7 @@
 <p align="center"><b>AIDE = AI + IDE</b>: a VS Code-style local development environment for DeepSeek Harness.</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/v/dsh-aide?logo=npm&label=npm" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/dm/dsh-aide?label=downloads" alt="npm downloads"></a>
+  <a href="https://github.com/PrismScopes/dsh-aide/releases"><img src="https://img.shields.io/github/v/release/PrismScopes/dsh-aide?label=release" alt="Release"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/stargazers"><img src="https://img.shields.io/github/stars/PrismScopes/dsh-aide?logo=github&label=Stars" alt="GitHub stars"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/commits/main"><img src="https://img.shields.io/github/last-commit/PrismScopes/dsh-aide?label=last%20commit" alt="Last commit"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/blob/main/LICENSE"><img src="https://img.shields.io/github/license/PrismScopes/dsh-aide?label=license" alt="MIT license"></a>
