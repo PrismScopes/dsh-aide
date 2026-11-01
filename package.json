@@ -1,6 +1,6 @@
 {
   "name": "dsh-aide",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "description": "AIDE (AI + IDE): VS Code-style local IDE for DeepSeek Harness with Monaco, explorer, search, Git and terminal",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,8 @@
     "registry": "https://registry.npmjs.org"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "packageManager": "pnpm@11.7.0",
   "main": "lib/index.js",
@@ -47,7 +48,8 @@
     },
     "compatibility": {
       "dshReleases": {
-        "0.2.1-rc.2": "compatible"
+        "0.2.1-rc.2": "compatible",
+        "0.2.1-rc.3": "compatible"
       }
     },
     "client": {
