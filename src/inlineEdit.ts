@@ -119,17 +119,22 @@ export async function runInlineEdit(ctx: HostContext, sessionId: string, input: 
   if (llm === undefined) throw new WorkbenchError('ai-unavailable', 'DSH 模型服务不可用', 503)
   let provider: string
   let model: string
-  // 编辑是重任务：优先用 DSH 的当前默认模型（对话用的那条），而不是补全设置里可能指向小模型的
-  // 补全路由。只有默认模型服务缺席时才退回补全路由。
+  // 路由优先级：设置页里给 AI 修改单独选的路由 > DSH 默认模型 > 补全路由。
+  // 编辑是重任务，默认模型才是合理落点；补全路由可能指向小模型，只作为最后的兜底。
+  const settings = completionSettings()
+  const configured = settings.inlineEditRoute
   const selection = defaultModel?.currentSelection()
-  if (selection !== undefined) {
-    provider = selection.provider
-    model = selection.model
-  } else {
-    const configured = completionSettings().route
-    if (configured === undefined) throw new WorkbenchError('ai-unavailable', 'DSH 没有可用的默认模型', 503)
+  if (configured !== undefined) {
     provider = configured.provider
     model = configured.model
+  } else if (selection !== undefined) {
+    provider = selection.provider
+    model = selection.model
+  } else if (settings.route !== undefined) {
+    provider = settings.route.provider
+    model = settings.route.model
+  } else {
+    throw new WorkbenchError('ai-unavailable', 'DSH 没有可用的默认模型', 503)
   }
 
   const prompt = buildInlineEditPrompt(input)

@@ -10,6 +10,8 @@
 interface CompletionSettings {
   /** 补全单独使用的模型路由（`provider/model`）；不设则跟随应用默认模型。 */
   route?: { provider: string; model: string }
+  /** 编辑器内 AI 修改单独使用的模型路由；不设则跟随应用默认模型。 */
+  inlineEditRoute?: { provider: string; model: string }
   /** 模型失败时是否回落本地兜底。默认不回落：故障应当显式暴露。 */
   fallback: boolean
 }
@@ -36,6 +38,8 @@ function fromEnvironment(env: Record<string, string | undefined>): Partial<Compl
   const override: Partial<CompletionSettings> = {}
   const route = parseRoute(env['DSH_COMPLETION_ROUTE'])
   if (route !== undefined) override.route = route
+  const inlineRoute = parseRoute(env['DSH_INLINE_EDIT_ROUTE'])
+  if (inlineRoute !== undefined) override.inlineEditRoute = inlineRoute
   if ((env['DSH_COMPLETION_FALLBACK'] ?? '').toLowerCase() === 'local') override.fallback = true
   return override
 }
@@ -52,6 +56,12 @@ export function fromConfig(config: unknown): Partial<CompletionSettings> {
   if (route !== undefined) settings.route = route
   if (completion['fallback'] === true) settings.fallback = true
   if (completion['fallback'] === false) settings.fallback = false
+  // AI 修改是独立的路由，收在 `inlineEdit.route` 下；不去认平铺的 `route`，否则会与补全的平铺旧格式混淆。
+  const inlineEdit = typeof record['inlineEdit'] === 'object' && record['inlineEdit'] !== null
+    ? (record['inlineEdit'] as Record<string, unknown>)
+    : undefined
+  const inlineRoute = parseRoute(typeof inlineEdit?.['route'] === 'string' ? inlineEdit['route'] : undefined)
+  if (inlineRoute !== undefined) settings.inlineEditRoute = inlineRoute
   return settings
 }
 
@@ -221,6 +231,68 @@ export function completionSettingsView(env: Record<string, string | undefined> =
   return settingsViewOf(env)
 }
 
+/** AI 修改（编辑器内 Ctrl+K）单独的路由设置；与补全共用一个设置文件、各自一个 bucket。 */
+export interface InlineEditSettingsView {
+  /** 生效的模型路由（`provider/model`）；null 表示跟随应用的默认模型。 */
+  route: string | null
+  routeSource: SettingsSource
+  /** 环境变量给出的路由；非空说明它会压过设置页里的值。 */
+  envRoute: string | null
+}
+
+export interface InlineEditSettingsPatch {
+  /** `provider/model`；null 或空串表示清除，回到跟随应用默认模型。 */
+  route?: string | null
+}
+
+function inlineEditRouteSource(env: Record<string, string | undefined>): SettingsSource {
+  if (parseRoute(env['DSH_INLINE_EDIT_ROUTE']) !== undefined) return 'env'
+  if (fromConfig(fileValue).inlineEditRoute !== undefined) return 'file'
+  if (fromConfig(pluginConfig).inlineEditRoute !== undefined) return 'config'
+  return 'default'
+}
+
+function inlineEditViewOf(env: Record<string, string | undefined>): InlineEditSettingsView {
+  const route = current.inlineEditRoute
+  return {
+    route: route === undefined ? null : `${route.provider}/${route.model}`,
+    routeSource: inlineEditRouteSource(env),
+    envRoute: env['DSH_INLINE_EDIT_ROUTE'] ?? null,
+  }
+}
+
+export function inlineEditSettingsView(env: Record<string, string | undefined> = processEnv()): InlineEditSettingsView {
+  refreshSettings()
+  return inlineEditViewOf(env)
+}
+
+/** 写入 AI 修改路由并立刻生效（与补全设置同一套原子写与错误语义）。 */
+export function updateInlineEditSettings(patch: InlineEditSettingsPatch, env: Record<string, string | undefined> = processEnv(), io: SettingsFileIo = systemSettingsIo()): InlineEditSettingsView {
+  const path = settingsFilePath(env)
+  if (path === undefined) throw new SettingsWriteError('数据目录未知（未设置 DSH_HOME），无法保存 AI 修改设置')
+  const stored = io.read(path)
+  const root = typeof stored === 'object' && stored !== null && !Array.isArray(stored) ? { ...(stored as Record<string, unknown>) } : {}
+  // 只认嵌套的 inlineEdit.route：平铺的 `route` 是补全的旧格式，不能被这里抢走。
+  const nested = takeSettingsBucket(root, 'inlineEdit', [])
+  if (patch.route !== undefined) {
+    const raw = (patch.route ?? '').trim()
+    if (raw === '') delete nested['route']
+    else {
+      const route = parseRoute(raw)
+      if (route === undefined) throw new SettingsWriteError('模型路由要写成 provider/model，例如 our-free-model/mimo-v2.6-flash-free')
+      nested['route'] = `${route.provider}/${route.model}`
+    }
+  }
+  const next: Record<string, unknown> = { ...root }
+  if (Object.keys(nested).length === 0) delete next['inlineEdit']
+  else next['inlineEdit'] = nested
+  io.write(path, next)
+  fileValue = next
+  fileCheckedAt = Date.now()
+  current = resolveSettings(pluginConfig, env, fileValue)
+  return inlineEditViewOf(env)
+}
+
 /** 设置文件的读写出口；测试用内存实现替换，避免碰真实数据目录。 */
 export interface SettingsFileIo { read(path: string): unknown; write(path: string, value: unknown): void }
 
@@ -248,13 +320,13 @@ function systemSettingsIo(): SettingsFileIo {
  * 早前的文件可能是平铺的 `{ route, fallback }`（`fromConfig` 两种都认）。写的时候统一收进
  * `completion` 下面，否则一旦出现 `completion` 字段，平铺的旧值就会被 `fromConfig` 忽略而静默失效。
  */
-function takeSettingsBucket(root: Record<string, unknown>): Record<string, unknown> {
-  const existing = root['completion']
+function takeSettingsBucket(root: Record<string, unknown>, name: string, keys: readonly string[]): Record<string, unknown> {
+  const existing = root[name]
   if (typeof existing === 'object' && existing !== null && !Array.isArray(existing)) {
     return { ...(existing as Record<string, unknown>) }
   }
   const nested: Record<string, unknown> = {}
-  for (const key of ['route', 'fallback']) {
+  for (const key of keys) {
     if (key in root) { nested[key] = root[key]; delete root[key] }
   }
   return nested
@@ -272,7 +344,7 @@ export function updateCompletionSettings(patch: CompletionSettingsPatch, env: Re
   if (path === undefined) throw new SettingsWriteError('数据目录未知（未设置 DSH_HOME），无法保存补全设置')
   const stored = io.read(path)
   const root = typeof stored === 'object' && stored !== null && !Array.isArray(stored) ? { ...(stored as Record<string, unknown>) } : {}
-  const nested = takeSettingsBucket(root)
+  const nested = takeSettingsBucket(root, 'completion', ['route', 'fallback'])
   if (patch.route !== undefined) {
     const raw = (patch.route ?? '').trim()
     if (raw === '') delete nested['route']

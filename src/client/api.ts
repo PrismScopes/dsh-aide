@@ -133,6 +133,15 @@ export interface WorkbenchSettingsView {
   completion: CompletionSettingsView
   /** 语言服务总开关、内置 TypeScript 开关、设置文件位置与已发现的服务器。 */
   language: LanguageSettingsView
+  /** 编辑器内 AI 修改的模型路由；旧宿主不返回时缺省，设置页据此禁用该控件。 */
+  inlineEdit?: InlineEditSettingsView
+}
+
+/** 编辑器内 AI 修改（Ctrl+K）的模型路由视图。 */
+export interface InlineEditSettingsView {
+  route: string | null
+  routeSource: SettingsSource
+  envRoute: string | null
 }
 
 /**
@@ -146,6 +155,8 @@ export interface WorkbenchSettingsPatch {
   route?: string | null
   fallback?: boolean
   language?: LanguageSettingsPatch
+  /** AI 修改的模型路由；`route: null` 表示回到跟随默认模型。 */
+  inlineEdit?: { route?: string | null }
 }
 
 /** 与 api() 不同：设置页不依赖会话，所以走独立的端点，也不做会话未就绪的重试。 */

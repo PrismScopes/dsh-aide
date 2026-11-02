@@ -11,7 +11,7 @@ import { authorize, readBinaryBody, readBody, send, sendError, WorkbenchError } 
 import { localBase } from './terminal.ts'
 import { dispatch } from './api.ts'
 import { completionTelemetry, registerCompletionRoute, resolveProvider } from './completion/register.ts'
-import { completionSettingsView, SettingsWriteError, updateCompletionSettings, type CompletionSettingsPatch } from './completion/settings.ts'
+import { completionSettingsView, SettingsWriteError, updateCompletionSettings, updateInlineEditSettings, inlineEditSettingsView, type CompletionSettingsPatch, type InlineEditSettingsPatch } from './completion/settings.ts'
 import { registerModelRoutes } from './modelRoutes.ts'
 import { languageHostFor } from './language/host.ts'
 import { LanguageSettingsWriteError, updateLanguageSettings } from './language/settings.ts'
@@ -92,6 +92,8 @@ function settingsPayload(ctx: HostContext): unknown {
     },
     // 语言服务的开关与服务器发现结果：设置页在「还没选会话」时也要能显示。
     language: languageHostFor(ctx).settingsView(),
+    // 编辑器内 AI 修改的模型路由（与补全分开，编辑用默认模型、补全可用更小的模型）。
+    inlineEdit: inlineEditSettingsView(),
   }
 }
 
@@ -250,7 +252,20 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
             languagePatch.builtinTypescript = language['builtinTypescript']
           }
         }
+        // AI 修改的模型路由：与补全同一个设置端点与文件，但收在 inlineEdit 这个 bucket 下。
+        let inlineEditPatch: InlineEditSettingsPatch | undefined
+        if ('inlineEdit' in body) {
+          const raw = body['inlineEdit']
+          if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new WorkbenchError('invalid-argument', 'inlineEdit must be an object')
+          const inlineEdit = raw as Record<string, unknown>
+          if ('route' in inlineEdit) {
+            const route = inlineEdit['route']
+            if (route !== null && typeof route !== 'string') throw new WorkbenchError('invalid-argument', 'inlineEdit.route must be a string or null')
+            inlineEditPatch = { route: route as string | null }
+          }
+        }
         updateCompletionSettings(patch)
+        if (inlineEditPatch !== undefined) updateInlineEditSettings(inlineEditPatch)
         if (languagePatch !== undefined) {
           const host = languageHostFor(ctx)
           try {

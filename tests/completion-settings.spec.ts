@@ -14,6 +14,8 @@ import {
   settingsFilePath,
   SettingsWriteError,
   updateCompletionSettings,
+  inlineEditSettingsView,
+  updateInlineEditSettings,
   type SettingsFileIo,
 } from '../src/completion/settings.ts'
 
@@ -110,6 +112,43 @@ function memoryIo(initial?: unknown): { writes: unknown[]; io: SettingsFileIo } 
   const writes: unknown[] = []
   return { writes, io: { read: () => initial, write: (_path, value) => { writes.push(value) } } }
 }
+
+describe('AI 修改设置写入', () => {
+  const env = { DSH_HOME: 'X:/dvw-data' }
+
+  it('writes the inline-edit route and applies it without a restart', () => {
+    const { writes, io } = memoryIo()
+    const at = Date.now()
+    const view = updateInlineEditSettings({ route: 'acme/strong-model' }, env, io)
+    expect(writes).toEqual([{ inlineEdit: { route: 'acme/strong-model' } }])
+    expect(view).toMatchObject({ route: 'acme/strong-model', routeSource: 'file', envRoute: null })
+    expect(completionSettings(at).inlineEditRoute).toEqual({ provider: 'acme', model: 'strong-model' })
+    // 与补全路由互不影响。
+    expect(completionSettings(at).route).toBeUndefined()
+  })
+
+  it('keeps the completion bucket and removes the inline bucket when cleared', () => {
+    const { writes, io } = memoryIo({ completion: { route: 'c/m' } })
+    updateInlineEditSettings({ route: 'e/x' }, env, io)
+    expect(writes.at(-1)).toEqual({ completion: { route: 'c/m' }, inlineEdit: { route: 'e/x' } })
+    const cleared = updateInlineEditSettings({ route: null }, env, io)
+    expect(cleared.route).toBeNull()
+    expect(writes.at(-1)).toEqual({ completion: { route: 'c/m' } })
+  })
+
+  it('reads inlineEdit from a hand-written config and lets the environment win', () => {
+    expect(fromConfig({ inlineEdit: { route: 'a/b' } }).inlineEditRoute).toEqual({ provider: 'a', model: 'b' })
+    const { io } = memoryIo({ inlineEdit: { route: 'file/model' } })
+    const view = updateInlineEditSettings({ route: 'file/model' }, { ...env, DSH_INLINE_EDIT_ROUTE: 'env/model' }, io)
+    expect(view).toMatchObject({ route: 'env/model', routeSource: 'env', envRoute: 'env/model' })
+  })
+
+  it('rejects a malformed route without touching the file', () => {
+    const { writes, io } = memoryIo()
+    expect(() => updateInlineEditSettings({ route: 'no-slash' }, env, io)).toThrowError(SettingsWriteError)
+    expect(writes).toHaveLength(0)
+  })
+})
 
 describe('completion settings written from the settings page', () => {
   const env = { DSH_HOME: 'X:/dvw-data' }
