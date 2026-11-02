@@ -17,3 +17,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      # Published tarball and Git installs use the committed lib/; keep the
+      # checked-in runtime artifacts in sync with src/ (Ubuntu only: generated
+      # output can differ by platform in source-map paths).
+      - if: matrix.os == 'ubuntu-latest'
+        run: git diff --exit-code -- lib
