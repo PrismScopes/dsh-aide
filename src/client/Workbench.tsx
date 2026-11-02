@@ -1679,6 +1679,14 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     add('terminal.split','拆分当前终端','终端',withTerminal(()=>window.dispatchEvent(new Event('dvw-terminal-split'))))
     add('terminal.close','关闭当前终端','终端',withTerminal(()=>window.dispatchEvent(new Event('dvw-terminal-close'))))
     // 源代码管理
+    const gitCommand=(command:string)=>()=>{showView('git');window.setTimeout(()=>window.dispatchEvent(new CustomEvent('dvw-git-command',{detail:command})),60)}
+    add('git.refresh','刷新源代码管理','源代码管理',gitCommand('refresh'))
+    add('git.stageAll','暂存全部更改','源代码管理',gitCommand('stageAll'))
+    add('git.unstageAll','取消暂存全部更改','源代码管理',gitCommand('unstageAll'))
+    add('git.commit','填写提交信息','源代码管理',gitCommand('focusCommit'))
+    add('git.fetch','抓取远程更新','源代码管理',gitCommand('fetch'))
+    add('git.pull','拉取','源代码管理',gitCommand('pull'))
+    add('git.push','推送','源代码管理',gitCommand('push'))
     add('git.graph','打开提交图','源代码管理',()=>openGitGraph(false))
     add('git.output','显示 Git 输出','源代码管理',openGitOutput)
     // AI（把选区插入 DSH 对话，不直接发送）

@@ -55,6 +55,7 @@ describe('workbench wiring', () => {
       'dsh.addSelection',
       'problems.next', 'problems.previous',
       'git.graph', 'git.output',
+      'git.refresh', 'git.stageAll', 'git.unstageAll', 'git.commit', 'git.push', 'git.pull', 'git.fetch',
       'ai.explain', 'ai.fix', 'ai.tests', 'ai.review',
       'review.checkpoint', 'review.acceptAll',
       'workbench.dino']) {
@@ -71,6 +72,11 @@ describe('workbench wiring', () => {
     const terminal = read('src/client/TerminalPanel.tsx')
     expect(terminal).toContain("window.addEventListener('dvw-terminal-split'")
     expect(terminal).toContain("window.addEventListener('dvw-terminal-close'")
+    // Git 写操作同样交给面板自己的 action，避免界面状态落后于仓库。
+    const gitPanel = read('src/client/GitPanel.tsx')
+    expect(gitPanel).toContain("window.addEventListener('dvw-git-command'")
+    expect(gitPanel).toContain("action('stage.all')")
+    expect(workbench).toContain("new CustomEvent('dvw-git-command'")
   })
 
   it('renders every command when the query is empty', () => {

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { GitChange, GitCommit, GitCommitFile, GitDiff, GitStatus } from '../types.ts'
 import { ApiError, api } from './api.ts'
 import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
@@ -116,13 +116,13 @@ type GitMenuState =
  * 整个面板（100 行提交图的 SVG + 全部改动行）。现在键入只重渲染这一个 div。
  * 清空输入框的时机与原实现一致：action() 内部 catch 掉错误、永不 reject，所以等价于提交返回后清空。
  */
-function CommitBox({ busy, branch, onCommit }: { busy: boolean; branch: string; onCommit(message: string): Promise<unknown> }) {
+function CommitBox({ busy, branch, onCommit, inputRef }: { busy: boolean; branch: string; onCommit(message: string): Promise<unknown>; inputRef?: RefObject<HTMLInputElement> }) {
   const [message, setMessage] = useState('')
   const submit = () => {
     if (message.trim() === '') return
     void onCommit(message).then(() => setMessage(''))
   }
-  return <div className="dvw-commit"><input className="dvw-input" value={message} onChange={event => setMessage(event.target.value)} onKeyDown={event => { if (event.ctrlKey && event.key === 'Enter') submit() }} placeholder={`消息 (Ctrl+Enter 在“${branch}”提交)`}/><button className="dvw-commit-button" disabled={busy || !message.trim()} onClick={submit}><Icon name="check"/> 提交</button></div>
+  return <div className="dvw-commit"><input ref={inputRef} className="dvw-input" value={message} onChange={event => setMessage(event.target.value)} onKeyDown={event => { if (event.ctrlKey && event.key === 'Enter') submit() }} placeholder={`消息 (Ctrl+Enter 在“${branch}”提交)`}/><button className="dvw-commit-button" disabled={busy || !message.trim()} onClick={submit}><Icon name="check"/> 提交</button></div>
 }
 
 /** 提交之后需要重取提交图/分支信息的动作：不重取的话新状态要等下一次文件变更事件。 */
@@ -151,6 +151,25 @@ export function Git(props: { sessionId: string; /** 工作区绝对根（Workben
   useEffect(() => { void api<string[]>('git.action',{sessionId:props.sessionId,action:'remotes'}).then(names=>setRemotes(names)).catch(()=>setRemotes([])) }, [props.sessionId])
   useEffect(() => { if (notice === undefined) return; const timer = setTimeout(() => setNotice(undefined), 4000); return () => clearTimeout(timer) }, [notice])
   const action = async (name: string, path?: string, value?: string) => { setBusy(true);setNotice(undefined);try { const result = await api<GitStatus | GitDiff>('git.action',{sessionId:props.sessionId,action:name,path,value});recordGitCommand({action:name,path,value,ok:true}); if(name==='diff'&&'diff'in result){const key=path??'';props.onDiff(key,result,key.split('/').at(-1)??key,key)} else {setStatus(result as GitStatus);if(RELOG_ACTIONS.has(name))refreshLog();if(name==='remote.add'||name==='remote.remove')void api<string[]>('git.action',{sessionId:props.sessionId,action:'remotes'}).then(setRemotes).catch(()=>undefined);if(REMOTE_NOTICES[name]!==undefined)setNotice(REMOTE_NOTICES[name])} } catch(error){recordGitCommand({action:name,path,value,ok:false,message:String(error)});setError(String(error));refreshQuiet()}finally{setBusy(false)} }
+  /**
+   * 命令面板/Git 输出等外部入口：把动作交给面板自己的 action 执行。
+   *
+   * 不直接调宿主 git.action 的原因：面板要同步 busy、错误条、提交图与远程提示；绕过去会出现
+   * 「操作成功了但界面还是旧的」。提交本身需要消息，这里只把焦点放到提交信息框，消息由用户填。
+   */
+  const commitInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const command = (event as CustomEvent<string>).detail
+      if (command === 'refresh') { void refresh(); return }
+      if (command === 'focusCommit') { commitInputRef.current?.focus(); return }
+      if (command === 'stageAll') { void action('stage.all'); return }
+      if (command === 'unstageAll') { void action('unstage.all'); return }
+      if (command === 'push' || command === 'pull' || command === 'fetch' || command === 'sync') { void action(command); return }
+    }
+    window.addEventListener('dvw-git-command', handler)
+    return () => window.removeEventListener('dvw-git-command', handler)
+  }, [refresh, action])
   // 两个被提交图用到的动作都要有稳定标识，否则 memo(CommitGraph) 等于没做：
   // 依赖写全（expandedCommit / commitFileMap 都是它真正读到的状态），不会读到过期闭包。
   // onDiff 用 ref 持有：它是 Workbench 每次渲染新建的箭头函数，放进依赖会让本面板每次跟着重渲染，
@@ -226,5 +245,5 @@ export function Git(props: { sessionId: string; /** 工作区绝对根（Workben
     for(const change of rows){const dir=change.path.includes('/')?change.path.slice(0,change.path.lastIndexOf('/')):'';const list=groups.get(dir)??[];list.push(change);groups.set(dir,list)}
     return [...groups].map(([dir,list])=><div className="dvw-git-dirgroup" key={`${group}:${dir}`}><div className="dvw-git-dir" title={dir}>{dir===''?'.':dir}</div>{list.map(change=>renderChange(change,group))}</div>)
   }
-  return <><div className="dvw-side-head">源代码管理<div className="dvw-toolbar"><button className="dvw-icon dvw-graph-act" title="提交图" aria-label="打开提交图" onClick={()=>props.onOpenGraph(false)}><GitGraphMark/></button><button className="dvw-icon" title="刷新" aria-label="刷新" disabled={busy} onClick={refresh}><Icon name="refresh"/></button><button className="dvw-icon" title="更多操作" aria-label="更多操作" aria-haspopup="menu" onClick={event=>setMenu({kind:'scm',x:event.clientX,y:event.clientY})}><Icon name="ellipsis"/></button></div></div>{error&&<div className="dvw-error">{error}</div>}{notice!==undefined&&<div className="dvw-git-notice" role="status">{notice}</div>}{status&&<><div className="dvw-git-head"><button className="dvw-branch" title="签出到…" onClick={()=>commands.actions.checkout()}><Icon name="git-branch"/> {status.branch}</button><span>↑{status.ahead} ↓{status.behind}</span></div><CommitBox busy={busy} branch={status.branch} onCommit={message=>action('commit',undefined,message)}/><div className="dvw-git">{staged.length>0&&<section><GitGroupHeader title="暂存的更改" count={staged.length} expanded={expanded.staged} onToggle={()=>setExpanded(value=>({...value,staged:!value.staged}))} onMenu={event=>setMenu({kind:'group',group:'staged',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="取消暂存所有更改" onClick={()=>void action('unstage.all')}><Icon name="remove"/></button></GitGroupHeader>{expanded.staged&&renderChanges(staged,'staged')}</section>}<section><GitGroupHeader title="更改" count={changed.length} expanded={expanded.changes} onToggle={()=>setExpanded(value=>({...value,changes:!value.changes}))} onMenu={event=>setMenu({kind:'group',group:'changes',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="放弃所有更改" onClick={()=>{if(confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。'))void action('discard.all')}}><Icon name="discard"/></button><button className="dvw-icon" title="暂存所有更改" onClick={()=>void action('stage.all')}><Icon name="add"/></button></GitGroupHeader>{expanded.changes&&renderChanges(changed,'worktree')}</section><section className="dvw-graph"><GitGroupHeader title="图表" count={commits.length} expanded={expanded.graph} onToggle={()=>setExpanded(value=>({...value,graph:!value.graph}))} onMenu={event=>setMenu({kind:'group',group:'graph',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="刷新提交图表" onClick={refreshLog}><Icon name="refresh"/></button></GitGroupHeader>{expanded.graph&&(commits.length===0?<div className="dvw-graph-empty">还没有提交</div>:<CommitGraph commits={commits} expanded={expandedCommit} files={commitFileMap} remotes={remotes} onToggle={graphOnToggle} onOpenFile={graphOnOpenFile} onMenu={graphOnMenu} onFileMenu={graphOnFileMenu}/>)}</section></div></>}{menu!==undefined&&<ContextMenu position={{x:menu.x,y:menu.y}} label={menuLabel} entries={menuEntries()} onClose={()=>setMenu(undefined)}/>}{commands.pickerElement}</>
+  return <><div className="dvw-side-head">源代码管理<div className="dvw-toolbar"><button className="dvw-icon dvw-graph-act" title="提交图" aria-label="打开提交图" onClick={()=>props.onOpenGraph(false)}><GitGraphMark/></button><button className="dvw-icon" title="刷新" aria-label="刷新" disabled={busy} onClick={refresh}><Icon name="refresh"/></button><button className="dvw-icon" title="更多操作" aria-label="更多操作" aria-haspopup="menu" onClick={event=>setMenu({kind:'scm',x:event.clientX,y:event.clientY})}><Icon name="ellipsis"/></button></div></div>{error&&<div className="dvw-error">{error}</div>}{notice!==undefined&&<div className="dvw-git-notice" role="status">{notice}</div>}{status&&<><div className="dvw-git-head"><button className="dvw-branch" title="签出到…" onClick={()=>commands.actions.checkout()}><Icon name="git-branch"/> {status.branch}</button><span>↑{status.ahead} ↓{status.behind}</span></div><CommitBox busy={busy} branch={status.branch} inputRef={commitInputRef} onCommit={message=>action('commit',undefined,message)}/><div className="dvw-git">{staged.length>0&&<section><GitGroupHeader title="暂存的更改" count={staged.length} expanded={expanded.staged} onToggle={()=>setExpanded(value=>({...value,staged:!value.staged}))} onMenu={event=>setMenu({kind:'group',group:'staged',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="取消暂存所有更改" onClick={()=>void action('unstage.all')}><Icon name="remove"/></button></GitGroupHeader>{expanded.staged&&renderChanges(staged,'staged')}</section>}<section><GitGroupHeader title="更改" count={changed.length} expanded={expanded.changes} onToggle={()=>setExpanded(value=>({...value,changes:!value.changes}))} onMenu={event=>setMenu({kind:'group',group:'changes',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="放弃所有更改" onClick={()=>{if(confirm('放弃所有已跟踪和未跟踪的更改？此操作无法撤销。'))void action('discard.all')}}><Icon name="discard"/></button><button className="dvw-icon" title="暂存所有更改" onClick={()=>void action('stage.all')}><Icon name="add"/></button></GitGroupHeader>{expanded.changes&&renderChanges(changed,'worktree')}</section><section className="dvw-graph"><GitGroupHeader title="图表" count={commits.length} expanded={expanded.graph} onToggle={()=>setExpanded(value=>({...value,graph:!value.graph}))} onMenu={event=>setMenu({kind:'group',group:'graph',x:event.clientX,y:event.clientY})}><button className="dvw-icon" title="刷新提交图表" onClick={refreshLog}><Icon name="refresh"/></button></GitGroupHeader>{expanded.graph&&(commits.length===0?<div className="dvw-graph-empty">还没有提交</div>:<CommitGraph commits={commits} expanded={expandedCommit} files={commitFileMap} remotes={remotes} onToggle={graphOnToggle} onOpenFile={graphOnOpenFile} onMenu={graphOnMenu} onFileMenu={graphOnFileMenu}/>)}</section></div></>}{menu!==undefined&&<ContextMenu position={{x:menu.x,y:menu.y}} label={menuLabel} entries={menuEntries()} onClose={()=>setMenu(undefined)}/>}{commands.pickerElement}</>
 }
