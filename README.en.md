@@ -62,10 +62,10 @@
   while `Ctrl+Shift+P` lists file, view, terminal and language-service commands with their current keybindings. Both read the
   same editable keybinding registry as the settings page. The host caches the workspace file list for five seconds; ranking
   twenty thousand paths costs about 5–10 ms and runs on a deferred value so typing stays responsive.
-- **Inline AI edit**: select code (or put the cursor on a line) and press `Ctrl+K`, then describe the change. The result opens
-  as a diff tab (inline or side-by-side); **accepting applies it as one undoable edit** to the buffer, and rejecting changes
-  nothing. Generation can be cancelled, and an edit is refused if the file changed while the model was thinking. The editor
-  context menu's "Edit selection with AI" is the same action.
+- **Inline AI edit**: select code (or put the cursor on a line) and press `Ctrl+K`, then describe the change. The result
+  appears as a diff overlay on top of the editor (inline or side-by-side); **accepting applies it as one undoable edit** to
+  the buffer, and rejecting changes nothing. Generation can be cancelled, and an edit is refused if the file changed while
+  the model was thinking. The editor context menu's "Edit selection with AI" is the same action.
 - **Change review and checkpoints**: the bottom "Changes" panel lists files that differ from their baseline (DSH Agent writes
   and manual edits both appear), with per-file diffs, confirm and restore. "Create checkpoint" stores the current changes under
   the workspace's `.dsh-workbench/checkpoints.json`, and rolling back first backs up the current state, so the rollback itself

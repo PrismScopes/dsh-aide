@@ -319,6 +319,8 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-inline-edit-foot{display:flex;align-items:center;gap:6px}
 .dvw-inline-edit-hint{margin-right:auto;font-size:11px;color:var(--dvw-text-3)}
 .dvw-inline-edit-toolbar{gap:6px}
+.dvw-inline-edit-layer{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;background:var(--dvw-base)}
+.dvw-inline-edit-diff{position:relative;flex:1;min-height:0}
 .dvw-inline-edit-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dvw-text-2)}
 .dvw-mode-button[data-variant=primary]{border-color:var(--dvw-accent);background:color-mix(in srgb,var(--dvw-accent) 18%,transparent);color:var(--dvw-text)}
 .dvw-mode-button[data-variant=reject]:hover{color:var(--dvw-error)}
