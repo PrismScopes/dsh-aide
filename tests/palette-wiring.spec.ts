@@ -56,4 +56,11 @@ describe('palette appearance', () => {
       expect(styles).toContain(selector)
     }
   })
+
+  it('does not draw a square focus ring inside the rounded palette', () => {
+    // 全局 input:focus-visible 会画方角蓝框；输入框自身必须显式关掉，焦点由面板边框表达。
+    expect(styles).toContain('.dvw-overlay .dvw-palette-input:focus-visible{outline:0}')
+    expect(styles).toContain('.dvw-palette:focus-within{border-color:')
+    expect(styles).toContain('caret-color:var(--dvw-accent)')
+  })
 })

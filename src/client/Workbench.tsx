@@ -1566,9 +1566,10 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     const add=(id:string,label:string,group:string,run:()=>void,keyId?:CommandId)=>rows.push({id,label,group,...(keyId===undefined?{}:{keys:paletteKeys(keyId)}),run})
     // 文件与标签
     add('editor.save','保存当前文件','文件',()=>{const tab=tabs.find(row=>row.path===active);if(tab!==undefined)void save(tab)},'editor.save')
-    add('editor.inlineEdit','用 AI 修改选中代码','编辑器',()=>{const entry=activeLanguageEditor();if(entry===undefined){setError('请先把光标放到编辑器里再执行');return}const snapshot=snapshotOfEditor(entry.editor,entry.path);if(snapshot===undefined){setError('当前编辑器没有可修改的文本');return}beginInlineEditRef.current(snapshot)},'editor.inlineEdit')
     add('file.close','关闭当前标签','文件',()=>{if(active!==undefined)requestCloseTabs([active])})
     add('file.closeAll','关闭全部标签','文件',closeAll)
+    // 编辑器
+    add('editor.inlineEdit','用 AI 修改选中代码','编辑器',()=>{const entry=activeLanguageEditor();if(entry===undefined){setError('请先把光标放到编辑器里再执行');return}const snapshot=snapshotOfEditor(entry.editor,entry.path);if(snapshot===undefined){setError('当前编辑器没有可修改的文本');return}beginInlineEditRef.current(snapshot)},'editor.inlineEdit')
     // 视图
     const showView=(view:WorkbenchView)=>{setPrimarySideVisible(true);service.show(view)}
     add('view.explorer','资源管理器','视图',()=>showView('explorer'),'view.explorer')
