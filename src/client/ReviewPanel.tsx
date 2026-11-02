@@ -55,6 +55,7 @@ export function ReviewPanel(props: BottomPanelProps) {
   useEffect(() => { if (props.visible) void load() }, [props.visible, load])
 
   // 监听工作台的文件变化：agent 写完文件后列表自己跟上，不需要用户手动刷新。
+  // `dvw-review-refresh` 是命令面板执行确认/检查点后的显式刷新（不依赖文件监听的下一次事件）。
   const timer = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => {
     const onChange = () => {
@@ -62,7 +63,8 @@ export function ReviewPanel(props: BottomPanelProps) {
       timer.current = setTimeout(() => void load(), 400)
     }
     window.addEventListener('dvw-files-changed', onChange)
-    return () => { clearTimeout(timer.current); window.removeEventListener('dvw-files-changed', onChange) }
+    window.addEventListener('dvw-review-refresh', onChange)
+    return () => { clearTimeout(timer.current); window.removeEventListener('dvw-files-changed', onChange); window.removeEventListener('dvw-review-refresh', onChange) }
   }, [load])
 
   const run = async (key: string, action: () => Promise<unknown>): Promise<void> => {

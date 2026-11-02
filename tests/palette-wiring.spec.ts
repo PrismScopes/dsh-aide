@@ -17,6 +17,7 @@ const keybindings = read('src/client/keybindings.ts')
 const styles = read('src/client/styles.ts')
 const api = read('src/api.ts')
 const host = read('src/host.ts')
+const reviewPanel = read('src/client/ReviewPanel.tsx')
 
 describe('palette keybindings', () => {
   it('registers Ctrl+P and Ctrl+Shift+P with labels that match the panel', () => {
@@ -42,6 +43,25 @@ describe('workbench wiring', () => {
     expect(workbench).toContain("api<{files:string[];truncated:boolean}>('fs.files'")
     // 文件增删后清客户端缓存，下次打开重新取。
     expect(workbench).toContain('paletteFilesRef.current=undefined')
+  })
+
+  it('exposes the full command inventory across every subsystem', () => {
+    for (const id of ['file.saveAll', 'file.closeOthers', 'file.closeRight', 'file.closeSaved', 'file.togglePin', 'file.copyAbsolutePath',
+      'editor.undo', 'editor.format', 'editor.comment', 'editor.selectHighlights',
+      'view.sidebar', 'view.output', 'view.outline', 'view.diffSplit',
+      'git.graph', 'git.output',
+      'ai.explain', 'ai.fix', 'ai.tests', 'ai.review',
+      'review.checkpoint', 'review.acceptAll',
+      'workbench.dino']) {
+      expect(workbench).toContain(`add('${id}'`)
+    }
+    // 命令 id 不能重复：重复会让 Enter 执行到错误的那一条。
+    const ids = [...workbench.matchAll(/add\('([^']+)'/g)].map(match => match[1])
+    expect(ids.length).toBeGreaterThan(45)
+    expect(new Set(ids).size).toBe(ids.length)
+    // 审查动作执行后显式通知面板刷新。
+    expect(reviewPanel).toContain("window.addEventListener('dvw-review-refresh'")
+    expect(workbench).toContain("new Event('dvw-review-refresh')")
   })
 
   it('routes file picks through the same open() used by the explorer', () => {

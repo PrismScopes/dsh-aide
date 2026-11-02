@@ -42,7 +42,8 @@ import { documentSymbols, findReferences, gotoDefinition, quickFix, renameSymbol
 import { INLINE_EDIT_EVENT, applyInlineEdit, snapshotOfEditor, type InlineEditProposal, type InlineEditSnapshot } from './inlineEdit.ts'
 import { InlineEditPrompt } from './InlineEditPrompt.tsx'
 import { REVIEW_DIFF_EVENT } from './ReviewPanel.tsx'
-import { REVEAL_CHAT_EVENT } from './dshChat.ts'
+import { REVEAL_CHAT_EVENT, askDsh } from './dshChat.ts'
+import type { DshAskKind, DshSelection } from './dshChat.ts'
 import { LanguageWorkspace, setActiveLanguageWorkspace } from './language/client.ts'
 import { useDiagnostics } from './language/diagnostics.ts'
 import { LanguagePickerHost } from './language/LanguagePickerHost.tsx'
@@ -1561,27 +1562,103 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
    * 面板只是「键盘够得着的菜单」，行为必须与菜单/快捷键一致。
    */
   const paletteKeys=(id:CommandId):string[]|undefined=>{const binding=bindingOf(id);return binding===null?undefined:formatBinding(binding)}
+  /** 当前编辑器选区（纯选区；没有编辑器或空选区返回 undefined，供 AI 命令兜底提示）。 */
+  const paletteSelection=():DshSelection|undefined=>{
+    const entry=activeLanguageEditor();const model=entry?.editor.getModel();const selection=entry?.editor.getSelection()
+    if(entry===undefined||model===null||model===undefined||selection===null||selection===undefined||selection.isEmpty())return undefined
+    const text=model.getValueInRange(selection)
+    if(text.trim()==='')return undefined
+    return {text,filePath:entry.path,language:model.getLanguageId(),lineStart:selection.startLineNumber,lineEnd:selection.endLineNumber}
+  }
+  /**
+   * 执行 Monaco 内置命令。
+   *
+   * 用 trigger 而不是 getAction：格式化这类命令注册为 Action2，不在 getAction 表里；trigger 与右键菜单
+   * 走的是同一条执行路径，行为与直接在编辑器里按键一致。
+   */
+  const runEditorCommand=(commandId:string)=>()=>{
+    const entry=activeLanguageEditor()
+    if(entry===undefined){setError('请先在编辑器里打开文件');return}
+    entry.editor.trigger('dsh-palette',commandId,null)
+    entry.editor.focus()
+  }
+  /** 把当前选区以指定意图插入 DSH 对话输入框（只插入，不发送）。 */
+  const askWithSelection=(kind:DshAskKind)=>()=>{
+    const selection=paletteSelection()
+    if(selection===undefined){setError('请先在编辑器里选中一段代码');return}
+    void askDsh(kind,selection).then(result=>{if(!result.ok)setError(result.message??'无法写入 DSH 对话输入框')})
+  }
+  /** 审查动作：执行后通知面板刷新，不依赖文件监听的下一次事件。 */
+  const reviewCommand=(run:(sessionId:string)=>Promise<unknown>)=>()=>{
+    if(sessionId===undefined){setError('请先选择或创建一个 DSH 会话');return}
+    void run(sessionId).then(()=>window.dispatchEvent(new Event('dvw-review-refresh'))).catch(error=>setError(String(error)))
+  }
   const paletteCommands=():Array<{id:string;label:string;group:string;keys?:string[];run():void}>=>{
     const rows:Array<{id:string;label:string;group:string;keys?:string[];run():void}>=[]
     const add=(id:string,label:string,group:string,run:()=>void,keyId?:CommandId)=>rows.push({id,label,group,...(keyId===undefined?{}:{keys:paletteKeys(keyId)}),run})
     // 文件与标签
     add('editor.save','保存当前文件','文件',()=>{const tab=tabs.find(row=>row.path===active);if(tab!==undefined)void save(tab)},'editor.save')
+    add('file.saveAll','保存全部文件','文件',()=>{for(const tab of dirtyCloseTabs(tabsRef.current))void save(tab)})
     add('file.close','关闭当前标签','文件',()=>{if(active!==undefined)requestCloseTabs([active])})
+    add('file.closeOthers','关闭其他标签','文件',()=>{if(active!==undefined)closeOtherTabs(active)})
+    add('file.closeRight','关闭右侧标签','文件',()=>{if(active!==undefined)closeRightTabs(active)})
+    add('file.closeSaved','关闭已保存的标签','文件',closeSavedTabs)
     add('file.closeAll','关闭全部标签','文件',closeAll)
+    add('file.togglePin','固定或取消固定当前标签','文件',()=>{if(active!==undefined)togglePinTab(active)})
+    add('file.copyPath','复制当前文件的相对路径','文件',()=>{if(active!==undefined)copyTabPath(active,false)})
+    add('file.copyAbsolutePath','复制当前文件的绝对路径','文件',()=>{if(active!==undefined)copyTabPath(active,true)})
     // 编辑器
     add('editor.inlineEdit','用 AI 修改选中代码','编辑器',()=>{const entry=activeLanguageEditor();if(entry===undefined){setError('请先把光标放到编辑器里再执行');return}const snapshot=snapshotOfEditor(entry.editor,entry.path);if(snapshot===undefined){setError('当前编辑器没有可修改的文本');return}beginInlineEditRef.current(snapshot)},'editor.inlineEdit')
+    add('editor.undo','撤销','编辑器',runEditorCommand('undo'))
+    add('editor.redo','重做','编辑器',runEditorCommand('redo'))
+    add('editor.find','在文件中查找','编辑器',runEditorCommand('actions.find'))
+    add('editor.replace','在文件中替换','编辑器',runEditorCommand('editor.action.startFindReplaceAction'))
+    add('editor.gotoLine','转到行','编辑器',runEditorCommand('editor.action.gotoLine'))
+    add('editor.format','格式化文档','编辑器',runEditorCommand('editor.action.formatDocument'))
+    add('editor.comment','注释或取消注释当前行','编辑器',runEditorCommand('editor.action.commentLine'))
+    add('editor.copyLineDown','复制当前行到下边','编辑器',runEditorCommand('editor.action.copyLinesDownAction'))
+    add('editor.moveLineUp','上移当前行','编辑器',runEditorCommand('editor.action.moveLinesUpAction'))
+    add('editor.moveLineDown','下移当前行','编辑器',runEditorCommand('editor.action.moveLinesDownAction'))
+    add('editor.selectHighlights','选择所有出现','编辑器',runEditorCommand('editor.action.selectHighlights'))
+    add('editor.fold','折叠代码','编辑器',runEditorCommand('editor.action.fold'))
+    add('editor.unfold','展开代码','编辑器',runEditorCommand('editor.action.unfold'))
+    add('editor.indent','增加缩进','编辑器',runEditorCommand('editor.action.indentLines'))
+    add('editor.outdent','减少缩进','编辑器',runEditorCommand('editor.action.outdentLines'))
     // 视图
     const showView=(view:WorkbenchView)=>{setPrimarySideVisible(true);service.show(view)}
     add('view.explorer','资源管理器','视图',()=>showView('explorer'),'view.explorer')
     add('view.search','搜索','视图',()=>showView('search'),'view.search')
     add('view.git','源代码管理','视图',()=>showView('git'),'view.git')
+    add('view.sidebar','显示或隐藏左侧栏','视图',()=>setPrimarySideVisible(!primarySideVisible))
     add('view.chat','显示或隐藏 DSH 对话栏','视图',()=>setChatVisible(value=>!value),'view.chat')
     add('view.problems','问题面板','视图',()=>{if(service.getPanels().some(panel=>panel.id==='problems'))service.toggleBottomPanel('problems')},'view.problems')
+    add('view.output','输出面板','视图',()=>{if(service.getPanels().some(panel=>panel.id==='output'))service.toggleBottomPanel('output')})
     add('view.review','查看工作区改动','视图',()=>{if(service.getPanels().some(panel=>panel.id==='review'))service.toggleBottomPanel('review')})
     add('view.debug','调试控制台','视图',openDebugConsole)
+    add('view.outline','显示或隐藏 Markdown 大纲','视图',()=>setOutlineVisible(value=>!value))
+    add('view.markdownSource','Markdown 切换到源码','视图',()=>{if(active!==undefined)setTabs(rows=>rows.map(tab=>tab.path===active?{...tab,preview:false}:tab))})
+    add('view.markdownPreview','Markdown 切换到预览','视图',()=>{if(active!==undefined)setTabs(rows=>rows.map(tab=>tab.path===active?{...tab,preview:true}:tab))})
+    add('view.diffInline','差异切换为内联视图','视图',()=>{if(active!==undefined)setTabs(rows=>rows.map(tab=>tab.path===active?{...tab,diffMode:'inline'}:tab))})
+    add('view.diffSplit','差异切换为并排视图','视图',()=>{if(active!==undefined)setTabs(rows=>rows.map(tab=>tab.path===active?{...tab,diffMode:'split'}:tab))})
     // 终端
     add('terminal.toggle','显示或隐藏终端','终端',()=>toggleTerminal(service),'terminal.toggle')
     add('terminal.new','新建终端','终端',()=>service.runCommand('terminal.new'),'terminal.new')
+    // 源代码管理
+    add('git.graph','打开提交图','源代码管理',()=>openGitGraph(false))
+    add('git.output','显示 Git 输出','源代码管理',openGitOutput)
+    // AI（把选区插入 DSH 对话，不直接发送）
+    add('ai.explain','解释选中代码','AI',askWithSelection('explain'))
+    add('ai.fix','修复选中代码','AI',askWithSelection('fix'))
+    add('ai.refactor','重构选中代码','AI',askWithSelection('refactor'))
+    add('ai.tests','为选中代码生成单元测试','AI',askWithSelection('tests'))
+    add('ai.comment','为选中代码添加注释','AI',askWithSelection('comment'))
+    add('ai.review','审查选中代码','AI',askWithSelection('review'))
+    // 改动审查
+    add('review.checkpoint','建立改动检查点','审查',reviewCommand(async id=>{await api('review.checkpoint',{sessionId:id,label:'手动检查点'})}))
+    add('review.acceptAll','确认全部工作区改动','审查',reviewCommand(async id=>{
+      const snapshot=await api<{files:Array<{path:string;reviewed:boolean}>}>('review.list',{sessionId:id})
+      await api('review.acceptAll',{sessionId:id,paths:snapshot.files.filter(file=>!file.reviewed).map(file=>file.path)})
+    }))
     // 语言服务
     add('language.definition','转到定义','语言服务',()=>void gotoDefinition(),'language.definition')
     add('language.references','查找所有引用','语言服务',()=>void findReferences(),'language.references')
@@ -1590,6 +1667,7 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     add('language.workspaceSymbols','转到工作区中的符号','语言服务',workspaceSymbols,'language.workspaceSymbols')
     add('language.quickFix','快速修复','语言服务',()=>void quickFix(),'language.quickFix')
     // 其它
+    add('workbench.dino','打开小恐龙','其它',openDino)
     add('workbench.settings','在 DSH 设置中管理 AIDE 选项','其它',()=>service.openDshSettings())
     add('workbench.hide','返回 DSH','其它',hideWorkbench)
     return rows
