@@ -113,10 +113,10 @@
   实现与验证情况见 [docs/inline-completion.md](docs/inline-completion.md)。
   注意：宿主侧代码只在进程启动时加载，改过之后需要**重启应用**才生效（客户端部分刷新页面即可）。
 - **命令面板与快速打开**：`Ctrl+P` 按文件名快速打开（模糊匹配、最近打开优先，输入 `>` 切到命令模式），
-  `Ctrl+Shift+P` 是覆盖 71 条命令的全量入口：文件/标签、编辑器动作（撤销、格式化、行操作等）、视图与面板、搜索、
+  `Ctrl+Shift+P` 是覆盖 78 条命令的全量入口：文件/标签、编辑器动作（撤销、格式化、行操作等）、视图与面板、搜索、
   终端拆分/关闭、源代码管理、AI（解释/修复/重构/测试/注释/审查）、DSH、改动审查与语言服务；右侧显示当前生效键位。
   最近文件条数与是否显示键位可在设置页调整。文件清单由宿主按工作区缓存 5 秒，两万个路径下单次过滤排序约 5–10ms
-  （排序放在延迟值上，输入不卡）。
+  （排序放在延迟值上，输入不卡）。命令分类、终端与 Git 的事件化管线见 [docs/command-palette.md](docs/command-palette.md)。
 - **编辑器内 AI 修改**：在编辑器里选中代码（或把光标放在一行上）按 `Ctrl+K`，写一句要求即可让模型改写；
   结果以 diff 覆盖层压在编辑器上（内联/并排切换），**接受后作为一次可撤销的编辑写回缓冲区**，拒绝则什么都不改。
   生成中可以取消；如果这期间文件内容被改过，会拒绝应用而不是覆盖新内容。右键菜单的「用 AI 修改选中代码」是同一入口。
@@ -211,7 +211,7 @@ dsh plugin --profile web add dsh-aide
 
 ```bash
 # 预构建 tarball
-dsh plugin --profile web add https://github.com/PrismScopes/dsh-aide/releases/download/v0.12.0/dsh-aide-0.12.0.tgz
+dsh plugin --profile web add https://github.com/PrismScopes/dsh-aide/releases/download/v0.14.0/dsh-aide-0.14.0.tgz
 
 # 或固定 Git 提交
 dsh plugin --profile web add github:PrismScopes/dsh-aide#29f11c09835a8560f47a6c19679eca43361cd9e6

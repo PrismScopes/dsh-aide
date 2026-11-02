@@ -166,7 +166,7 @@ dsh plugin --profile web add dsh-aide
 
 ```bash
 # Prebuilt tarball
-dsh plugin --profile web add https://github.com/PrismScopes/dsh-aide/releases/download/v0.12.0/dsh-aide-0.12.0.tgz
+dsh plugin --profile web add https://github.com/PrismScopes/dsh-aide/releases/download/v0.14.0/dsh-aide-0.14.0.tgz
 
 # Or a pinned Git commit
 dsh plugin --profile web add github:PrismScopes/dsh-aide#29f11c09835a8560f47a6c19679eca43361cd9e6
