@@ -3,6 +3,7 @@ import { api } from './api.ts'
 import { Icon } from './Icon.tsx'
 import type { BottomPanelProps } from './service.ts'
 import { workspaceAbsolutePath } from './menus.ts'
+import { usePreferences } from './preferences.ts'
 
 /**
  * 「改动」底部面板：列出工作区里与基线不同的文件，打开差异、确认、还原，并管理检查点。
@@ -38,6 +39,7 @@ export function checkpointTime(at: number): string {
 }
 
 export function ReviewPanel(props: BottomPanelProps) {
+  const preferences = usePreferences()
   const [snapshot, setSnapshot] = useState<ReviewSnapshotView>()
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState<string>()
@@ -55,16 +57,23 @@ export function ReviewPanel(props: BottomPanelProps) {
   useEffect(() => { if (props.visible) void load() }, [props.visible, load])
 
   // 监听工作台的文件变化：agent 写完文件后列表自己跟上，不需要用户手动刷新。
-  // `dvw-review-refresh` 是命令面板执行确认/检查点后的显式刷新（不依赖文件监听的下一次事件）。
+  // 关掉自动刷新时只保留下面那条显式刷新事件。
   const timer = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => {
+    if (!preferences.reviewAutoRefresh) return
     const onChange = () => {
       clearTimeout(timer.current)
       timer.current = setTimeout(() => void load(), 400)
     }
     window.addEventListener('dvw-files-changed', onChange)
-    window.addEventListener('dvw-review-refresh', onChange)
-    return () => { clearTimeout(timer.current); window.removeEventListener('dvw-files-changed', onChange); window.removeEventListener('dvw-review-refresh', onChange) }
+    return () => { clearTimeout(timer.current); window.removeEventListener('dvw-files-changed', onChange) }
+  }, [load, preferences.reviewAutoRefresh])
+
+  // 显式刷新不受自动刷新开关影响：命令面板执行确认/检查点后要立即反映。
+  useEffect(() => {
+    const refresh = () => void load()
+    window.addEventListener('dvw-review-refresh', refresh)
+    return () => window.removeEventListener('dvw-review-refresh', refresh)
   }, [load])
 
   const run = async (key: string, action: () => Promise<unknown>): Promise<void> => {

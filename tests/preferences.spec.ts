@@ -112,6 +112,12 @@ describe('workbench preferences', () => {
     expect(normalizePreferences({ editorCursorStyle: 'bar' }).editorCursorStyle).toBe('line')
     expect(normalizePreferences({ editorAutoSave: 'afterDelay' }).editorAutoSave).toBe('afterDelay')
     expect(normalizePreferences({ editorAutoSave: true }).editorAutoSave).toBe('off')
+    // 命令面板与改动审查：数量夹取，布尔项只认布尔值。
+    expect(normalizePreferences({ paletteRecentCount: 500 }).paletteRecentCount).toBe(40)
+    expect(normalizePreferences({ paletteRecentCount: -3 }).paletteRecentCount).toBe(0)
+    expect(normalizePreferences({ paletteRecentCount: 'many' }).paletteRecentCount).toBe(10)
+    expect(normalizePreferences({ paletteShowKeys: false }).paletteShowKeys).toBe(false)
+    expect(normalizePreferences({ reviewAutoRefresh: false }).reviewAutoRefresh).toBe(false)
   })
 
   it('keeps the valid fields when one field is broken', () => {

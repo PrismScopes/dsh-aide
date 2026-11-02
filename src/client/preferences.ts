@@ -62,6 +62,12 @@ export interface WorkbenchPreferences {
   languageHover: boolean
   /** 语言服务的补全与签名提示。关闭后只有 AI 行内补全，不再向宿主发补全请求。 */
   languageCompletion: boolean
+  /** 快速打开在空查询时优先列出的最近文件数量；0 表示不按最近排序。 */
+  paletteRecentCount: number
+  /** 命令面板是否在命令右侧显示当前键位。 */
+  paletteShowKeys: boolean
+  /** 改动面板是否随工作区文件变化自动刷新；关闭后需要手动刷新。 */
+  reviewAutoRefresh: boolean
 }
 
 /**
@@ -79,6 +85,7 @@ export const PREFERENCE_LIMITS = {
   editorWordWrapColumn: { min: 40, max: 200 },
   editorAutoSaveDelayMs: { min: 500, max: 10000 },
   terminalFontSize: { min: 10, max: 20 },
+  paletteRecentCount: { min: 0, max: 40 },
 } as const
 
 /** 行高的合法下限（0 之外）。见 PREFERENCE_LIMITS.editorLineHeight 的说明。 */
@@ -105,6 +112,9 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   terminalFontSize: 13,
   languageHover: true,
   languageCompletion: true,
+  paletteRecentCount: 10,
+  paletteShowKeys: true,
+  reviewAutoRefresh: true,
 }
 
 /** 键名带 v1：老版本存进去的就是这一份结构。新增字段从默认值补齐，不需要换 key。 */
@@ -178,6 +188,9 @@ export function normalizePreferences(value: unknown): WorkbenchPreferences {
     terminalFontSize: clampNumber(record['terminalFontSize'], PREFERENCE_LIMITS.terminalFontSize, DEFAULT_PREFERENCES.terminalFontSize),
     languageHover: booleanValue(record['languageHover'], DEFAULT_PREFERENCES.languageHover),
     languageCompletion: booleanValue(record['languageCompletion'], DEFAULT_PREFERENCES.languageCompletion),
+    paletteRecentCount: clampNumber(record['paletteRecentCount'], PREFERENCE_LIMITS.paletteRecentCount, DEFAULT_PREFERENCES.paletteRecentCount),
+    paletteShowKeys: booleanValue(record['paletteShowKeys'], DEFAULT_PREFERENCES.paletteShowKeys),
+    reviewAutoRefresh: booleanValue(record['reviewAutoRefresh'], DEFAULT_PREFERENCES.reviewAutoRefresh),
   }
 }
 

@@ -547,6 +547,23 @@ function TerminalGroup({ preferences }: { preferences: ReturnType<typeof usePref
   </section>
 }
 
+/** 「命令面板与改动」分组：命令面板的最近文件/键位提示，以及改动面板的自动刷新。 */
+function CommandsGroup({ preferences }: { preferences: ReturnType<typeof usePreferences> }) {
+  return <section className="dvw-set-group">
+    <h3 className="dvw-set-group-title">命令面板与改动</h3>
+    <Row title="最近打开的文件" description="快速打开空查询时优先列出的文件数量；0 表示不按最近打开排序。">
+      <Stepper value={preferences.paletteRecentCount} min={PREFERENCE_LIMITS.paletteRecentCount.min} max={PREFERENCE_LIMITS.paletteRecentCount.max} step={1} unit="个" label="最近打开文件数量"
+        onChange={value => updatePreferences({ paletteRecentCount: value })}/>
+    </Row>
+    <Row title="显示键位提示" description="在命令右侧显示当前生效的快捷键；关掉后只显示命令名与分组。">
+      <Switch checked={preferences.paletteShowKeys} label="显示键位提示" onChange={value => updatePreferences({ paletteShowKeys: value })}/>
+    </Row>
+    <Row title="改动面板自动刷新" description="工作区文件变化后自动重读改动列表；关闭后需要手动点刷新，命令面板的确认/检查点仍会刷新。">
+      <Switch checked={preferences.reviewAutoRefresh} label="改动面板自动刷新" onChange={value => updatePreferences({ reviewAutoRefresh: value })}/>
+    </Row>
+  </section>
+}
+
 /** 快捷键分组：只留一行入口，搜索与改键在面板里（与 DSH 自己的快捷键设置同一套形式）。 */
 function ShortcutsGroup() {
   return <section className="dvw-set-group">
@@ -599,6 +616,7 @@ export function SettingsPanel() {
     <CompletionGroup preferences={preferences} settings={settings}/>
     <InlineEditGroup settings={settings}/>
     <LanguageGroup preferences={preferences} settings={settings}/>
+    <CommandsGroup preferences={preferences}/>
     <TerminalGroup preferences={preferences}/>
     <ShortcutsGroup/>
     <AboutGroup settingsFile={settings.view?.completion.file}/>

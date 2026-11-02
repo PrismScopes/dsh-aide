@@ -78,10 +78,10 @@ function languageGroupHtml(view?: WorkbenchSettingsView): string {
 describe('workbench settings page', () => {
   afterEach(() => { preferences.reset(); keybindings.resetAll() })
 
-  it('renders all seven groups in one scrolling page, in the agreed order, without the removed sub-menu', () => {
+  it('renders all eight groups in one scrolling page, in the agreed order, without the removed sub-menu', () => {
     const titles = [...html.matchAll(/class="dvw-set-group-title">([^<]+)<\/h3>/g)].map(match => match[1])
-    // AI 修改紧挨着 AI 补全：两者都是模型路由，放在一起便于对照；语言服务随后。
-    expect(titles).toEqual(['编辑器', 'AI 补全', 'AI 修改', '语言服务', '终端', '快捷键', '关于与诊断'])
+    // AI 修改紧挨着 AI 补全：两者都是模型路由，放在一起便于对照；语言服务、命令面板与改动随后。
+    expect(titles).toEqual(['编辑器', 'AI 补全', 'AI 修改', '语言服务', '命令面板与改动', '终端', '快捷键', '关于与诊断'])
     // 左侧分类子菜单已经按用户反馈去掉：不再有 tablist / tab / tabpanel，也没有对应样式。
     expect(html).not.toContain('role="tablist"')
     expect(html).not.toContain('role="tabpanel"')
@@ -168,6 +168,16 @@ describe('workbench settings page', () => {
     overriddenState.inlineRouteDraft = 'env/model'
     const overridden = renderToStaticMarkup(<InlineEditGroup settings={overriddenState}/>)
     expect(overridden).toContain('DSH_INLINE_EDIT_ROUTE=env/model')
+  })
+
+  it('renders the command palette and review preferences group', () => {
+    expect(html).toContain('class="dvw-set-group-title">命令面板与改动</h3>')
+    expect(html).toContain('最近打开的文件')
+    expect(html).toContain('显示键位提示')
+    expect(html).toContain('改动面板自动刷新')
+    expect(html).toContain('aria-label="增大最近打开文件数量"')
+    expect(html).toContain('aria-label="显示键位提示"')
+    expect(html).toContain('aria-label="改动面板自动刷新"')
   })
 
   it('renders the language service rows and the host-off fallbacks', () => {

@@ -1221,8 +1221,8 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const openExternalRef=useRef(openExternal);openExternalRef.current=openExternal
   /** 面板开关：命令模式不必等文件清单；文件模式由下面的 effect 按需拉取。 */
   const openPalette=(mode:'file'|'command')=>setPaletteMode(mode)
-  /** 最近打开的文件：标签栏顺序取反（后打开的排前面），空查询时优先展示。 */
-  const paletteRecent=useMemo(()=>tabs.filter(tab=>!tab.path.startsWith('diff:')&&tab.path!==GIT_GRAPH_PATH&&tab.path!==GIT_OUTPUT_PATH&&tab.path!==DINO_PATH).map(tab=>tab.path).reverse(),[tabs])
+  /** 最近打开的文件：标签栏顺序取反（后打开的排前面），空查询时优先展示。数量由设置页控制。 */
+  const paletteRecent=useMemo(()=>tabs.filter(tab=>!tab.path.startsWith('diff:')&&tab.path!==GIT_GRAPH_PATH&&tab.path!==GIT_OUTPUT_PATH&&tab.path!==DINO_PATH).map(tab=>tab.path).reverse().slice(0,preferences.paletteRecentCount),[tabs,preferences.paletteRecentCount])
   const paletteFileEntries=useMemo(()=>paletteFiles===undefined?[]:filePaletteEntries(paletteFiles.files,paletteRecent),[paletteFiles,paletteRecent])
   /**
    * 文件清单：客户端与宿主各缓存一份。5 秒内重复打开面板（含关闭后立刻重开）不再发请求；
@@ -1672,7 +1672,7 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     add('workbench.hide','返回 DSH','其它',hideWorkbench)
     return rows
   }
-  const paletteCommandEntries=commandPaletteEntries(paletteCommands())
+  const paletteCommandEntries=commandPaletteEntries(paletteCommands()).map(entry=>preferences.paletteShowKeys===false?{...entry,keys:undefined}:entry)
   /** 选中面板里的一行：文件走同一个 open（预览标签语义），命令直接执行并关面板。 */
   const pickPaletteEntry=(entry:PaletteEntry)=>{
     setPaletteMode(undefined)
