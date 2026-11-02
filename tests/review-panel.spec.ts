@@ -49,6 +49,12 @@ describe('review wiring', () => {
     expect(workbench).toContain('openDiffTabRef.current(detail.path')
   })
 
+  it('exposes a status-bar entry with the unreviewed count', () => {
+    expect(workbench).toContain("api<{total:number;unreviewed:number}>('review.count'")
+    expect(workbench).toContain('className="dvw-status-review"')
+    expect(workbench).toContain('个未确认')
+  })
+
   it('ships the panel styles', () => {
     const reviewStyles = read('src/client/reviewStyles.ts')
     for (const selector of ['.dvw-review{', '.dvw-review-row{', '.dvw-review-status{', '.dvw-review-checkpoint{']) {

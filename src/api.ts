@@ -7,7 +7,7 @@ import { groupForSession, paramsForGroup } from './completion/experiment.ts'
 import { DEFAULT_SECURITY_RULES } from './completion/security.ts'
 import { dispatchLanguage } from './language/api.ts'
 import { readInlineEditInput, runInlineEdit } from './inlineEdit.ts'
-import { acceptAllReview, acceptReview, createCheckpoint, deleteCheckpoint, rememberDocumentBaseline, restoreReview, reviewDiff, reviewList, rollbackCheckpoint } from './review.ts'
+import { acceptAllReview, acceptReview, createCheckpoint, deleteCheckpoint, rememberDocumentBaseline, restoreReview, reviewCount, reviewDiff, reviewList, rollbackCheckpoint } from './review.ts'
 import { WorkbenchError, stringField } from './wire.ts'
 
 /**
@@ -86,6 +86,7 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
     case 'ai.inlineEdit': return runInlineEdit(ctx, sessionId ?? '', readInlineEditInput(body), signal)
     // 工作区改动审查与检查点（Agent 与用户手改都写同一批文件，这里按工作区语义呈现）。
     case 'review.list': return reviewList(cwd)
+    case 'review.count': return reviewCount(cwd)
     case 'review.diff': return reviewDiff(cwd, stringField(body, 'path'))
     case 'review.accept': return acceptReview(cwd, stringField(body, 'path'))
     case 'review.acceptAll': return acceptAllReview(cwd, Array.isArray(body.paths) ? body.paths.filter((path): path is string => typeof path === 'string') : [])

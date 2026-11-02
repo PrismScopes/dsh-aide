@@ -272,6 +272,14 @@ export function TerminalPanel({ sessionId, colorScheme, visible }: BottomPanelPr
   }, [shownKey, snapshot.terminals])
   const selectTerminal = (id: string) => { setActive(id); setSplit(current => current?.includes(id) ? current : [id]) }
   const startRename = (id: string, title: string, where: 'tab' | 'list') => setRenaming({ id, value: title, where })
+  // 命令面板/扩展入口：拆分与关闭当前终端。都作用于当前活动终端，与工具栏按钮同一套实现。
+  useEffect(() => {
+    const split = () => splitTerminal()
+    const close = () => { if (active !== undefined) closeTerminal(active) }
+    window.addEventListener('dvw-terminal-split', split)
+    window.addEventListener('dvw-terminal-close', close)
+    return () => { window.removeEventListener('dvw-terminal-split', split); window.removeEventListener('dvw-terminal-close', close) }
+  }, [active, splitTerminal, closeTerminal])
   /** 右键菜单的操作对象：菜单打开时记下的终端 id，动作再回到实例 Map / 列表里取。 */
   const menuTerminal = (id: string) => terminals.current.get(id)
   const openTabMenu = (id: string, kind: 'tab' | 'list', position: { x: number; y: number }) => {

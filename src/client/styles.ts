@@ -433,6 +433,10 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-act-badge[data-severity=warning]{background:var(--dvw-warn)}
 /* 状态栏的问题计数：两个可点区域过小会难点，所以做成按钮、左右各留 4px 命中区。 */
 .dvw-status-problem{display:flex;align-items:center;gap:8px;height:100%;padding:0 4px;border:0;background:transparent;color:var(--dvw-text-2);font:inherit;cursor:pointer}
+/* 状态栏的改动入口：与问题计数并列，计数只是提示，点它永远能打开「改动」面板。 */
+.dvw-status-review{display:flex;align-items:center;gap:5px;height:100%;padding:0 4px;border:0;background:transparent;color:var(--dvw-text-2);font:inherit;cursor:pointer;white-space:nowrap}
+.dvw-status-review:hover{color:var(--dvw-text)}
+.dvw-status-review>.codicon{font-size:13px;color:var(--dvw-text-3)}
 .dvw-status-problem:hover{color:var(--dvw-text)}
 .dvw-status-problem[data-severity=error]{color:var(--dvw-error)}
 .dvw-status-problem span[data-severity=error]{color:var(--dvw-error)}

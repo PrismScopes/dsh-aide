@@ -183,6 +183,12 @@ export async function reviewList(cwd: string): Promise<ReviewSnapshot> {
   return { files: rows, checkpoints: (await readCheckpoints(cwd)).map(summaryOf) }
 }
 
+/** 状态栏用的轻量计数：复用 reviewList（git status 有 1.5 秒缓存），供状态栏显示未确认改动数。 */
+export async function reviewCount(cwd: string): Promise<{ total: number; unreviewed: number }> {
+  const snapshot = await reviewList(cwd)
+  return { total: snapshot.files.length, unreviewed: snapshot.files.filter(file => !file.reviewed).length }
+}
+
 /** 一次 diff 的内容；二进制文件只给标记，不带正文。 */
 export interface ReviewDiff {
   path: string

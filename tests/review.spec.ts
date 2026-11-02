@@ -10,6 +10,7 @@ import {
   clearWorkspaceBaselines,
   createCheckpoint,
   reviewDiff,
+  reviewCount,
   reviewList,
   restoreReview,
   rollbackCheckpoint,
@@ -104,6 +105,14 @@ describe('review list and baseline', () => {
     const result = await acceptAllReview(root, ['a.txt', 'missing.txt'])
     expect(result.reviewed).toBe(2)
     expect(baselineOf(root, 'a.txt')).toBe('two\n')
+  })
+
+  it('counts changed and unreviewed files for the status bar', async () => {
+    const root = await repository()
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    expect(await reviewCount(root)).toEqual({ total: 1, unreviewed: 1 })
+    await acceptReview(root, 'a.txt')
+    expect(await reviewCount(root)).toEqual({ total: 1, unreviewed: 0 })
   })
 })
 

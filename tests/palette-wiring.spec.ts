@@ -50,6 +50,10 @@ describe('workbench wiring', () => {
     for (const id of ['file.saveAll', 'file.closeOthers', 'file.closeRight', 'file.closeSaved', 'file.togglePin', 'file.copyAbsolutePath',
       'editor.undo', 'editor.format', 'editor.comment', 'editor.selectHighlights',
       'view.sidebar', 'view.output', 'view.outline', 'view.diffSplit',
+      'search.focus', 'search.replace', 'search.next', 'search.previous',
+      'terminal.split', 'terminal.close',
+      'dsh.addSelection',
+      'problems.next', 'problems.previous',
       'git.graph', 'git.output',
       'ai.explain', 'ai.fix', 'ai.tests', 'ai.review',
       'review.checkpoint', 'review.acceptAll',
@@ -63,6 +67,10 @@ describe('workbench wiring', () => {
     // 审查动作执行后显式通知面板刷新。
     expect(reviewPanel).toContain("window.addEventListener('dvw-review-refresh'")
     expect(workbench).toContain("new Event('dvw-review-refresh')")
+    // 终端拆分/关闭由命令面板派发事件，终端面板监听后执行。
+    const terminal = read('src/client/TerminalPanel.tsx')
+    expect(terminal).toContain("window.addEventListener('dvw-terminal-split'")
+    expect(terminal).toContain("window.addEventListener('dvw-terminal-close'")
   })
 
   it('renders every command when the query is empty', () => {
