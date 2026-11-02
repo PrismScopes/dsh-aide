@@ -18,6 +18,7 @@ const styles = read('src/client/styles.ts')
 const api = read('src/api.ts')
 const host = read('src/host.ts')
 const reviewPanel = read('src/client/ReviewPanel.tsx')
+const paletteComponent = read('src/client/CommandPalette.tsx')
 
 describe('palette keybindings', () => {
   it('registers Ctrl+P and Ctrl+Shift+P with labels that match the panel', () => {
@@ -62,6 +63,12 @@ describe('workbench wiring', () => {
     // 审查动作执行后显式通知面板刷新。
     expect(reviewPanel).toContain("window.addEventListener('dvw-review-refresh'")
     expect(workbench).toContain("new Event('dvw-review-refresh')")
+  })
+
+  it('renders every command when the query is empty', () => {
+    const cap = Number(/const MAX_ROWS = (\d+)/.exec(paletteComponent)?.[1])
+    const count = [...workbench.matchAll(/add\('([^']+)'/g)].length
+    expect(cap).toBeGreaterThanOrEqual(count)
   })
 
   it('routes file picks through the same open() used by the explorer', () => {

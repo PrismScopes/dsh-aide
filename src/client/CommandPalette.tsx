@@ -13,7 +13,8 @@ import { rankPaletteEntries, splitPaletteInput, type MatchRange, type PaletteEnt
  * 输入框的 value 是唯一状态，模式与查询都由 splitPaletteInput 派生，没有两份真相。
  */
 
-const MAX_ROWS = 60
+/** 结果上限：文件最多 120 行（再多也翻不动），命令清单目前 60 余条，空查询时也必须全部可见。 */
+const MAX_ROWS = 120
 
 export interface CommandPaletteProps {
   /** 初始模式：Ctrl+P 是文件，Ctrl+Shift+P 是命令。 */
