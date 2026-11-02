@@ -378,8 +378,8 @@ describe('Monaco 模型回收接线', () => {
   it('「打开 / 脏」集合由 Workbench 按标签算出来传入，不用全局单例', () => {
     expect(workbench).toContain('keepModelPaths={keepModelPaths}')
     expect(workbench).toContain('dirtyModelPaths={dirtyModelPaths}')
-    expect(workbench).toContain("const keepModelPaths=workspace===undefined?undefined:tabs.filter(tab=>!tab.path.startsWith('diff:')).map(tab=>modelUriOf(tab.path))")
-    expect(workbench).toContain("const dirtyModelPaths=workspace===undefined?undefined:tabs.filter(tab=>tab.dirty&&!tab.path.startsWith('diff:')).map(tab=>modelUriOf(tab.path))")
+    expect(workbench).toContain("const keepModelPaths=workspace===undefined?undefined:tabs.filter(tab=>!tab.path.startsWith('diff:')&&!tab.path.startsWith('inline-edit:')).map(tab=>modelUriOf(tab.path))")
+    expect(workbench).toContain("const dirtyModelPaths=workspace===undefined?undefined:tabs.filter(tab=>tab.dirty&&!tab.path.startsWith('diff:')&&!tab.path.startsWith('inline-edit:')).map(tab=>modelUriOf(tab.path))")
     // 工作区未知时传 undefined（编辑器跳过回收判定），避免把打开中的标签误回收。
     expect(editor).toContain('if (keepPathsRef.current !== undefined)')
   })

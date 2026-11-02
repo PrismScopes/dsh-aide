@@ -58,6 +58,19 @@
   and a local retrieval index that never leaves the workspace directory.
   See [docs/inline-completion.md](docs/inline-completion.md) for implementation and verification status.
   Note: host-side code loads at process start, so **restart the app** after changes (a page reload is enough for the client side).
+- **Command palette and quick open**: `Ctrl+P` fuzzy-opens any workspace file (recent files first; type `>` to switch to commands),
+  while `Ctrl+Shift+P` lists file, view, terminal and language-service commands with their current keybindings. Both read the
+  same editable keybinding registry as the settings page. The host caches the workspace file list for five seconds; ranking
+  twenty thousand paths costs about 5–10 ms and runs on a deferred value so typing stays responsive.
+- **Inline AI edit**: select code (or put the cursor on a line) and press `Ctrl+K`, then describe the change. The result opens
+  as a diff tab (inline or side-by-side); **accepting applies it as one undoable edit** to the buffer, and rejecting changes
+  nothing. Generation can be cancelled, and an edit is refused if the file changed while the model was thinking. The editor
+  context menu's "Edit selection with AI" is the same action.
+- **Change review and checkpoints**: the bottom "Changes" panel lists files that differ from their baseline (DSH Agent writes
+  and manual edits both appear), with per-file diffs, confirm and restore. "Create checkpoint" stores the current changes under
+  the workspace's `.dsh-workbench/checkpoints.json`, and rolling back first backs up the current state, so the rollback itself
+  can be undone. Previously opened files compare against an in-memory baseline; tracked files that were never opened fall back
+  to `git show HEAD`; untracked files have no baseline and can only be confirmed.
 - **Language services (LSP / diagnostics / navigation)**: a built-in TypeScript/JavaScript service reads `tsconfig.json` and
   resolves workspace `node_modules` types, while external LSP servers are discovered on `PATH` (pyright/pylsp, rust-analyzer,
   gopls, clangd, yaml-language-server, bash-language-server, lua-language-server, intelephense, solargraph, …) or configured in
@@ -210,6 +223,9 @@ find/replace/goto-line/comment/format keys come from Monaco and are shown read-o
 | `Ctrl+Shift+H` | Open Search with the replace row expanded |
 | `F4` / `Shift+F4` | Next / previous search result |
 | `Ctrl+Shift+G` | Open Source Control |
+| `Ctrl+P` | Quick open a file (type `>` for commands) |
+| `Ctrl+Shift+P` | Show all commands |
+| `Ctrl+K` | Edit the selection with AI |
 | `Ctrl+S` | Save the active file |
 | `Ctrl+Alt+B` | Toggle the DSH conversation panel |
 | `Ctrl+\`` | Show or hide the terminal |

@@ -14,8 +14,10 @@ import { TerminalPanel } from './TerminalPanel.tsx'
 import { ProblemsPanel } from './ProblemsPanel.tsx'
 import { OutputPanel } from './OutputPanel.tsx'
 import { DebugConsolePanel } from './DebugConsolePanel.tsx'
+import { ReviewPanel } from './ReviewPanel.tsx'
 import { SettingsPanel } from './SettingsPanel.tsx'
-import { installLanguageActions } from './language/actions.ts'
+import { activeLanguageEditor, installLanguageActions } from './language/actions.ts'
+import { requestInlineEdit, snapshotOfEditor } from './inlineEdit.ts'
 import { Workbench } from './Workbench.tsx'
 import { NoSessionPrompt } from './NoSessionPrompt.tsx'
 import { installStyles } from './styles.ts'
@@ -291,6 +293,20 @@ export function apply(ctx: ClientContext): void {
     id: 'dsh-harness', place: 'top', order: -100,
     entries: target => target.hasSelection ? [dshHarnessEntry(target)] : [],
   }), 'dsh-aide: dsh editor menu')
+  // 「用 AI 修改选中代码」：与 Ctrl+K 同一入口，菜单只是给鼠标用户的第二条路。
+  // 快照在点击时现取（编辑器实例可能已经换过焦点/选区），不在菜单构建时缓存。
+  ctx.effect(() => service.registerEditorMenuContribution({
+    id: 'inline-edit', place: 'top', order: -90,
+    entries: target => target.hasSelection ? [{
+      kind: 'item', id: 'inline-edit', label: '用 AI 修改选中代码', shortcut: 'Ctrl+K',
+      onSelect() {
+        const entry = activeLanguageEditor()
+        if (entry === undefined) return
+        const snapshot = snapshotOfEditor(entry.editor, entry.path)
+        if (snapshot !== undefined) requestInlineEdit(snapshot)
+      },
+    }] : [],
+  }), 'dsh-aide: inline edit menu')
   ctx.effect(() => service.registerBottomPanel({ id: 'terminal', title: '终端', component: TerminalPanel }), 'dsh-aide: terminal panel')
   // 「问题」面板：语言服务把诊断推到客户端 store，面板只负责渲染与跳转。
   ctx.effect(() => service.registerBottomPanel({ id: 'problems', title: '问题', component: ProblemsPanel }), 'dsh-aide: problems panel')
@@ -298,6 +314,8 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => service.registerBottomPanel({ id: 'output', title: '输出', component: OutputPanel }), 'dsh-aide: output panel')
   // 「调试控制台」面板：没有活动栏入口，只能从面板标题栏的「更多操作」菜单打开（见 Workbench）。
   ctx.effect(() => service.registerBottomPanel({ id: 'debug', title: '调试控制台', component: DebugConsolePanel }), 'dsh-aide: debug console panel')
+  // 「改动」面板：工作区改动审查与检查点（Agent 写入与手改都写同一批文件，按工作区语义呈现）。
+  ctx.effect(() => service.registerBottomPanel({ id: 'review', title: '改动', component: ReviewPanel }), 'dsh-aide: review panel')
   // 语言服务的全局按键与 Ctrl+点击。装在 window 捕获阶段，才能压过 Monaco 内置的 F12 / Ctrl+点击。
   ctx.effect(() => installLanguageActions(), 'dsh-aide: language actions')
   ctx.effect(() => service.registerCommand({ id: 'terminal.new', run() { window.dispatchEvent(new Event('dvw-terminal-new')) } }), 'dsh-aide: terminal command')

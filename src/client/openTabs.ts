@@ -54,7 +54,7 @@ export function openTabsKey(root: string): string {
  *   - 脏标签带未保存草稿。草稿要恢复得连正文一起存，而正文过期比「重开时没有这个标签」更糟。
  */
 export function storableTab(tab: Pick<TabLike, 'path' | 'dirty'>): boolean {
-  return tab.dirty !== true && !tab.path.startsWith('diff:')
+  return tab.dirty !== true && !tab.path.startsWith('diff:') && !tab.path.startsWith('inline-edit:')
 }
 
 /** 把当前标签列表压成要落库的形状（丢弃不可恢复的标签、去重、按顺序截断）。 */

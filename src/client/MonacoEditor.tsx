@@ -10,6 +10,7 @@ import { ContextMenu, separator, type MenuEntry } from './ContextMenu.tsx'
 import { copyText, readClipboard } from './clipboard.ts'
 import { contributionEntries, type EditorMenuTarget } from './editorMenuRegistry.ts'
 import { registerLanguageEditor } from './language/actions.ts'
+import { requestInlineEdit, snapshotOfEditor } from './inlineEdit.ts'
 import { activeLanguageWorkspace } from './language/client.ts'
 import { installLanguageMonaco } from './language/monaco.ts'
 import { diagnosticsStoreFor, flushMarkersForPath } from './language/diagnostics.ts'
@@ -693,6 +694,18 @@ export function MonacoEditor(props: {
         callbacks.current.onSave()
       }
       dom?.addEventListener('keydown', saveKeydown, true)
+      // 编辑器内 AI 修改（Ctrl+K）：与保存同一套路 —— 每次按键实时读键位表，
+      // 但这里先做快照再派发事件，Workbench 负责弹指令输入框与后续的 diff。
+      const inlineEditKeydown = (event: KeyboardEvent) => {
+        if (props.readOnly === true || props.absolutePath === undefined) return
+        const binding = bindingOf('editor.inlineEdit')
+        if (binding === null || !bindingMatches(event, binding)) return
+        event.preventDefault()
+        event.stopPropagation()
+        const snapshot = snapshotOfEditor(instance, props.absolutePath)
+        if (snapshot !== undefined) requestInlineEdit(snapshot)
+      }
+      dom?.addEventListener('keydown', inlineEditKeydown, true)
       // contextmenu:false 之后 Monaco 不再 preventDefault，浏览器原生菜单会冒出来，这里自己拦住；
       // overlay widget（查找框等）保留原生菜单，否则里面的输入框没有复制粘贴。
       instance.onContextMenu((event: MonacoMouseEvent) => {
@@ -746,6 +759,7 @@ export function MonacoEditor(props: {
         detachLanguageEditor?.()
         window.removeEventListener('dvw-language-ready', openLanguageDocument)
         dom?.removeEventListener('keydown', saveKeydown, true)
+        dom?.removeEventListener('keydown', inlineEditKeydown, true)
         if (props.absolutePath !== undefined && model !== undefined) unregisterModel(model)
       }
     }).catch(error => setError(error instanceof Error ? error.message : String(error)))

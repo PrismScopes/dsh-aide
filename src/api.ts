@@ -1,11 +1,13 @@
 import type { HostContext } from './context.ts'
-import { copyEntry, createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, moveEntry, readDocument, renameEntry, replaceInWorkspace, saveDocument, searchWorkspace } from './host.ts'
+import { copyEntry, createEntry, cwdFor, deleteEntry, gitAction, gitStatus, listFiles, listWorkspaceFiles, moveEntry, readDocument, renameEntry, replaceInWorkspace, saveDocument, searchWorkspace } from './host.ts'
 import type { SearchReplaceRequest, SearchRequest } from './types.ts'
 import { completionIndexFor, completionTelemetry, resolveProvider } from './completion/register.ts'
 import { completionSettings } from './completion/settings.ts'
 import { groupForSession, paramsForGroup } from './completion/experiment.ts'
 import { DEFAULT_SECURITY_RULES } from './completion/security.ts'
 import { dispatchLanguage } from './language/api.ts'
+import { readInlineEditInput, runInlineEdit } from './inlineEdit.ts'
+import { acceptAllReview, acceptReview, createCheckpoint, deleteCheckpoint, rememberDocumentBaseline, restoreReview, reviewDiff, reviewList, rollbackCheckpoint } from './review.ts'
 import { WorkbenchError, stringField } from './wire.ts'
 
 /**
@@ -55,8 +57,19 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
     }
     case 'completion.stats': return { overall: completionTelemetry.stats(), byExperiment: completionTelemetry.byExperiment(), lastFailure: completionTelemetry.failure() }
     case 'fs.list': return listFiles(cwd, stringField(body, 'path'))
-    case 'fs.read': return readDocument(cwd, stringField(body, 'path'), body.force === true)
-    case 'fs.save': return saveDocument(cwd, stringField(body, 'path'), stringField(body, 'content'), stringField(body, 'revision'))
+    // 快速打开：整棵工作区的路径清单（不含内容），宿主侧按工作区短缓存。
+    case 'fs.files': return listWorkspaceFiles(cwd)
+    case 'fs.read': {
+      const document = await readDocument(cwd, stringField(body, 'path'), body.force === true)
+      // 读过即记基线：之后的磁盘改动才能和「我看到的这一版」对比。
+      rememberDocumentBaseline(cwd, document)
+      return document
+    }
+    case 'fs.save': {
+      const document = await saveDocument(cwd, stringField(body, 'path'), stringField(body, 'content'), stringField(body, 'revision'))
+      rememberDocumentBaseline(cwd, document)
+      return document
+    }
     case 'fs.create': return createEntry(cwd, stringField(body, 'path'), body.kind === 'directory' ? 'directory' : 'file').then(() => ({ ok: true }))
     case 'fs.rename': return renameEntry(cwd, stringField(body, 'path'), stringField(body, 'nextPath')).then(() => ({ ok: true }))
     case 'fs.delete': return deleteEntry(cwd, stringField(body, 'path')).then(() => ({ ok: true }))
@@ -69,6 +82,17 @@ export async function dispatch(ctx: HostContext, method: string, body: Record<st
     case 'search.replace': return replaceInWorkspace(cwd, { ...(body as unknown as SearchReplaceRequest), replace: stringField(body, 'replace') }, signal)
     case 'git.status': return gitStatus(cwd)
     case 'git.action': return gitAction(cwd, stringField(body, 'action'), typeof body.path === 'string' ? body.path : undefined, typeof body.value === 'string' ? body.value : undefined)
+    // 编辑器内 AI 修改：模型调用在宿主侧完成，客户端只提交选中内容与上下文。
+    case 'ai.inlineEdit': return runInlineEdit(ctx, sessionId ?? '', readInlineEditInput(body), signal)
+    // 工作区改动审查与检查点（Agent 与用户手改都写同一批文件，这里按工作区语义呈现）。
+    case 'review.list': return reviewList(cwd)
+    case 'review.diff': return reviewDiff(cwd, stringField(body, 'path'))
+    case 'review.accept': return acceptReview(cwd, stringField(body, 'path'))
+    case 'review.acceptAll': return acceptAllReview(cwd, Array.isArray(body.paths) ? body.paths.filter((path): path is string => typeof path === 'string') : [])
+    case 'review.restore': return restoreReview(cwd, stringField(body, 'path'))
+    case 'review.checkpoint': return createCheckpoint(cwd, typeof body.label === 'string' && body.label.trim() !== '' ? body.label.trim() : '手动检查点')
+    case 'review.rollback': return rollbackCheckpoint(cwd, stringField(body, 'id'))
+    case 'review.checkpoint.delete': return deleteCheckpoint(cwd, stringField(body, 'id'))
     default: throw new WorkbenchError('not-found', `unknown workbench API method ${method}`, 404)
   }
 }

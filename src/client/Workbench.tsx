@@ -34,7 +34,14 @@ import { ContextMenu, type MenuEntry } from './ContextMenu.tsx'
 import { explorerMenuItems, panelMoreMenuItems, parentDirectory, tabMenuItems, workspaceAbsolutePath, type ExplorerMenuActions, type FileClipboard } from './menus.ts'
 import { copyText } from './clipboard.ts'
 import { requestTerminal } from './terminal.ts'
-import { bindingMatches, bindingOf } from './keybindings.ts'
+import { bindingMatches, bindingOf, formatBinding } from './keybindings.ts'
+import type { CommandId } from './keybindings.ts'
+import { CommandPalette } from './CommandPalette.tsx'
+import { commandPaletteEntries, filePaletteEntries, type PaletteEntry } from './palette.ts'
+import { documentSymbols, findReferences, gotoDefinition, quickFix, renameSymbol, workspaceSymbols, activeLanguageEditor } from './language/actions.ts'
+import { INLINE_EDIT_EVENT, applyInlineEdit, snapshotOfEditor, type InlineEditProposal, type InlineEditSnapshot } from './inlineEdit.ts'
+import { InlineEditPrompt } from './InlineEditPrompt.tsx'
+import { REVIEW_DIFF_EVENT } from './ReviewPanel.tsx'
 import { REVEAL_CHAT_EVENT } from './dshChat.ts'
 import { LanguageWorkspace, setActiveLanguageWorkspace } from './language/client.ts'
 import { useDiagnostics } from './language/diagnostics.ts'
@@ -46,7 +53,7 @@ import { LANGUAGE_MESSAGE_EVENT, OPEN_LOCATION_EVENT, PROBLEMS_TOGGLE_EVENT, typ
 export { graphRows, graphTrackPath } from './GitPanel.tsx'
 export type { GraphRow, GraphTrack } from './GitPanel.tsx'
 
-interface Tab extends FileDocument { dirty: boolean; draft: string; loaded?: boolean; line?: number; column?: number; external?: boolean; preview?: boolean; title?: string; diff?: GitDiff; diffMode?: 'inline' | 'split'; diffSourcePath?:string; imageUrl?:string; documentPreview?:DocumentPreviewKind; documentUrl?:string; pinned?: boolean; graphAll?: boolean; /** 工作区外的只读文件（跳转目标）：值是绝对路径。 */ externalAbsolute?: string }
+interface Tab extends FileDocument { dirty: boolean; draft: string; loaded?: boolean; line?: number; column?: number; external?: boolean; preview?: boolean; title?: string; diff?: GitDiff; diffMode?: 'inline' | 'split'; diffSourcePath?:string; imageUrl?:string; documentPreview?:DocumentPreviewKind; documentUrl?:string; pinned?: boolean; graphAll?: boolean; /** 工作区外的只读文件（跳转目标）：值是绝对路径。 */ externalAbsolute?: string; /** 编辑器内 AI 修改的 diff 提案；有这个字段的标签不读磁盘。 */ inlineEdit?: InlineEditProposal }
 
 /**
  * 底部面板标题栏的视图标签。
@@ -57,6 +64,7 @@ interface Tab extends FileDocument { dirty: boolean; draft: string; loaded?: boo
 const BOTTOM_PANEL_TABS: readonly { id: string; label: string }[] = [
   { id: 'problems', label: '问题' },
   { id: 'output', label: '输出' },
+  { id: 'review', label: '改动' },
   { id: 'terminal', label: '终端' },
 ]
 
@@ -234,6 +242,7 @@ function TabGlyph({ tab }: { tab: Tab }) {
   if (tab.path === GIT_GRAPH_PATH) return <Icon name="graph" className="dvw-tab-icon"/>
   if (tab.path === GIT_OUTPUT_PATH) return <Icon name="history" className="dvw-tab-icon"/>
   if (tab.path === DINO_PATH) return <Icon name="preview" className="dvw-tab-icon"/>
+  if (tab.path.startsWith('inline-edit:')) return <Icon name="diff" className="dvw-tab-icon"/>
   if (tab.diff !== undefined) return <Icon name="diff" className="dvw-tab-icon"/>
   const name = tab.title ?? tab.diffSourcePath ?? tab.path.split(/[\\/]/).at(-1) ?? tab.path
   const url = fileIconUrl(name)
@@ -965,6 +974,17 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const [workspace,setWorkspace]=useState<{cwd:string;name:string}>(); const [tabs,setTabs]=useState<Tab[]>([]); const [active,setActive]=useState<string>(); const [error,setError]=useState<string>(); const [outlineVisible,setOutlineVisible]=useState(()=>localStorage.getItem('dvw:outline')!=='closed');const [tabMenu,setTabMenu]=useState<{path:string;x:number;y:number}>();const [panelMenu,setPanelMenu]=useState<{x:number;y:number}>();const panelMenuButton=useRef<HTMLButtonElement>(null)
   /** 语言服务弹层（定义/引用/符号/重命名）；Workbench 统一渲染，动作层只负责发请求。 */
   const [languagePicker,setLanguagePicker]=useState<LanguagePickerRequest>()
+  /**
+   * 命令面板 / 快速打开。`paletteMode` 是初始模式也是开关：`undefined` 表示关闭。
+   * 文件清单走宿主 `fs.files`（按工作区短缓存），客户端再缓存一份：切换「文件/命令」模式、
+   * 关闭再打开面板都不重复发请求。
+   */
+  const [paletteMode,setPaletteMode]=useState<'file'|'command'>()
+  const [paletteFiles,setPaletteFiles]=useState<{files:string[];truncated:boolean}>()
+  const [paletteLoading,setPaletteLoading]=useState(false)
+  const paletteFilesRef=useRef<{at:number;files:string[];truncated:boolean}>()
+  /** 编辑器内 AI 修改：待输入指令的选区快照（对话框关闭时为 undefined）。 */
+  const [inlineEdit,setInlineEdit]=useState<{snapshot:InlineEditSnapshot;path:string}>()
   const languageWorkspace=useRef<LanguageWorkspace>()
   // 诊断快照驱动状态栏计数与活动栏角标；cwd 未解析时为空快照。
   const diagnosticsSnapshot=useDiagnostics(workspace?.cwd)
@@ -1126,7 +1146,7 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   useEffect(()=>{
     if(!snapshot.visible||sessionId===undefined)return
     if(!shownOnce.current){shownOnce.current=true;return}
-    const targets=tabsRef.current.filter(tab=>tab.loaded!==false&&tab.dirty!==true&&tab.diff===undefined&&tab.tooLarge!==true&&tab.imageUrl===undefined&&tab.documentPreview===undefined&&tab.path!==GIT_GRAPH_PATH&&tab.path!==GIT_OUTPUT_PATH&&tab.path!==DINO_PATH)
+    const targets=tabsRef.current.filter(tab=>tab.loaded!==false&&tab.dirty!==true&&tab.diff===undefined&&tab.inlineEdit===undefined&&tab.tooLarge!==true&&tab.imageUrl===undefined&&tab.documentPreview===undefined&&tab.path!==GIT_GRAPH_PATH&&tab.path!==GIT_OUTPUT_PATH&&tab.path!==DINO_PATH)
     for(const tab of targets){
       void api<FileDocument>('fs.read',{sessionId,path:tab.path}).then(doc=>{
         if(doc.binary||doc.tooLarge)return
@@ -1154,6 +1174,8 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
           paths = message.paths ?? []
           reload = message.reload === true
         } catch { /* 忽略格式不对的消息 */ }
+        // 文件增删改都可能影响快速打开的清单：下次打开面板时重新取一份。
+        paletteFilesRef.current=undefined
         // reload（watcher 溢出，事件可能丢）：detail 必须是 undefined —— Tree 用
         // `paths === undefined` 判断「整体重扫」。CustomEvent 的 detail 即使显式传 undefined 也会被
         // WebIDL 转成 null，所以这里先不带 detail 构造，再 defineProperty 覆盖成真正的 undefined。
@@ -1177,7 +1199,7 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   /** 标签对应的绝对路径：语言服务用它做文档主键；虚拟标签/差异标签没有。 */
   const absoluteOfTab=(tab:Tab):string|undefined=>{
     if(tab.externalAbsolute!==undefined)return tab.externalAbsolute
-    if(workspace===undefined||tab.path.startsWith('diff:')||tab.path===GIT_GRAPH_PATH||tab.path===GIT_OUTPUT_PATH||tab.path===DINO_PATH)return undefined
+    if(workspace===undefined||tab.path.startsWith('diff:')||tab.path.startsWith('inline-edit:')||tab.path===GIT_GRAPH_PATH||tab.path===GIT_OUTPUT_PATH||tab.path===DINO_PATH)return undefined
     return workspaceAbsolutePath(workspace.cwd,tab.path)
   }
   /**
@@ -1194,6 +1216,63 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   }
   const openRef=useRef(open);openRef.current=open
   const openExternalRef=useRef(openExternal);openExternalRef.current=openExternal
+  /** 面板开关：命令模式不必等文件清单；文件模式由下面的 effect 按需拉取。 */
+  const openPalette=(mode:'file'|'command')=>setPaletteMode(mode)
+  /** 最近打开的文件：标签栏顺序取反（后打开的排前面），空查询时优先展示。 */
+  const paletteRecent=useMemo(()=>tabs.filter(tab=>!tab.path.startsWith('diff:')&&tab.path!==GIT_GRAPH_PATH&&tab.path!==GIT_OUTPUT_PATH&&tab.path!==DINO_PATH).map(tab=>tab.path).reverse(),[tabs])
+  const paletteFileEntries=useMemo(()=>paletteFiles===undefined?[]:filePaletteEntries(paletteFiles.files,paletteRecent),[paletteFiles,paletteRecent])
+  /**
+   * 文件清单：客户端与宿主各缓存一份。5 秒内重复打开面板（含关闭后立刻重开）不再发请求；
+   * 文件增删由文件监听清掉客户端缓存（见 ws 的 files.changed 处理），宿主侧 5 秒后自然过期。
+   */
+  useEffect(()=>{
+    if(paletteMode!=='file'||sessionId===undefined)return
+    const cached=paletteFilesRef.current
+    if(cached!==undefined&&Date.now()-cached.at<=5_000){setPaletteFiles({files:cached.files,truncated:cached.truncated});return}
+    let live=true
+    setPaletteLoading(true)
+    void api<{files:string[];truncated:boolean}>('fs.files',{sessionId}).then(value=>{paletteFilesRef.current={...value,at:Date.now()};if(live)setPaletteFiles(value)}).catch(error=>{if(live)setError(String(error))}).finally(()=>{if(live)setPaletteLoading(false)})
+    return()=>{live=false}
+  },[paletteMode,sessionId])
+  /**
+   * 面板的全局键位：Ctrl+P 快速打开、Ctrl+Shift+P 命令面板。
+   *
+   * 捕获阶段注册：Monaco 对这两个组合没有内置命令，但捕获能保证焦点在编辑器里时也先到工作台。
+   * 面板打开、或焦点在其它浮层输入框里时不响应 —— 否则会叠出第二层面板。
+   */
+  const openPaletteRef=useRef(openPalette);openPaletteRef.current=openPalette
+  useEffect(()=>{
+    if(!snapshot.visible)return
+    const onKey=(event:KeyboardEvent)=>{
+      if(event.isComposing||event.metaKey)return
+      if(event.target instanceof Element&&event.target.closest('.dvw-palette,.dvw-quickpick')!==null)return
+      const quick=bindingOf('view.quickOpen')
+      if(quick!==null&&bindingMatches(event,quick)){event.preventDefault();event.stopPropagation();openPaletteRef.current('file');return}
+      const commands=bindingOf('view.commandPalette')
+      if(commands!==null&&bindingMatches(event,commands)){event.preventDefault();event.stopPropagation();openPaletteRef.current('command')}
+    }
+    window.addEventListener('keydown',onKey,true)
+    return()=>window.removeEventListener('keydown',onKey,true)
+  },[snapshot.visible])
+  /**
+   * 编辑器内 AI 修改：把绝对路径换算成工作区相对路径后打开指令输入框。
+   * 工作区外的只读文件不参与（它们的编辑器也不会派发请求，这里再兜一层）。
+   */
+  const beginInlineEditRef=useRef<(snapshot:InlineEditSnapshot)=>void>(()=>{})
+  beginInlineEditRef.current=(snapshot:InlineEditSnapshot)=>{
+    const root=workspace?.cwd
+    const path=root===undefined?undefined:workspaceRelativeOf(root,snapshot.absolutePath)
+    if(path===undefined){setError('只能修改工作区内的文件');return}
+    setInlineEdit({snapshot,path})
+  }
+  useEffect(()=>{
+    const receive=(event:Event)=>{
+      const snapshot=(event as CustomEvent<InlineEditSnapshot>).detail
+      if(snapshot!==undefined)beginInlineEditRef.current(snapshot)
+    }
+    window.addEventListener(INLINE_EDIT_EVENT,receive)
+    return()=>window.removeEventListener(INLINE_EDIT_EVENT,receive)
+  },[])
   /**
    * 语言服务的跨组件事件：跳转、提示、问题面板开关、外部写盘后的重读、弹层请求。
    * 全部用事件而不是共享可变状态，动作层（actions.ts）因此可以完全不依赖 React。
@@ -1272,6 +1351,49 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const openDino=()=>{const key=DINO_PATH;setTabs(rows=>rows.some(row=>row.path===key)?rows:[...rows,{...unloadedTab(key),title:'小恐龙',pinned:true,loaded:true}]);setActive(key)}
   /** 提交差异在编辑器里开一个虚拟 diff 标签（Git 面板与提交图标签页的「打开差异」都走这里）。 */
   const openDiffTab=(path:string,diff:GitDiff,title?:string,sourcePath?:string)=>{const key=`diff:${path}`;setTabs(rows=>[...rows.filter(row=>row.path!==key),{path:key,title,content:diff.diff,draft:diff.diff,revision:'',size:diff.diff.length,binary:false,tooLarge:false,dirty:false,pinned:true,diff,diffMode:'inline',diffSourcePath:sourcePath}]);setActive(key)}
+  /**
+   * 编辑器内 AI 修改的 diff 标签。
+   *
+   * 与 Git 差异标签同一种「虚拟标签」：不读磁盘，内容就是提案里的原文档/改后文档。
+   * 同一文件再次生成时复用同一个标签（替换旧提案），不会在标签栏里堆一列 AI 修改。
+   */
+  const openInlineEditDiff=(proposal:InlineEditProposal)=>{
+    const key=`inline-edit:${proposal.path}`
+    setTabs(rows=>[...rows.filter(row=>row.path!==key),{...unloadedTab(key),title:`AI 修改：${baseName(proposal.path)}`,pinned:true,loaded:true,inlineEdit:proposal}])
+    setActive(key)
+  }
+  const dismissInlineEdit=(tabPath:string)=>applyClose([tabPath])
+  /**
+   * 接受 AI 修改。
+   *
+   * 应用前重新比对标签草稿与生成时的文档：范围是按旧文档算的，硬套会覆盖用户在这期间写的内容。
+   * 优先写回已挂载的编辑器（一次可撤销的编辑）；编辑器不在（用户切走了标签）时退回替换草稿。
+   */
+  const acceptInlineEdit=(tab:Tab)=>{
+    const proposal=tab.inlineEdit
+    if(proposal===undefined)return
+    const current=tabsRef.current.find(row=>row.path===proposal.path)
+    if(current===undefined){setError('原文件标签已关闭，无法应用修改');return}
+    if(current.draft!==proposal.originalDocument){setError('文件内容已变化，请重新生成修改');return}
+    if(!applyInlineEdit(proposal))setTabs(rows=>rows.map(row=>row.path===proposal.path?{...row,draft:proposal.modifiedDocument,dirty:proposal.modifiedDocument!==row.content}:row))
+    applyClose([tab.path])
+    setActive(proposal.path)
+    setError(undefined)
+  }
+  /**
+   * 「改动」面板请求打开某个文件的差异：面板只发路径与前后内容，标签的创建仍留给工作台，
+   * 这样审查差异与 Git 差异共用同一套 diff 标签与渲染。
+   */
+  const openDiffTabRef=useRef(openDiffTab);openDiffTabRef.current=openDiffTab
+  useEffect(()=>{
+    const open=(event:Event)=>{
+      const detail=(event as CustomEvent<{path:string;before:string;after:string}>).detail
+      if(detail===undefined)return
+      openDiffTabRef.current(detail.path,{diff:'',original:detail.before,modified:detail.after},`改动：${baseName(detail.path)}`,detail.path)
+    }
+    window.addEventListener(REVIEW_DIFF_EVENT,open)
+    return()=>window.removeEventListener(REVIEW_DIFF_EVENT,open)
+  },[])
   useEffect(()=>{const listener=(event:Event)=>void open((event as CustomEvent<string>).detail);window.addEventListener('dvw-open-workspace-path',listener);return()=>window.removeEventListener('dvw-open-workspace-path',listener)},[sessionId,tabs])
   /**
    * 保存一个脏标签，返回是否成功。
@@ -1389,8 +1511,8 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
    */
   const modelUriOf=(path:string)=>`${workspace?.cwd??''}/${path}`
   // 工作区还没解析出来（cwd 未知）时传 undefined：编辑器据此跳过回收判定，别把打开中的标签误回收。
-  const keepModelPaths=workspace===undefined?undefined:tabs.filter(tab=>!tab.path.startsWith('diff:')).map(tab=>modelUriOf(tab.path))
-  const dirtyModelPaths=workspace===undefined?undefined:tabs.filter(tab=>tab.dirty&&!tab.path.startsWith('diff:')).map(tab=>modelUriOf(tab.path))
+  const keepModelPaths=workspace===undefined?undefined:tabs.filter(tab=>!tab.path.startsWith('diff:')&&!tab.path.startsWith('inline-edit:')).map(tab=>modelUriOf(tab.path))
+  const dirtyModelPaths=workspace===undefined?undefined:tabs.filter(tab=>tab.dirty&&!tab.path.startsWith('diff:')&&!tab.path.startsWith('inline-edit:')).map(tab=>modelUriOf(tab.path))
   /**
    * 面板标题栏的视图标签切换。
    *
@@ -1412,6 +1534,53 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   /** 打开调试控制台：它没有活动栏入口，只能从这个菜单进入；已经是当前面板时不再 toggle（那会把它关掉）。 */
   const openDebugConsole=()=>{if(service.getSnapshot().bottomPanel!=='debug')service.toggleBottomPanel('debug')}
   const panelMenuEntries=panelMoreMenuItems({openDebugConsole})
+  /**
+   * 命令面板的数据源。
+   *
+   * 键位提示实时读注册表：用户在设置页改完键位，面板里显示的就是新键位（与执行路径同一份数据）。
+   * 命令直接复用工作台已有的处理函数（保存、关闭、切换视图、语言动作），不另开一套执行入口 ——
+   * 面板只是「键盘够得着的菜单」，行为必须与菜单/快捷键一致。
+   */
+  const paletteKeys=(id:CommandId):string[]|undefined=>{const binding=bindingOf(id);return binding===null?undefined:formatBinding(binding)}
+  const paletteCommands=():Array<{id:string;label:string;group:string;keys?:string[];run():void}>=>{
+    const rows:Array<{id:string;label:string;group:string;keys?:string[];run():void}>=[]
+    const add=(id:string,label:string,group:string,run:()=>void,keyId?:CommandId)=>rows.push({id,label,group,...(keyId===undefined?{}:{keys:paletteKeys(keyId)}),run})
+    // 文件与标签
+    add('editor.save','保存当前文件','文件',()=>{const tab=tabs.find(row=>row.path===active);if(tab!==undefined)void save(tab)},'editor.save')
+    add('editor.inlineEdit','用 AI 修改选中代码','编辑器',()=>{const entry=activeLanguageEditor();if(entry===undefined){setError('请先把光标放到编辑器里再执行');return}const snapshot=snapshotOfEditor(entry.editor,entry.path);if(snapshot===undefined){setError('当前编辑器没有可修改的文本');return}beginInlineEditRef.current(snapshot)},'editor.inlineEdit')
+    add('file.close','关闭当前标签','文件',()=>{if(active!==undefined)requestCloseTabs([active])})
+    add('file.closeAll','关闭全部标签','文件',closeAll)
+    // 视图
+    const showView=(view:WorkbenchView)=>{setPrimarySideVisible(true);service.show(view)}
+    add('view.explorer','资源管理器','视图',()=>showView('explorer'),'view.explorer')
+    add('view.search','搜索','视图',()=>showView('search'),'view.search')
+    add('view.git','源代码管理','视图',()=>showView('git'),'view.git')
+    add('view.chat','显示或隐藏 DSH 对话栏','视图',()=>setChatVisible(value=>!value),'view.chat')
+    add('view.problems','问题面板','视图',()=>{if(service.getPanels().some(panel=>panel.id==='problems'))service.toggleBottomPanel('problems')},'view.problems')
+    add('view.review','查看工作区改动','视图',()=>{if(service.getPanels().some(panel=>panel.id==='review'))service.toggleBottomPanel('review')})
+    add('view.debug','调试控制台','视图',openDebugConsole)
+    // 终端
+    add('terminal.toggle','显示或隐藏终端','终端',()=>toggleTerminal(service),'terminal.toggle')
+    add('terminal.new','新建终端','终端',()=>service.runCommand('terminal.new'),'terminal.new')
+    // 语言服务
+    add('language.definition','转到定义','语言服务',()=>void gotoDefinition(),'language.definition')
+    add('language.references','查找所有引用','语言服务',()=>void findReferences(),'language.references')
+    add('language.rename','重命名符号','语言服务',()=>void renameSymbol(),'language.rename')
+    add('language.documentSymbols','转到文件中的符号','语言服务',()=>void documentSymbols(),'language.documentSymbols')
+    add('language.workspaceSymbols','转到工作区中的符号','语言服务',workspaceSymbols,'language.workspaceSymbols')
+    add('language.quickFix','快速修复','语言服务',()=>void quickFix(),'language.quickFix')
+    // 其它
+    add('workbench.settings','在 DSH 设置中管理 AIDE 选项','其它',()=>service.openDshSettings())
+    add('workbench.hide','返回 DSH','其它',hideWorkbench)
+    return rows
+  }
+  const paletteCommandEntries=commandPaletteEntries(paletteCommands())
+  /** 选中面板里的一行：文件走同一个 open（预览标签语义），命令直接执行并关面板。 */
+  const pickPaletteEntry=(entry:PaletteEntry)=>{
+    setPaletteMode(undefined)
+    if(entry.kind==='file'){open(entry.id.slice('file:'.length));return}
+    paletteCommands().find(command=>command.id===entry.id)?.run()
+  }
   // 面板收起后菜单不该留在屏幕上：点活动栏按钮会走 pointerdown（由菜单自己关），
   // 键盘快捷键（Ctrl+` 等）收起面板则没有指针事件，只能在这里兜底。
   useEffect(()=>{if(snapshot.bottomPanel===undefined)setPanelMenu(undefined)},[snapshot.bottomPanel])
@@ -1419,7 +1588,7 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
   const selectHeading=(index:number)=>{if(activeTab===undefined)return;setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab));window.setTimeout(()=>window.dispatchEvent(new CustomEvent('dvw-markdown-heading',{detail:index})),50)}
   const suppressAttachmentDrop=(event:DragEvent)=>{if(!event.dataTransfer.types.includes('Files'))return;const target=event.target;const insideTree=target instanceof Element&&target.closest('.dvw-tree')!==null;if(!insideTree){event.preventDefault();event.stopPropagation()}}
   // 编辑器身份与大纲都在提前返回之前算：hooks 不能放在条件分支之后。
-  const markdown=activeTab!==undefined&&!activeTab.path.startsWith('diff:')&&/\.md$/i.test(activeTab.path)
+  const markdown=activeTab!==undefined&&activeTab.inlineEdit===undefined&&!activeTab.path.startsWith('diff:')&&/\.md$/i.test(activeTab.path)
   const diffMarkdown=activeTab?.diff!==undefined&&/\.md$/i.test(activeTab.diffSourcePath??'')
   const markdownPreview=markdown||(diffMarkdown&&activeTab?.preview===true)
   /**
@@ -1463,11 +1632,13 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
         {tabs.length>0&&<button className="dvw-icon dvw-close-all" title="全部关闭" aria-label="全部关闭" onClick={closeAll}><Icon name="close-all"/></button>}
         <button className="dvw-icon dvw-chat-action" data-active={chatVisible||undefined} title={chatVisible?'隐藏 DSH 对话栏 (Ctrl+Alt+B)':'显示 DSH 对话栏 (Ctrl+Alt+B)'} aria-pressed={chatVisible} onClick={()=>setChatVisible(value=>!value)}><Icon name={chatVisible?'layout-sidebar-right':'layout-sidebar-right-off'}/></button>
       </div>
-    </header><div className="dvw-editor" data-outline={markdownPreview&&outlineVisible&&headings.length>0}>{error&&<div className="dvw-error"><button className="dvw-icon" onClick={()=>setError(undefined)}><Icon name="close"/></button>{error}</div>}{markdownPreview&&outlineVisible&&headings.length>0&&<MarkdownOutline headings={headings} onClose={()=>setOutlineVisible(false)} onHeading={selectHeading}/>} {markdown&&activeTab&&<div className="dvw-editor-toolbar"><button className="dvw-icon dvw-outline-toggle" data-active={outlineVisible} title={outlineVisible?'关闭 Markdown 大纲':'显示 Markdown 大纲'} onClick={()=>setOutlineVisible(value=>!value)}><Icon name="list-tree"/></button><button className="dvw-mode-button" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="code"/> 源码</button><button className="dvw-mode-button" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{activeTab?.diff&&<div className="dvw-editor-toolbar dvw-diff-toolbar">{diffMarkdown&&<div className="dvw-diff-preview-switch"><button className="dvw-mode-button" data-diff-view="diff" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="diff"/> 差异</button><button className="dvw-mode-button" data-diff-view="preview" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{!activeTab.preview&&<><button className="dvw-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button className="dvw-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button></>}</div>}<div className="dvw-editor-body" data-toolbar={markdown||activeTab?.diff!==undefined}>{activeTab?.tooLarge===true?<div className="dvw-editor-prompt"><strong>文件超过 5 MiB，是否加载此文件？</strong><span>{activeTab.path}（{Math.round(activeTab.size/1048576)} MiB）</span><span className="dvw-editor-prompt-note">大文件会让编辑器变慢，也会占用较多内存。</span><button type="button" className="dvw-mode-button" onClick={()=>void forceLoad(activeTab.path)}>加载此文件</button></div>:activeTab===undefined?<div className="dvw-empty"><div><strong>DSH AIDE</strong><br/>从资源管理器或搜索结果打开文件<br/><button type="button" className="dvw-dino-teaser" onClick={()=>openDino()}>或者，你想试试玩谷歌小恐龙吗？</button></div></div>:activeTab.path===GIT_GRAPH_PATH?<GitGraphTab key={activeTab.graphAll===true?'all':'current'} sessionId={sessionId} initialAllBranches={activeTab.graphAll===true} onOpenDiff={openDiffTab}/>:activeTab.path===GIT_OUTPUT_PATH?<GitOutputTab/>:activeTab.path===DINO_PATH?<DinoGame theme={colorScheme}/>:activeTab.diff?diffMarkdown&&activeTab.preview?<MarkdownPreview source={activeTab.diff.modified} sessionId={sessionId} path={activeTab.diffSourcePath??''}/>:<MonacoDiffEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} original={activeTab.diff.original} modified={activeTab.diff.modified} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.imageUrl?<div className="dvw-image-preview"><img src={activeTab.imageUrl} alt={activeTab.path}/><span>{activeTab.path}</span></div>:activeTab.documentPreview&&activeTab.documentUrl?<DocumentPreview kind={activeTab.documentPreview} src={activeTab.documentUrl} path={activeTab.path}/>:markdown&&activeTab.preview?<MarkdownPreview source={activeTab.draft} sessionId={sessionId} path={activeTab.path}/>:activeTab.externalAbsolute!==undefined?<MonacoEditor uri={activeTab.externalAbsolute.replaceAll('\\','/')} absolutePath={activeTab.externalAbsolute} readOnly value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={()=>{/* 只读：不会产生草稿 */}} onSave={()=>{/* 只读文件没有保存语义 */}}/>:<MonacoEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} absolutePath={workspace===undefined?undefined:workspaceAbsolutePath(workspace.cwd,activeTab.path)} value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={draft=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,draft,dirty:draft!==tab.content}:tab))} onSave={()=>void save(activeTab)}/>}</div></div></main>
+    </header><div className="dvw-editor" data-outline={markdownPreview&&outlineVisible&&headings.length>0}>{error&&<div className="dvw-error"><button className="dvw-icon" onClick={()=>setError(undefined)}><Icon name="close"/></button>{error}</div>}{markdownPreview&&outlineVisible&&headings.length>0&&<MarkdownOutline headings={headings} onClose={()=>setOutlineVisible(false)} onHeading={selectHeading}/>} {markdown&&activeTab&&<div className="dvw-editor-toolbar"><button className="dvw-icon dvw-outline-toggle" data-active={outlineVisible} title={outlineVisible?'关闭 Markdown 大纲':'显示 Markdown 大纲'} onClick={()=>setOutlineVisible(value=>!value)}><Icon name="list-tree"/></button><button className="dvw-mode-button" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="code"/> 源码</button><button className="dvw-mode-button" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{activeTab?.inlineEdit&&<div className="dvw-editor-toolbar dvw-inline-edit-toolbar"><span className="dvw-inline-edit-title" title={activeTab.inlineEdit.instruction}>AI 建议：{activeTab.inlineEdit.instruction}</span><button type="button" className="dvw-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button type="button" className="dvw-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button><button type="button" className="dvw-mode-button" data-variant="reject" onClick={()=>dismissInlineEdit(activeTab.path)}>拒绝</button><button type="button" className="dvw-mode-button" data-variant="primary" onClick={()=>acceptInlineEdit(activeTab)}>接受</button></div>}{activeTab?.diff&&<div className="dvw-editor-toolbar dvw-diff-toolbar">{diffMarkdown&&<div className="dvw-diff-preview-switch"><button className="dvw-mode-button" data-diff-view="diff" data-active={!activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:false}:tab))}><Icon name="diff"/> 差异</button><button className="dvw-mode-button" data-diff-view="preview" data-active={activeTab.preview} onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,preview:true}:tab))}><Icon name="preview"/> 预览</button></div>}{!activeTab.preview&&<><button className="dvw-mode-button" data-mode="inline" data-active={activeTab.diffMode!=='split'} title="内联视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'inline'}:tab))}><Icon name="diff-single"/> 内联</button><button className="dvw-mode-button" data-mode="split" data-active={activeTab.diffMode==='split'} title="并排视图" onClick={()=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,diffMode:'split'}:tab))}><Icon name="diff-sidebyside"/> 并排</button></>}</div>}<div className="dvw-editor-body" data-toolbar={markdown||activeTab?.diff!==undefined||activeTab?.inlineEdit!==undefined}>{activeTab?.tooLarge===true?<div className="dvw-editor-prompt"><strong>文件超过 5 MiB，是否加载此文件？</strong><span>{activeTab.path}（{Math.round(activeTab.size/1048576)} MiB）</span><span className="dvw-editor-prompt-note">大文件会让编辑器变慢，也会占用较多内存。</span><button type="button" className="dvw-mode-button" onClick={()=>void forceLoad(activeTab.path)}>加载此文件</button></div>:activeTab===undefined?<div className="dvw-empty"><div><strong>DSH AIDE</strong><br/>从资源管理器或搜索结果打开文件<br/><button type="button" className="dvw-dino-teaser" onClick={()=>openDino()}>或者，你想试试玩谷歌小恐龙吗？</button></div></div>:activeTab.path===GIT_GRAPH_PATH?<GitGraphTab key={activeTab.graphAll===true?'all':'current'} sessionId={sessionId} initialAllBranches={activeTab.graphAll===true} onOpenDiff={openDiffTab}/>:activeTab.path===GIT_OUTPUT_PATH?<GitOutputTab/>:activeTab.path===DINO_PATH?<DinoGame theme={colorScheme}/>:activeTab.inlineEdit?<MonacoDiffEditor uri={`inline-edit:${activeTab.inlineEdit.path}`} original={activeTab.inlineEdit.originalDocument} modified={activeTab.inlineEdit.modifiedDocument} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.diff?diffMarkdown&&activeTab.preview?<MarkdownPreview source={activeTab.diff.modified} sessionId={sessionId} path={activeTab.diffSourcePath??''}/>:<MonacoDiffEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} original={activeTab.diff.original} modified={activeTab.diff.modified} mode={activeTab.diffMode??'inline'} theme={colorScheme}/>:activeTab.imageUrl?<div className="dvw-image-preview"><img src={activeTab.imageUrl} alt={activeTab.path}/><span>{activeTab.path}</span></div>:activeTab.documentPreview&&activeTab.documentUrl?<DocumentPreview kind={activeTab.documentPreview} src={activeTab.documentUrl} path={activeTab.path}/>:markdown&&activeTab.preview?<MarkdownPreview source={activeTab.draft} sessionId={sessionId} path={activeTab.path}/>:activeTab.externalAbsolute!==undefined?<MonacoEditor uri={activeTab.externalAbsolute.replaceAll('\\','/')} absolutePath={activeTab.externalAbsolute} readOnly value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={()=>{/* 只读：不会产生草稿 */}} onSave={()=>{/* 只读文件没有保存语义 */}}/>:<MonacoEditor uri={`${workspace?.cwd??''}/${activeTab.path}`} absolutePath={workspace===undefined?undefined:workspaceAbsolutePath(workspace.cwd,activeTab.path)} value={activeTab.draft} theme={colorScheme} sessionId={sessionId} line={activeTab.line} column={activeTab.column} keepModelPaths={keepModelPaths} dirtyModelPaths={dirtyModelPaths} onChange={draft=>setTabs(rows=>rows.map(tab=>tab.path===activeTab.path?{...tab,draft,dirty:draft!==tab.content}:tab))} onSave={()=>void save(activeTab)}/>}</div></div></main>
     {bottomPanelId!==undefined&&<section className="dvw-bottom" style={{height:`var(--dvw-bottom-height, ${BOTTOM_HEIGHT.default}px)`,...(snapshot.bottomPanel===undefined?{display:'none'}:{})}}><div style={{height:4,cursor:'ns-resize'}} onPointerDown={dragBottomPanel}/><div className="dvw-bottom-head"><div className="dvw-panel-tabs" role="tablist" aria-label="底部面板">{BOTTOM_PANEL_TABS.map(tab=>{const available=panels.some(panel=>panel.id===tab.id);const selected=snapshot.bottomPanel===tab.id;return <button key={tab.id} type="button" role="tab" aria-selected={selected} className="dvw-panel-tab" disabled={!available} title={available?tab.label:`${tab.label}适配器未安装`} onClick={()=>selectBottomPanel(tab.id)}>{tab.label}</button>})}</div><button ref={panelMenuButton} type="button" className="dvw-icon dvw-bottom-more" title="更多操作" aria-label="更多操作" aria-haspopup="menu" aria-expanded={panelMenu!==undefined} onClick={togglePanelMenu}><Icon name="ellipsis"/></button>{snapshot.bottomPanel==='terminal'&&sessionId!==undefined&&<TerminalNewButton sessionId={sessionId}/>}<button className="dvw-icon" style={{marginLeft:'auto'}} onClick={()=>service.toggleBottomPanel(snapshot.bottomPanel!)}><Icon name="close"/></button></div><div className="dvw-bottom-body">{Panel&&cwd&&<Panel sessionId={sessionId} cwd={cwd} visible={snapshot.bottomPanel!==undefined} colorScheme={colorScheme} activePath={bottomPanelFilePath(activeTab)}/>}</div></section>}
     {panelMenu!==undefined&&<ContextMenu position={panelMenu} label="面板操作" entries={panelMenuEntries} ignorePointerDown={panelMenuButton} onClose={()=>setPanelMenu(undefined)}/>}
     <footer className="dvw-status"><span><Icon name="git-branch"/> 工作区</span><span>{workspace?.cwd??cwd??''}</span>{activeTab?.external&&<span>磁盘文件已变化</span>}<button className="dvw-status-problem" title="显示或隐藏问题面板 (Ctrl+Shift+M)" onClick={()=>{if(service.getPanels().some(panel=>panel.id==='problems'))service.toggleBottomPanel('problems')}}><span data-severity="error" aria-label={`${diagnosticsSnapshot.errors} 个错误`}>✕ {diagnosticsSnapshot.errors}</span><span data-severity="warning" aria-label={`${diagnosticsSnapshot.warnings} 个警告`}>! {diagnosticsSnapshot.warnings}</span></button><span className="dvw-status-lang" title={languageStatusTitle}>{languageStatusLabel}</span><button className="dvw-icon" style={{color:'white',marginLeft:'auto'}} onClick={()=>hideWorkbench()}>返回 DSH</button></footer>
     {pendingClose!==undefined&&<ClosePrompt paths={pendingClose.dirtyPaths} onSave={()=>void resolvePendingClose('save')} onDiscard={()=>void resolvePendingClose('discard')} onCancel={()=>setPendingClose(undefined)}/>}
     {languagePicker!==undefined&&<LanguagePickerHost request={languagePicker} onClose={()=>setLanguagePicker(undefined)}/>}
+    {inlineEdit!==undefined&&sessionId!==undefined&&<InlineEditPrompt snapshot={inlineEdit.snapshot} path={inlineEdit.path} sessionId={sessionId} onClose={()=>setInlineEdit(undefined)} onProposal={proposal=>{setInlineEdit(undefined);openInlineEditDiff(proposal)}}/>}
+    {paletteMode!==undefined&&<CommandPalette initialMode={paletteMode} fileEntries={paletteFileEntries} commandEntries={paletteCommandEntries} fileLoading={paletteLoading} onPick={pickPaletteEntry} onClose={()=>setPaletteMode(undefined)}/>}
   </div>
 }

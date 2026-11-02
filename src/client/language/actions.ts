@@ -44,6 +44,16 @@ export function activeLanguageEditor(): { editor: MonacoEditor; path: string } |
   return undefined
 }
 
+/**
+ * 按绝对路径找已挂载的编辑器（不要求聚焦）。
+ *
+ * 应用 AI 修改时用户可能已经切到别的标签：这时「当前聚焦」找错了对象，按路径找才对得上。
+ */
+export function editorForPath(path: string): MonacoEditor | undefined {
+  for (const entry of editors) if (samePath(entry.path, path)) return entry.editor
+  return undefined
+}
+
 function positionOf(editorInstance: MonacoEditor): IPosition {
   return editorInstance.getPosition() ?? { lineNumber: 1, column: 1 }
 }

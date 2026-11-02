@@ -1,6 +1,7 @@
 
 import { PROBLEMS_STYLES } from './problemStyles.ts'
 import { OUTPUT_STYLES } from './outputStyles.ts'
+import { REVIEW_STYLES } from './reviewStyles.ts'
 
 const CSS = String.raw`
 @font-face{font-family:codicon;font-display:block;src:url('/dsh-vscode/codicons/codicon.ttf') format('truetype')}
@@ -285,6 +286,42 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 .dvw-quickpick-meta{flex:none;font-size:11px;color:var(--dvw-text-3)}
 .dvw-quickpick-empty{padding:8px;font-size:12px;color:var(--dvw-text-3);text-align:center}
 .dvw-quickpick-create{color:var(--dvw-accent)}
+/* 命令面板 / 快速打开：顶部居中、输入即过滤、键盘优先。与快速选择框同一套遮罩语义，但更宽：
+   右侧要同时放下路径灰字与键位提示。 */
+.dvw-palette-backdrop{position:fixed;z-index:220;inset:0;background:var(--dvw-mask)}
+.dvw-palette{position:absolute;top:10%;left:50%;transform:translateX(-50%);width:min(640px,92vw);max-height:min(70vh,560px);display:flex;flex-direction:column;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-md);background:var(--dvw-surface-2);box-shadow:var(--dvw-shadow-3);overflow:hidden}
+.dvw-palette-search{flex:none;display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;border-bottom:1px solid var(--dvw-border-soft)}
+.dvw-palette-search-icon{flex:none;color:var(--dvw-text-3)}
+.dvw-palette-input{flex:1;min-width:0;height:100%;border:0;background:transparent;color:var(--dvw-text);font:inherit;font-size:14px;outline:0}
+.dvw-palette-input::placeholder{color:var(--dvw-text-3)}
+.dvw-palette-list{display:flex;flex-direction:column;min-height:0;overflow:auto;padding:4px}
+.dvw-palette-group{padding:6px 8px 4px;font-size:11px;color:var(--dvw-text-3)}
+.dvw-palette-row{width:100%;min-height:28px;border:0;border-radius:var(--dvw-radius-xs);background:transparent;color:var(--dvw-text);display:flex;align-items:center;gap:8px;padding:0 8px;text-align:left;cursor:pointer}
+.dvw-palette-row:hover,.dvw-palette-row[data-active=true]{background:var(--dvw-active)}
+.dvw-palette-glyph{width:16px;height:16px;flex:none;color:var(--dvw-text-3);object-fit:contain}
+.dvw-palette-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dvw-palette-hit{background:transparent;color:var(--dvw-accent);font-weight:600}
+.dvw-palette-detail{flex:0 1 auto;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--dvw-text-3)}
+.dvw-palette-keys{flex:none;display:flex;gap:3px;margin-left:6px}
+.dvw-palette-keys kbd{min-width:18px;height:18px;display:inline-grid;place-items:center;padding:0 4px;border:1px solid var(--dvw-border);border-radius:3px;background:var(--dvw-surface-1);color:var(--dvw-text-2);font:10px/1 var(--dsw-font-family,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif)}
+.dvw-palette-empty{padding:18px 10px;text-align:center;font-size:12px;color:var(--dvw-text-3)}
+.dvw-palette-foot{flex:none;display:flex;align-items:center;gap:12px;height:28px;padding:0 12px;border-top:1px solid var(--dvw-border-soft);font-size:11px;color:var(--dvw-text-3)}
+.dvw-palette-foot-mode{margin-left:auto;color:var(--dvw-text-2)}
+/* 编辑器内 AI 修改：指令输入框 + diff 标签的接受/拒绝工具栏。 */
+.dvw-inline-edit-backdrop{position:fixed;z-index:220;inset:0;background:var(--dvw-mask)}
+.dvw-inline-edit{position:absolute;top:16%;left:50%;transform:translateX(-50%);width:min(560px,92vw);display:flex;flex-direction:column;gap:8px;padding:14px;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-md);background:var(--dvw-surface-2);box-shadow:var(--dvw-shadow-3)}
+.dvw-inline-edit-head{font-weight:600}
+.dvw-inline-edit-meta{font-size:11px;color:var(--dvw-text-3)}
+.dvw-inline-edit-preview{margin:0;max-height:120px;overflow:auto;padding:8px;border:1px solid var(--dvw-border-soft);border-radius:var(--dvw-radius-xs);background:var(--dvw-surface-1);color:var(--dvw-text-2);font:11.5px/1.45 var(--dsw-font-monospace,Consolas,monospace);white-space:pre-wrap}
+.dvw-inline-edit-input{width:100%;resize:vertical;min-height:64px;padding:8px;border:1px solid var(--dvw-border);border-radius:var(--dvw-radius-xs);background:var(--dvw-surface-1);color:var(--dvw-text);font:inherit;outline:0}
+.dvw-inline-edit-input:focus{border-color:var(--dvw-accent)}
+.dvw-inline-edit-error{padding:6px 8px;border-radius:var(--dvw-radius-xs);background:color-mix(in srgb,var(--dvw-error) 14%,transparent);color:var(--dvw-error);font-size:12px}
+.dvw-inline-edit-foot{display:flex;align-items:center;gap:6px}
+.dvw-inline-edit-hint{margin-right:auto;font-size:11px;color:var(--dvw-text-3)}
+.dvw-inline-edit-toolbar{gap:6px}
+.dvw-inline-edit-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dvw-text-2)}
+.dvw-mode-button[data-variant=primary]{border-color:var(--dvw-accent);background:color-mix(in srgb,var(--dvw-accent) 18%,transparent);color:var(--dvw-text)}
+.dvw-mode-button[data-variant=reject]:hover{color:var(--dvw-error)}
 
 
 /* ---- 提交图标签页 / Git 输出标签页 / 按目录分组 ---- */
@@ -400,6 +437,8 @@ padding-bottom:56px}.dvw-act{width:40px;height:40px;margin:4px 0;border:0;border
 ${PROBLEMS_STYLES}
 /* 输出面板样式同理，独立在 outputStyles.ts。 */
 ${OUTPUT_STYLES}
+/* 「改动」面板（工作区改动审查 + 检查点）独立在 reviewStyles.ts。 */
+${REVIEW_STYLES}
 `
 
 

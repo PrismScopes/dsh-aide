@@ -78,6 +78,71 @@ export async function listFiles(cwd: string, path: string): Promise<FileEntry[]>
   return rows.filter(row => row !== undefined).sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'directory' ? -1 : 1)
 }
 
+/**
+ * 快速打开用的全量文件清单：只回相对路径，不读内容。
+ *
+ * 为什么需要它：资源管理器的 `fs.list` 是逐目录懒加载的，快速打开却要一次比完整棵树 ——
+ * 否则用户得先手工展开目录才能搜到里面的文件。整棵树只在工作区里走一遍，结果按工作区缓存
+ * （短 TTL，文件增删最多晚 5 秒才反映到面板），十万级以内的目录遍历在几十到一百多毫秒量级，
+ * 且只发生在第一次打开面板时。
+ *
+ * 与补全索引共用同一套忽略目录：`node_modules` 这类目录既不该出现在快速打开里，也不该被扫描。
+ */
+export interface WorkspaceFileList { files: string[]; truncated: boolean; durationMs: number }
+
+const QUICK_OPEN_IGNORED_DIRS = new Set([
+  // 只排除依赖/缓存/工具产物：`lib`、`build`、`dist` 可能是真实源码目录，
+  // 与 VS Code 的快速打开一致，不按名字一刀切。
+  '.git', '.dsh-workbench', 'node_modules', 'bower_components', 'coverage', '.next', '.nuxt',
+  '.turbo', '.vite', '.venv', 'venv', '__pycache__', '.cache', 'target', 'vendor', '.idea',
+])
+/** 上限按「面板里真要能翻得动」定：再多也只是给人看的列表，不是索引。 */
+const FILE_LIST_LIMIT = 50_000
+/** 5 秒：拖文件、新建文件之后立刻再开面板时拿到的是新结果，又不会每按一次 Ctrl+P 就重扫。 */
+const FILE_LIST_TTL_MS = 5_000
+const fileListCache = new Map<string, { at: number; value: Promise<WorkspaceFileList> }>()
+
+export function listWorkspaceFiles(cwd: string, now: number = Date.now()): Promise<WorkspaceFileList> {
+  const key = normalize(cwd)
+  const cached = fileListCache.get(key)
+  if (cached !== undefined && now - cached.at <= FILE_LIST_TTL_MS) return cached.value
+  const value = walkWorkspaceFiles(key)
+  // 失败的 promise 不能留在缓存里：否则这个工作区之后的每次打开都会拿到同一个失败。
+  value.catch(() => { if (fileListCache.get(key)?.value === value) fileListCache.delete(key) })
+  fileListCache.set(key, { at: now, value })
+  return value
+}
+
+/** 测试用：清空缓存，避免上一个用例的结果被下一个用例拿到。 */
+export function resetWorkspaceFileListCache(): void { fileListCache.clear() }
+
+async function walkWorkspaceFiles(root: string): Promise<WorkspaceFileList> {
+  const started = Date.now()
+  const files: string[] = []
+  let truncated = false
+  const walk = async (directory: string, depth: number): Promise<void> => {
+    if (truncated) return
+    let entries
+    try { entries = await readdir(directory, { withFileTypes: true }) } catch { return /* 权限/竞态：跳过这一层 */ }
+    for (const entry of entries) {
+      if (truncated) return
+      if (entry.isDirectory()) {
+        // 深度上限防住符号链接成环与超深目录树；正常仓库层级远小于它。
+        if (depth >= 24 || QUICK_OPEN_IGNORED_DIRS.has(entry.name)) continue
+        await walk(join(directory, entry.name), depth + 1)
+        continue
+      }
+      if (!entry.isFile()) continue
+      files.push(relative(root, join(directory, entry.name)).split(sep).join('/'))
+      if (files.length >= FILE_LIST_LIMIT) { truncated = true; return }
+    }
+  }
+  await walk(root, 0)
+  // 排序让结果稳定：同样的工作区，两次打开的列表顺序一致，用户按字母也能找到。
+  files.sort()
+  return { files, truncated, durationMs: Date.now() - started }
+}
+
 export async function readDocument(cwd: string, path: string, force = false): Promise<FileDocument> {
   const { root, absolute } = await workspacePath(cwd, path)
   const info = await stat(absolute)
@@ -105,6 +170,19 @@ export async function saveDocument(cwd: string, path: string, content: string, e
   if (current.revision !== expected) throw new WorkbenchError('revision-conflict', 'file changed on disk; reload before saving', 409)
   await writeAtomic(absolute, content)
   return readDocument(cwd, path)
+}
+
+/**
+ * 审查还原/检查点回滚用：按内容写回工作区文件（`content` 为 null 时删除）。
+ *
+ * 不校验 revision：还原的目标是「回到某个已知内容」，磁盘上的当前内容正是要被覆盖的东西。
+ * 仍然走 workspacePath 的根目录约束，写入仍然原子 —— 半截文件比还原失败更难收拾。
+ */
+export async function restoreDocument(cwd: string, path: string, content: string | null): Promise<void> {
+  const { absolute } = await workspacePath(cwd, path, true)
+  if (content === null) { await rm(absolute, { force: true }); return }
+  await mkdir(dirname(absolute), { recursive: true })
+  await writeAtomic(absolute, content)
 }
 
 /**

@@ -24,9 +24,12 @@ export interface KeyBinding {
 /** 可改命令的 id。 */
 export type CommandId =
   | 'editor.save'
+  | 'editor.inlineEdit'
   | 'completion.acceptLine'
   | 'view.explorer'
   | 'view.search'
+  | 'view.quickOpen'
+  | 'view.commandPalette'
   | 'search.replace'
   | 'view.git'
   | 'search.next'
@@ -76,9 +79,12 @@ export const KEYBINDINGS_KEY = 'dvw:keybindings:v1'
  */
 export const BINDING_COMMANDS: readonly BindingCommand[] = [
   { id: 'editor.save', label: '保存当前文件', group: '编辑器', defaultBinding: { code: 'KeyS', ctrl: true } },
+  { id: 'editor.inlineEdit', label: '用 AI 修改选中代码', group: '编辑器', defaultBinding: { code: 'KeyK', ctrl: true } },
   { id: 'completion.acceptLine', label: '只采纳补全的下一行', group: '编辑器', defaultBinding: { code: 'ArrowRight', ctrl: true, alt: true } },
   { id: 'view.explorer', label: '资源管理器', group: '导航', defaultBinding: { code: 'KeyE', ctrl: true, shift: true } },
   { id: 'view.search', label: '搜索并聚焦输入框', group: '导航', defaultBinding: { code: 'KeyF', ctrl: true, shift: true } },
+  { id: 'view.quickOpen', label: '快速打开文件', group: '导航', defaultBinding: { code: 'KeyP', ctrl: true } },
+  { id: 'view.commandPalette', label: '显示所有命令', group: '导航', defaultBinding: { code: 'KeyP', ctrl: true, shift: true } },
   { id: 'search.replace', label: '替换文件', group: '导航', defaultBinding: { code: 'KeyH', ctrl: true, shift: true } },
   { id: 'view.git', label: '源代码管理', group: '导航', defaultBinding: { code: 'KeyG', ctrl: true, shift: true } },
   { id: 'search.next', label: '下一个搜索结果', group: '导航', defaultBinding: { code: 'F4' } },

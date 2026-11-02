@@ -184,8 +184,8 @@ describe('workbench settings page', () => {
     expect(dialog).toContain('class="dvw-set-subgroup">语言服务</h4>')
     expect(dialog).toContain('aria-label="修改快捷键：转到定义"')
     expect(dialog).toContain('快捷键（编辑器内置，不可修改）：按住 Ctrl 点击标识符转到定义')
-    // 20 条可改命令 + 10 条固定键位 = 30 行；分组顺序与 keybindings.ts 的定义顺序一致。
-    expect([...dialog.matchAll(/class="dvw-set-row dvw-set-shortcut"/g)]).toHaveLength(30)
+    // 23 条可改命令 + 10 条固定键位 = 33 行；分组顺序与 keybindings.ts 的定义顺序一致。
+    expect([...dialog.matchAll(/class="dvw-set-row dvw-set-shortcut"/g)]).toHaveLength(33)
     expect([...dialog.matchAll(/class="dvw-set-subgroup">([^<]+)<\/h4>/g)].map(match => match[1]))
       .toEqual(['编辑器', '导航', '终端', 'DSH', '语言服务', '编辑器内置（不可改）'])
   })
