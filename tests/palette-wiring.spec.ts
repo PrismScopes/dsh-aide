@@ -58,9 +58,17 @@ describe('palette appearance', () => {
   })
 
   it('does not draw a square focus ring inside the rounded palette', () => {
-    // 全局 input:focus-visible 会画方角蓝框；输入框自身必须显式关掉，焦点由面板边框表达。
+    // 全局 input:focus-visible 会画方角蓝框；输入框自身必须显式关掉，只留光标。
     expect(styles).toContain('.dvw-overlay .dvw-palette-input:focus-visible{outline:0}')
-    expect(styles).toContain('.dvw-palette:focus-within{border-color:')
     expect(styles).toContain('caret-color:var(--dvw-accent)')
+    // 焦点反馈不再额外画边框（用户明确只要光标）。
+    expect(styles).not.toContain('.dvw-palette:focus-within')
+  })
+
+  it('anchors the palette to the AIDE overlay instead of the browser viewport', () => {
+    // fixed + left:50% 会以浏览器视口居中，打开对话栏或缩放界面后中心会偏离编辑器区。
+    expect(styles).toContain('.dvw-palette-backdrop{position:absolute')
+    expect(styles).toContain('justify-content:center')
+    expect(styles).not.toContain('.dvw-palette{position:absolute;top:10%;left:50%')
   })
 })
