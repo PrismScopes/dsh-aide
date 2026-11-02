@@ -7,7 +7,8 @@
 <p align="center"><b>AIDE = AI + IDE</b>: a VS Code-style local development environment for DeepSeek Harness.</p>
 
 <p align="center">
-  <a href="https://github.com/PrismScopes/dsh-aide/releases"><img src="https://img.shields.io/github/v/release/PrismScopes/dsh-aide?label=release" alt="Release"></a>
+  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/v/dsh-aide?logo=npm&label=npm" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/dm/dsh-aide?label=downloads" alt="npm downloads"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/stargazers"><img src="https://img.shields.io/github/stars/PrismScopes/dsh-aide?logo=github&label=Stars" alt="GitHub stars"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/commits/main"><img src="https://img.shields.io/github/last-commit/PrismScopes/dsh-aide?label=last%20commit" alt="Last commit"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/blob/main/LICENSE"><img src="https://img.shields.io/github/license/PrismScopes/dsh-aide?label=license" alt="MIT license"></a>
@@ -137,12 +138,18 @@ DSH's Plugins → Discover tab does not scan npm or GitHub automatically; it onl
 https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/market/index.json
 ```
 
-Refresh, select AIDE, and install. The index version is pinned to a commit that already contains the built `lib/`, so installation does not compile on the user's machine.
+Refresh, select AIDE, and install. The index uses the prebuilt npm package, so installation does not compile on the user's machine.
+
+### Install from npm
+
+```bash
+dsh plugin --profile web add dsh-aide
+```
 
 ### Direct install (fallback)
 
 ```bash
-# Prebuilt tarball (recommended)
+# Prebuilt tarball
 dsh plugin --profile web add https://github.com/PrismScopes/dsh-aide/releases/download/v0.12.0/dsh-aide-0.12.0.tgz
 
 # Or a pinned Git commit
@@ -181,7 +188,7 @@ supported; every other feature keeps working.
 - **DSH Market**: [listed](https://dsh.market/?plugin=PrismScopes%2Fdsh-aide) — dsh.market (dshmarket) scans the `dsh-plugin` topic and curated lists daily.
 - **DSH Plugin Hub**: [listed](https://dsh-plugin.org/plugins/prismscopes/dsh-aide) — dsh-plugin.org community plugin market, auto-indexed from the topic, with a Chinese entry.
 - **DSH Profile Hub**: [listed](https://dshpluginhub.ai/en/plugins/dsh-aide) — dshpluginhub.ai, synced from npm hourly; also hosts shareable Profiles.
-- **npm**: `dsh-aide` — not published to npm yet; once published it feeds the indexes (`package.json` already declares the `dsh.bundle` manifest, exact SemVer, and `cordis.patch.yml`).
+- **npm**: `dsh-aide` — published; it also feeds the indexes (`package.json` declares the `dsh.bundle` manifest, exact SemVer, `engines.dsh`, and `cordis.patch.yml`).
 - **dsh.so market**: [submission page](https://www.dsh.so/zh/submit/) — paste the repository or package name for schema validation and a security scan.
 - **awesome-dsh-plugin**: [community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) — one `data/plugins/<owner>__<repo>.yml` per plugin.
 

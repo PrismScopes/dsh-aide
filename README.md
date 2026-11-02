@@ -7,7 +7,8 @@
 <p align="center"><b>AIDE = AI + IDE</b>：在 DeepSeek Harness 中叠加 VS Code 风格的本地开发环境。</p>
 
 <p align="center">
-  <a href="https://github.com/PrismScopes/dsh-aide/releases"><img src="https://img.shields.io/github/v/release/PrismScopes/dsh-aide?label=release" alt="Release"></a>
+  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/v/dsh-aide?logo=npm&label=npm" alt="npm 版本"></a>
+  <a href="https://www.npmjs.com/package/dsh-aide"><img src="https://img.shields.io/npm/dm/dsh-aide?label=downloads" alt="npm 月下载量"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/stargazers"><img src="https://img.shields.io/github/stars/PrismScopes/dsh-aide?logo=github&label=Stars" alt="GitHub Stars"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/commits/main"><img src="https://img.shields.io/github/last-commit/PrismScopes/dsh-aide?label=last%20commit" alt="最近提交"></a>
   <a href="https://github.com/PrismScopes/dsh-aide/blob/main/LICENSE"><img src="https://img.shields.io/github/license/PrismScopes/dsh-aide?label=license" alt="MIT 许可证"></a>
@@ -182,12 +183,18 @@ DSH 的「插件 → 发现」不自动扫描 npm 或 GitHub，只读取用户�
 https://raw.githubusercontent.com/PrismScopes/dsh-aide/main/market/index.json
 ```
 
-刷新后选择 AIDE 条目安装即可。索引里的版本固定到已包含预构建 `lib/` 的提交，安装时不需要现场编译。
+刷新后选择 AIDE 条目安装即可。索引使用 npm 的预构建包，安装时不需要现场编译。
+
+### 从 npm 安装
+
+```bash
+dsh plugin --profile web add dsh-aide
+```
 
 ### 直接安装（备用）
 
 ```bash
-# 预构建 tarball（推荐）
+# 预构建 tarball
 dsh plugin --profile web add https://github.com/PrismScopes/dsh-aide/releases/download/v0.12.0/dsh-aide-0.12.0.tgz
 
 # 或固定 Git 提交
@@ -226,7 +233,7 @@ AIDE 面向 DSH 社区发布，收录状态会持续更新：
 - **DSH Market**：[已收录](https://dsh.market/?plugin=PrismScopes%2Fdsh-aide) —— dsh.market（dshmarket）每日扫描 `dsh-plugin` topic 与社区精选列表。
 - **DSH Plugin Hub**：[已收录](https://dsh-plugin.org/zh/plugins/prismscopes/dsh-aide) —— dsh-plugin.org 社区插件市场，按 topic 自动收录，含中文条目。
 - **DSH Profile Hub**：[已收录](https://dshpluginhub.ai/zh/plugins/dsh-aide) —— dshpluginhub.ai，按 npm 小时级同步，也可浏览 / 分享 Profile。
-- **npm**：`dsh-aide` —— 尚未发布到 npm；通过上面的 GitHub 索引源 / Release tarball 安装（`package.json` 已声明 `dsh.bundle` 清单、`engines.dsh` 兼容范围与 `cordis.patch.yml`）。
+- **npm**：`dsh-aide` —— 已发布到 npm；也可通过上面的 GitHub 索引源 / Release tarball 安装（`package.json` 已声明 `dsh.bundle` 清单、`engines.dsh` 兼容范围与 `cordis.patch.yml`）。
 - **dsh.so 插件市场**：[提交入口](https://www.dsh.so/zh/submit/) —— 粘贴仓库或包名，做 schema 校验与安全扫描后进入市场。
 - **awesome-dsh-plugin**：[community catalog](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) —— 一个插件一个 `data/plugins/<owner>__<repo>.yml`，满足 `dsh.bundle` + topic 后提交 PR。
 
