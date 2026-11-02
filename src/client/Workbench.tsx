@@ -1376,7 +1376,12 @@ export function Workbench({ service, sessionId, cwd }: { service: VscodeWorkbenc
     if(proposal===undefined)return
     const current=tabsRef.current.find(row=>row.path===proposal.path)
     if(current===undefined){setError('原文件标签已关闭，无法应用修改');return}
-    if(current.draft!==proposal.originalDocument){setError('文件内容已变化，请重新生成修改');return}
+    if(current.draft!==proposal.originalDocument){
+      // 预览层盖着错误栏：关掉预览再报错，否则用户看不到任何提示。
+      setError('文件内容已变化，请重新生成修改')
+      dismissInlineEdit(tab.path)
+      return
+    }
     applyInlineEdit(proposal)
     setTabs(rows=>rows.map(row=>row.path===proposal.path?{...row,draft:proposal.modifiedDocument,dirty:proposal.modifiedDocument!==row.content,inlineEdit:undefined}:row))
     setError(undefined)
