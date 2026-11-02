@@ -13,7 +13,7 @@
  * 检查点写在 `.dsh-workbench/checkpoints.json`（该目录自带 `*` 的 .gitignore）：
  * 回滚前自动把当前状态再存一份，回滚本身因此可撤销。
  */
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join, normalize } from 'node:path'
 import { gitStatus, restoreDocument, run, workspacePath } from './host.ts'
 import type { FileDocument } from './types.ts'
@@ -27,8 +27,14 @@ const REVIEW_READ_BUDGET = 16_000_000
 /** 检查点保留条数与总字符上限（JSON 落盘，太大会拖慢每一次建立检查点）。 */
 const CHECKPOINT_LIMIT = 20
 const CHECKPOINT_TOTAL_CHARS = 8_000_000
+/** 整个检查点库的上限：20 个满额检查点会到 160MB，必须按总量再收一次。 */
+const CHECKPOINTS_STORE_CHARS = 16_000_000
 const CHECKPOINT_DIR = '.dsh-workbench'
 const CHECKPOINT_FILE = 'checkpoints.json'
+
+function checkpointChars(checkpoint: StoredCheckpoint): number {
+  return checkpoint.entries.reduce((total, entry) => total + (entry.content?.length ?? 0), 0)
+}
 
 interface BaselineEntry { content: string; at: number }
 const baselines = new Map<string, BaselineEntry>()
@@ -276,7 +282,18 @@ function isStoredCheckpoint(value: unknown): value is StoredCheckpoint {
 
 async function writeCheckpoints(cwd: string, list: StoredCheckpoint[]): Promise<void> {
   const kept = list.slice(0, CHECKPOINT_LIMIT)
-  await writeFile(await checkpointPath(cwd), JSON.stringify({ version: 1, checkpoints: kept }), 'utf8')
+  // 按总量从最旧的开始丢：宁可少留几个历史检查点，也不要把检查点文件写成几十 MB。
+  let total = kept.reduce((sum, checkpoint) => sum + checkpointChars(checkpoint), 0)
+  while (kept.length > 1 && total > CHECKPOINTS_STORE_CHARS) {
+    const removed = kept.pop()
+    if (removed === undefined) break
+    total -= checkpointChars(removed)
+  }
+  const target = await checkpointPath(cwd)
+  // 先写临时文件再 rename：中途崩溃不会留下半截 JSON，否则下次读取会把整个检查点库当成坏数据。
+  const temp = `${target}.${Math.random().toString(36).slice(2)}.tmp`
+  await writeFile(temp, JSON.stringify({ version: 1, checkpoints: kept }), 'utf8')
+  await rename(temp, target)
 }
 
 function summaryOf(checkpoint: StoredCheckpoint): CheckpointSummary {

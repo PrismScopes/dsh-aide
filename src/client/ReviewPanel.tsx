@@ -150,7 +150,7 @@ export function ReviewPanel(props: BottomPanelProps) {
         </div>)}
       </div>
       <aside className="dvw-review-side" aria-label="检查点">
-        <div className="dvw-review-section">检查点</div>
+        <div className="dvw-review-section" title="回滚只恢复检查点里记录的文件；检查点之后新建的文件会保留">检查点</div>
         {checkpoints.length === 0 && <div className="dvw-review-empty">还没有检查点。建立检查点后可以整体回滚。</div>}
         {checkpoints.map(item => <div className="dvw-review-checkpoint" key={item.id}>
           <div className="dvw-review-checkpoint-main">
