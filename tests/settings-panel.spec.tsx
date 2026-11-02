@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { InlineEditGroup, LanguageGroup, SettingsPanel, type WorkbenchSettingsState } from '../src/client/SettingsPanel.tsx'
+import { LanguageGroup, SettingsPanel, type WorkbenchSettingsState } from '../src/client/SettingsPanel.tsx'
 import { ShortcutDialogContent } from '../src/client/ShortcutSettings.tsx'
 import { PREFERENCES_KEY, preferences } from '../src/client/preferences.ts'
 import { keybindings } from '../src/client/keybindings.ts'
-import type { CompletionSettingsView, LanguageSettingsView, WorkbenchSettingsView } from '../src/client/api.ts'
+import type { LanguageSettingsView, WorkbenchSettingsView } from '../src/client/api.ts'
 
 /**
  * 设置页的结构测试。
@@ -30,18 +30,6 @@ const html = renderToStaticMarkup(<SettingsPanel/>)
  * 设置页的 GET 在 useEffect 里，SSR 不会执行；要测「宿主有响应时」的渲染，
  * 只能直接渲染分组并注入一份视图。形状与宿主 /dsh-vscode/settings 的响应一致。 */
 
-function completionView(): CompletionSettingsView {
-  return {
-    route: null,
-    fallback: false,
-    routeSource: 'default',
-    fallbackSource: 'default',
-    envRoute: null,
-    effective: { source: 'dsh', model: 'deepseek-chat' },
-    lastFailure: null,
-  }
-}
-
 function languageView(overrides: Partial<LanguageSettingsView> = {}): LanguageSettingsView {
   return {
     enabled: true,
@@ -58,14 +46,6 @@ function settingsState(view: WorkbenchSettingsView | undefined): WorkbenchSettin
     loadError: undefined,
     writeError: undefined,
     saving: false,
-    routeDraft: '',
-    setRouteDraft: () => {},
-    commitRoute: () => {},
-    modelRoutes: [],
-    modelDefault: undefined,
-    inlineRouteDraft: '',
-    setInlineRouteDraft: () => {},
-    commitInlineRoute: () => {},
     commit: () => {},
     commitLanguage: () => {},
   }
@@ -78,10 +58,10 @@ function languageGroupHtml(view?: WorkbenchSettingsView): string {
 describe('workbench settings page', () => {
   afterEach(() => { preferences.reset(); keybindings.resetAll() })
 
-  it('renders all eight groups in one scrolling page, in the agreed order, without the removed sub-menu', () => {
+  it('renders all seven groups in one scrolling page, in the agreed order, without the removed sub-menu', () => {
     const titles = [...html.matchAll(/class="dvw-set-group-title">([^<]+)<\/h3>/g)].map(match => match[1])
-    // AI 修改紧挨着 AI 补全：两者都是模型路由，放在一起便于对照；语言服务、命令面板与改动随后。
-    expect(titles).toEqual(['编辑器', 'AI 补全', 'AI 修改', '语言服务', '命令面板与改动', '终端', '快捷键', '关于与诊断'])
+    // 补全与 AI 修改都固定用 DSH 默认模型，模型路由分组已移除。
+    expect(titles).toEqual(['编辑器', 'AI 补全', '语言服务', '命令面板与改动', '终端', '快捷键', '关于与诊断'])
     // 左侧分类子菜单已经按用户反馈去掉：不再有 tablist / tab / tabpanel，也没有对应样式。
     expect(html).not.toContain('role="tablist"')
     expect(html).not.toContain('role="tabpanel"')
@@ -130,44 +110,15 @@ describe('workbench settings page', () => {
     expect(enabled).not.toMatch(/aria-label="增大自动保存延迟" disabled=""/)
   })
 
-  it('renders the completion group with the model route fallback text', () => {
+  it('renders the completion group without any model route or fallback control', () => {
     expect(html).toContain('AI 补全')
     expect(html).toContain('行内补全')
-    expect(html).toContain('模型路由')
-    expect(html).toContain('模型失败时回落本地兜底')
     expect(html).toContain('触发延迟')
-    // 模型列表还没拉到时也要在说明里写清「跟随 DSH 默认模型」，控件留了 datalist 的位置。
-    expect(html).toContain('跟随 DSH 默认模型')
-    expect(html).toContain('<datalist id="dvw-set-model-route-options">')
-    // 宿主设置未就绪：模型路由输入框禁用，但界面偏好（补全开关/延迟）照常可改。
-    expect(html).toMatch(/aria-label="补全模型路由"[^>]*disabled=""/)
+    expect(html).toContain('固定跟随 DSH 当前的默认模型')
+    expect(html).not.toContain('补全模型路由')
+    expect(html).not.toContain('模型失败时回落本地兜底')
+    expect(html).not.toContain('dvw-set-model-route-options')
     expect(html).toContain('aria-label="增大补全触发延迟"')
-  })
-
-  it('renders the AI edit route group with its own input and disabled fallback', () => {
-    expect(html).toContain('class="dvw-set-group-title">AI 修改</h3>')
-    // 与补全分开的独立输入框与候选列表，不和补全共用同一个 datalist id。
-    expect(html).toMatch(/aria-label="AI 修改模型路由"[^>]*disabled=""/)
-    expect(html).toContain('<datalist id="dvw-set-inline-route-options">')
-    expect(html).toContain('Ctrl+K 改写选中代码时使用的模型')
-  })
-
-  it('shows the saved AI edit route and env override once the host returns it', () => {
-    const view: WorkbenchSettingsView = {
-      completion: completionView(),
-      language: languageView(),
-      inlineEdit: { route: 'acme/strong', routeSource: 'file', envRoute: null },
-    }
-    const state = settingsState(view)
-    state.inlineRouteDraft = 'acme/strong'
-    const group = renderToStaticMarkup(<InlineEditGroup settings={state}/>)
-    expect(group).toContain('value="acme/strong"')
-    expect(group).not.toMatch(/aria-label="AI 修改模型路由"[^>]*disabled=""/)
-    expect(group).toContain('当前生效')
-    const overriddenState = settingsState({ ...view, inlineEdit: { route: 'env/model', routeSource: 'env', envRoute: 'env/model' } })
-    overriddenState.inlineRouteDraft = 'env/model'
-    const overridden = renderToStaticMarkup(<InlineEditGroup settings={overriddenState}/>)
-    expect(overridden).toContain('DSH_INLINE_EDIT_ROUTE=env/model')
   })
 
   it('renders the command palette and review preferences group', () => {
@@ -300,7 +251,7 @@ describe('language service group with a host view', () => {
       { id: 'pyright-failed', name: 'Pyright（启动失败）', languages: ['python'], state: 'failed', detail: '握手超时' },
       { id: 'json-ls', name: 'JSON 语言服务器', languages: ['json'], state: 'disabled' },
     ]
-    const group = languageGroupHtml({ completion: completionView(), language: languageView({ servers }) })
+    const group = languageGroupHtml({ language: languageView({ servers }) })
     // 状态 → 中文的映射一次钉死：宿主给的是稳定英文状态，界面不能漏翻。
     expect(group).toContain('typescript、javascript · 内置')
     expect(group).toContain('python · 已发现')
@@ -319,7 +270,7 @@ describe('language service group with a host view', () => {
   })
 
   it('disables the builtin switch while the master switch is off', () => {
-    const group = languageGroupHtml({ completion: completionView(), language: languageView({ enabled: false, builtinTypescript: false }) })
+    const group = languageGroupHtml({ language: languageView({ enabled: false, builtinTypescript: false }) })
     expect(group).toMatch(/aria-checked="false" aria-label="启用语言服务" class="dvw-set-switch">/)
     // 总开关关闭时内置 TypeScript 跟着禁用，但它自身的值仍然如实显示。
     expect(group).toMatch(/aria-checked="false" aria-label="内置 TypeScript" class="dvw-set-switch" disabled=""/)
@@ -327,7 +278,6 @@ describe('language service group with a host view', () => {
 
   it('warns that environment variables override the switches, naming the active ones', () => {
     const group = languageGroupHtml({
-      completion: completionView(),
       language: languageView({ env: { enabled: '0', builtinTypescript: '1' } }),
     })
     expect(group).toContain('环境变量覆盖')
@@ -338,10 +288,10 @@ describe('language service group with a host view', () => {
 
   it('reports a missing DSH_HOME and an unavailable host view in the fallback copy', () => {
     // 宿主给了响应但数据目录未知：file 缺省时说明只能改环境变量。
-    const noHome = languageGroupHtml({ completion: completionView(), language: languageView({ file: undefined }) })
+    const noHome = languageGroupHtml({ language: languageView({ file: undefined }) })
     expect(noHome).toContain('未设置 DSH_HOME')
     // 旧宿主没有 language 字段：明确提示更新，而不是给一堆看起来能点却没反应的开关。
-    const noLanguage = languageGroupHtml({ completion: completionView() } as WorkbenchSettingsView)
+    const noLanguage = languageGroupHtml({} as WorkbenchSettingsView)
     expect(noLanguage).toContain('语言服务设置不可用')
   })
 })

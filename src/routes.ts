@@ -10,9 +10,7 @@ import { readGrammar } from './assets.ts'
 import { authorize, readBinaryBody, readBody, send, sendError, WorkbenchError } from './wire.ts'
 import { localBase } from './terminal.ts'
 import { dispatch } from './api.ts'
-import { completionTelemetry, registerCompletionRoute, resolveProvider } from './completion/register.ts'
-import { completionSettingsView, SettingsWriteError, updateCompletionSettings, updateInlineEditSettings, inlineEditSettingsView, type CompletionSettingsPatch, type InlineEditSettingsPatch } from './completion/settings.ts'
-import { registerModelRoutes } from './modelRoutes.ts'
+import { registerCompletionRoute } from './completion/register.ts'
 import { languageHostFor } from './language/host.ts'
 import { LanguageSettingsWriteError, updateLanguageSettings } from './language/settings.ts'
 
@@ -83,18 +81,7 @@ export class WorkspaceWatch {
  * resolveProvider，所以这里显示的就是请求真正会用的那条路。
  */
 function settingsPayload(ctx: HostContext): unknown {
-  const resolved = resolveProvider(ctx)
-  return {
-    completion: {
-      ...completionSettingsView(),
-      effective: { source: resolved.source, model: resolved.model },
-      lastFailure: completionTelemetry.failure() ?? null,
-    },
-    // 语言服务的开关与服务器发现结果：设置页在「还没选会话」时也要能显示。
-    language: languageHostFor(ctx).settingsView(),
-    // 编辑器内 AI 修改的模型路由（与补全分开，编辑用默认模型、补全可用更小的模型）。
-    inlineEdit: inlineEditSettingsView(),
-  }
+  return { language: languageHostFor(ctx).settingsView() }
 }
 
 interface ImmutableAssetFile { path: string; type: string }
@@ -227,16 +214,7 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         if (req.method === 'GET') return send(res, 200, { ok: true, value: settingsPayload(ctx) })
         if (req.method !== 'POST') return send(res, 405, { ok: false, error: { code: 'method', message: 'GET or POST required' } })
         const body = await readBody(req)
-        const patch: CompletionSettingsPatch = {}
-        if ('route' in body) {
-          if (body['route'] !== null && typeof body['route'] !== 'string') throw new WorkbenchError('invalid-argument', 'route must be a string or null')
-          patch.route = body['route'] as string | null
-        }
-        if ('fallback' in body) {
-          if (typeof body['fallback'] !== 'boolean') throw new WorkbenchError('invalid-argument', 'fallback must be a boolean')
-          patch.fallback = body['fallback']
-        }
-        // 语言服务开关：与补全设置共用同一个设置端点，但落在不同的设置文件里。
+        // 这个端点只剩语言服务开关；补全与 AI 修改都固定使用 DSH 默认模型，没有可写的路由。
         let languagePatch: { enabled?: boolean; builtinTypescript?: boolean } | undefined
         if ('language' in body) {
           const raw = body['language']
@@ -252,20 +230,6 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
             languagePatch.builtinTypescript = language['builtinTypescript']
           }
         }
-        // AI 修改的模型路由：与补全同一个设置端点与文件，但收在 inlineEdit 这个 bucket 下。
-        let inlineEditPatch: InlineEditSettingsPatch | undefined
-        if ('inlineEdit' in body) {
-          const raw = body['inlineEdit']
-          if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new WorkbenchError('invalid-argument', 'inlineEdit must be an object')
-          const inlineEdit = raw as Record<string, unknown>
-          if ('route' in inlineEdit) {
-            const route = inlineEdit['route']
-            if (route !== null && typeof route !== 'string') throw new WorkbenchError('invalid-argument', 'inlineEdit.route must be a string or null')
-            inlineEditPatch = { route: route as string | null }
-          }
-        }
-        updateCompletionSettings(patch)
-        if (inlineEditPatch !== undefined) updateInlineEditSettings(inlineEditPatch)
         if (languagePatch !== undefined) {
           const host = languageHostFor(ctx)
           try {
@@ -279,16 +243,10 @@ export function registerWorkbenchRoutes(ctx: HostContext): void {
         }
         send(res, 200, { ok: true, value: settingsPayload(ctx) })
       } catch (error) {
-        // 路由格式写错、数据目录不可写：这两类要给出可读的提示，而不是一句 internal。
-        if (error instanceof SettingsWriteError) send(res, 400, { ok: false, error: { code: 'settings-write', message: error.message } })
-        else sendError(res, error)
+        sendError(res, error)
       }
     },
   }), 'dsh-aide: settings')
-
-  // 设置页的模型下拉：DSH 当前可用的 provider/model。和 settings 一样不依赖会话，
-  // 也不受补全设置影响 —— 它读的是 DSH 自己的模型目录（llm / agentDefaultModel 服务）。
-  registerModelRoutes(ctx, { authorize: (req, res) => authorize(req, res, ctx.connection), send, sendError })
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/dsh-vscode/upload', handler: async (req, res) => {

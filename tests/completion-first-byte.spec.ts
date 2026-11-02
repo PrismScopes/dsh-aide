@@ -51,10 +51,20 @@ const requestBody = (): Record<string, unknown> => ({
 const setupRoute = (cwd: string, body: Record<string, unknown> = requestBody()) => {
   let handler: ((request: unknown, response: unknown) => void | Promise<void>) | undefined
   const ctx = {
-    get: (name: string) =>
-      name === 'sessions'
-        ? { get: () => ({ header: { cwd } }), list: () => [] }
-        : undefined,
+    // 补全固定使用 DSH 默认模型：给一个最小模型服务，测试只关心「索引未就绪时响应头是否先发」。
+    get: (name: string) => {
+      if (name === 'llm') return {
+        prepareCall: async () => ({
+          config: { provider: 'test', model: 'test' },
+          stream: async function* () {
+            yield { type: 'finish', reason: { kind: 'stop' } }
+          },
+        }),
+      }
+      if (name === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'test', model: 'test' }) }
+      if (name === 'sessions') return { get: () => ({ header: { cwd } }), list: () => [] }
+      return undefined
+    },
     effect: (run: () => void) => run(),
     webServer: {
       register: (route: { handler: (request: unknown, response: unknown) => void | Promise<void> }) => {
@@ -78,19 +88,12 @@ const waitMicrotasks = async (times = 10): Promise<void> => {
   for (let index = 0; index < times; index++) await Promise.resolve()
 }
 
-const savedEnv = { provider: process.env['DSH_COMPLETION_PROVIDER'], endpoint: process.env['DSH_COMPLETION_ENDPOINT'] }
 afterEach(() => {
   vi.restoreAllMocks()
-  if (savedEnv.provider === undefined) delete process.env['DSH_COMPLETION_PROVIDER']
-  else process.env['DSH_COMPLETION_PROVIDER'] = savedEnv.provider
-  if (savedEnv.endpoint === undefined) delete process.env['DSH_COMPLETION_ENDPOINT']
-  else process.env['DSH_COMPLETION_ENDPOINT'] = savedEnv.endpoint
 })
 
 describe('completion first byte is not blocked by index preparation', () => {
   it('flushes SSE headers while the workspace index is still loading, then keeps the event sequence', async () => {
-    process.env['DSH_COMPLETION_PROVIDER'] = 'local'
-    delete process.env['DSH_COMPLETION_ENDPOINT']
     const cwd = `C:\\tmp\\dvw-first-byte-${randomUUID()}`
     const gate = deferred<WorkspaceIndex>()
     const openSpy = vi.spyOn(WorkspaceIndex, 'open').mockImplementation(() => gate.promise)
@@ -116,7 +119,7 @@ describe('completion first byte is not blocked by index preparation', () => {
     gate.resolve(fakeIndex)
     await completion
 
-    // 索引就绪后事件顺序与内容不变：meta → done（本地 provider 无候选）。
+    // 索引就绪后事件顺序与内容不变：meta → done（测试模型没有产出候选）。
     const parsed = parseSse(response.chunks.join(''))
     expect(parsed.events.map((event: CompletionEvent) => event.type)).toEqual(['meta', 'done'])
     expect(response.end).toHaveBeenCalledTimes(1)
@@ -126,8 +129,6 @@ describe('completion first byte is not blocked by index preparation', () => {
   })
 
   it('still finishes the SSE stream when index preparation fails', async () => {
-    process.env['DSH_COMPLETION_PROVIDER'] = 'local'
-    delete process.env['DSH_COMPLETION_ENDPOINT']
     const cwd = `C:\\tmp\\dvw-first-byte-${randomUUID()}`
     const gate = deferred<WorkspaceIndex>()
     const openSpy = vi.spyOn(WorkspaceIndex, 'open').mockImplementation(() => gate.promise)

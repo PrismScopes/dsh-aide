@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { CompletionSettingsView, LanguageSettingsPatch, LanguageSettingsView, WorkbenchSettingsPatch, WorkbenchSettingsView } from './api.ts'
+import type { LanguageSettingsPatch, LanguageSettingsView, WorkbenchSettingsPatch, WorkbenchSettingsView } from './api.ts'
 import { ApiError, readWorkbenchSettings, writeWorkbenchSettings } from './api.ts'
 import { ShortcutSettingsRow } from './ShortcutSettings.tsx'
-import { listDshModelRoutes } from './dshModels.ts'
 import type { AutoSaveMode, CursorStyle, RenderWhitespace, WordWrapMode } from './preferences.ts'
 import {
   EDITOR_LINE_HEIGHT_MIN,
@@ -27,9 +26,9 @@ import { WORKBENCH_VERSION } from './version.ts'
  *
  * 落点分两类，别混淆：
  *   1. 界面偏好（localStorage，见 preferences.ts）—— 编辑器排版、补全开关与触发节奏、终端字号、
- *      语言服务的悬停提示与补全；
- *   2. 宿主设置（DSH 数据目录，读写 /dsh-vscode/settings）—— 补全模型路由与失败兜底、
- *      语言服务总开关与内置 TypeScript。
+ *      语言服务的悬停提示与补全、命令面板与改动面板行为；
+ *   2. 宿主设置（DSH 数据目录，读写 /dsh-vscode/settings）—— 只剩语言服务总开关与内置 TypeScript。
+ * 补全与 AI 修改固定使用 DSH 当前的默认模型：插件不提供模型路由，也没有失败兜底。
  * 宿主不可用时第二类只读不可改，第一类照常可用 —— 界面偏好不能因为宿主端点缺失就一起废掉。
  *
  * 早前那五项布局设置（左右栏与状态栏显隐、两个栏宽）不再出现：它们在工作台里本来就有就地控件
@@ -120,48 +119,6 @@ function Info({ label, value, tone }: { label: string; value: string; tone?: 'wa
 function messageOf(error: unknown): string {
   if (error instanceof ApiError) return error.message
   return error instanceof Error ? error.message : String(error)
-}
-
-/** 补全这一步实际由谁执行 —— 与宿主 resolveProvider 的三种来源对应。 */
-function effectiveLabel(completion: CompletionSettingsView): string {
-  if (completion.effective.source === 'local') return '本地兜底 · 当前没有可用的模型服务'
-  if (completion.effective.source === 'http') return `自定义端点 · ${completion.effective.model}`
-  return `DSH 模型 · ${completion.effective.model}`
-}
-
-/** DSH 模型路由列表的展示形态。dshModels.ts 是队友的模块，这里不依赖它的类型形状：
- *  宿主版本不同时 routes 可能是字符串数组，也可能是 { route, label } 对象数组。 */
-interface ModelChoice { route: string; label: string }
-
-function modelChoiceOf(entry: unknown): ModelChoice | undefined {
-  if (typeof entry === 'string') return entry.trim() === '' ? undefined : { route: entry, label: entry }
-  if (typeof entry !== 'object' || entry === null) return undefined
-  const record = entry as Record<string, unknown>
-  const route = record['route']
-  if (typeof route !== 'string' || route.trim() === '') return undefined
-  const label = record['label']
-  return { route, label: typeof label === 'string' && label.trim() !== '' ? label : route }
-}
-
-function normalizeModelRoutes(value: unknown): ModelChoice[] {
-  if (typeof value !== 'object' || value === null) return []
-  const routes = (value as { routes?: unknown }).routes
-  if (!Array.isArray(routes)) return []
-  const choices: ModelChoice[] = []
-  const seen = new Set<string>()
-  for (const entry of routes) {
-    const choice = modelChoiceOf(entry)
-    if (choice === undefined || seen.has(choice.route)) continue
-    seen.add(choice.route)
-    choices.push(choice)
-  }
-  return choices
-}
-
-function normalizeModelDefault(value: unknown): string | undefined {
-  if (typeof value !== 'object' || value === null) return undefined
-  const fallback = (value as { default?: unknown }).default
-  return typeof fallback === 'string' && fallback.trim() !== '' ? fallback : undefined
 }
 
 /** 自动换行模式。 */
@@ -262,7 +219,7 @@ function EditorGroup({ preferences }: { preferences: ReturnType<typeof usePrefer
 }
 
 /**
- * 宿主设置（模型路由 / 失败兜底 / 语言服务开关）的读写状态。
+ * 宿主设置（语言服务开关）的读写状态。
  *
  * 放在页面的顶层而不是各分组里：AI 补全分组要改它，语言服务分组要改它，关于分组要展示其中的
  * 设置文件路径，几处各拉一次会出现「同一份数据两个 owner」，写完一处另一处还是旧值。
@@ -272,15 +229,6 @@ export interface WorkbenchSettingsState {
   loadError: string | undefined
   writeError: string | undefined
   saving: boolean
-  routeDraft: string
-  setRouteDraft(value: string): void
-  commitRoute(): void
-  /** DSH 公布的模型路由；AI 补全与 AI 修改两个分组共用同一份，避免各拉一次。 */
-  modelRoutes: readonly ModelChoice[]
-  modelDefault: string | undefined
-  inlineRouteDraft: string
-  setInlineRouteDraft(value: string): void
-  commitInlineRoute(): void
   commit(patch: WorkbenchSettingsPatch): void
   /**
    * 写语言服务开关。宿主设置不可用（没读到、或旧宿主没返回 language 字段）时直接忽略：
@@ -295,34 +243,12 @@ function useWorkbenchSettings(): WorkbenchSettingsState {
   const [loadError, setLoadError] = useState<string>()
   const [writeError, setWriteError] = useState<string>()
   const [saving, setSaving] = useState(false)
-  // 输入框的草稿：失焦或回车才提交，不为每一个按键写一次盘。
-  const [routeDraft, setRouteDraft] = useState('')
-  const [inlineRouteDraft, setInlineRouteDraft] = useState('')
-  const [modelRoutes, setModelRoutes] = useState<readonly ModelChoice[]>([])
-  const [modelDefault, setModelDefault] = useState<string>()
 
   useEffect(() => {
     const controller = new AbortController()
     void readWorkbenchSettings(controller.signal)
-      .then(next => {
-        if (controller.signal.aborted) return
-        setView(next); setRouteDraft(next.completion.route ?? ''); setInlineRouteDraft(next.inlineEdit?.route ?? ''); setLoadError(undefined)
-      })
+      .then(next => { if (!controller.signal.aborted) { setView(next); setLoadError(undefined) } })
       .catch(error => { if (!controller.signal.aborted) setLoadError(messageOf(error)) })
-    return () => controller.abort()
-  }, [])
-
-  // 模型列表来自 DSH 宿主；接口约定「失败返回空」但仍加 catch —— 旧宿主没有这个端点时
-  // listDshModelRoutes 可能直接拒绝，绝不能让设置页跟着白屏。
-  useEffect(() => {
-    const controller = new AbortController()
-    void listDshModelRoutes(controller.signal)
-      .then(result => {
-        if (controller.signal.aborted) return
-        setModelRoutes(normalizeModelRoutes(result))
-        setModelDefault(normalizeModelDefault(result))
-      })
-      .catch(() => { if (!controller.signal.aborted) setModelRoutes([]) })
     return () => controller.abort()
   }, [])
 
@@ -330,82 +256,32 @@ function useWorkbenchSettings(): WorkbenchSettingsState {
     setSaving(true); setWriteError(undefined)
     try {
       const next = await writeWorkbenchSettings(patch)
-      setView(next); setRouteDraft(next.completion.route ?? ''); setInlineRouteDraft(next.inlineEdit?.route ?? '')
+      setView(next)
     } catch (error) { setWriteError(messageOf(error)) }
     finally { setSaving(false) }
-  }
-  const commitRoute = () => {
-    if (saving || view === undefined) return
-    const stored = view.completion.route ?? ''
-    const next = routeDraft.trim()
-    if (next === stored) return
-    void commit({ route: next === '' ? null : next })
-  }
-  const commitInlineRoute = () => {
-    if (saving || view?.inlineEdit === undefined) return
-    const stored = view.inlineEdit.route ?? ''
-    const next = inlineRouteDraft.trim()
-    if (next === stored) return
-    void commit({ inlineEdit: { route: next === '' ? null : next } })
   }
   const commitLanguage = (patch: LanguageSettingsPatch): void => {
     if (saving || view?.language === undefined) return
     void commit({ language: patch })
   }
 
-  return { view, loadError, writeError, saving, routeDraft, setRouteDraft, commitRoute, modelRoutes, modelDefault, inlineRouteDraft, setInlineRouteDraft, commitInlineRoute, commit, commitLanguage }
+  return { view, loadError, writeError, saving, commit, commitLanguage }
 }
 
-/** AI 补全分组：客户端开关与节奏走 preferences；模型路由与兜底走宿主设置文件。 */
+/** AI 补全分组：只有客户端开关与节奏；模型固定跟随 DSH 当前的默认模型。 */
 function CompletionGroup({ preferences, settings }: { preferences: ReturnType<typeof usePreferences>; settings: WorkbenchSettingsState }) {
-  const { view, loadError, writeError, saving, routeDraft, setRouteDraft, commitRoute, commit, modelRoutes, modelDefault } = settings
-  // 模型列表由 useWorkbenchSettings 统一拉取：AI 修改分组也用同一份，打开设置页只请求一次。
-  const completionUnavailable = view === undefined
-  const completion = view?.completion
-  const routeDescription = modelRoutes.length > 0
-    ? `从 DSH 已配置的模型里选，也可以直接手填 provider/model。留空则跟随 DSH 默认模型${modelDefault === undefined ? '' : `（当前为 ${modelDefault}）`}；回车或离开输入框即保存。`
-    : '跟随 DSH 默认模型。暂时读不到 DSH 的模型列表，可以直接手填 provider/model；留空表示跟随 DSH 默认模型。回车或离开输入框即保存。'
-
   return <section className="dvw-set-group">
     <h3 className="dvw-set-group-title">AI 补全</h3>
     <Row title="行内补全" description="在编辑器里按 Tab 采纳建议。关闭后一次模型请求都不会发出，也不会有幻影文本。">
       <Switch checked={preferences.completionEnabled} label="行内补全" onChange={value => updatePreferences({ completionEnabled: value })}/>
     </Row>
-    <div className="dvw-set-row dvw-set-row-stack">
-      <div className="dvw-set-text">
-        <span className="dvw-set-title">模型路由</span>
-        <span className="dvw-set-desc">{routeDescription}</span>
-      </div>
-      <input className="dvw-set-input" list="dvw-set-model-route-options" value={routeDraft} placeholder="跟随 DSH 默认模型" aria-label="补全模型路由" spellCheck={false} autoComplete="off"
-        disabled={completionUnavailable || saving}
-        onChange={event => setRouteDraft(event.target.value)}
-        onBlur={commitRoute}
-        onKeyDown={event => {
-          if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); return }
-          if (event.key !== 'Escape') return
-          event.preventDefault()
-          setRouteDraft(completion?.route ?? '')
-          event.currentTarget.blur()
-        }}/>
-      <datalist id="dvw-set-model-route-options">
-        {modelRoutes.map(choice => <option key={choice.route} value={choice.route}>{choice.label}</option>)}
-      </datalist>
-    </div>
-    <Row title="模型失败时回落本地兜底" description="默认关闭：故障应当显式暴露。开启后仍有候选可用，回落原因会写进补全诊断日志。">
-      <Switch checked={completion?.fallback ?? false} label="模型失败时回落本地兜底" disabled={completionUnavailable || saving}
-        onChange={value => { if (!saving && completion !== undefined) void commit({ fallback: value }) }}/>
-    </Row>
     <Row title="触发延迟" description="停止输入多久后才向模型请求补全。调大可减少不必要的调用，但补全出现得更晚。">
       <Stepper value={preferences.completionDebounceMs} min={PREFERENCE_LIMITS.completionDebounceMs.min} max={PREFERENCE_LIMITS.completionDebounceMs.max} step={10} unit="ms" label="补全触发延迟"
         onChange={value => updatePreferences({ completionDebounceMs: value })}/>
     </Row>
-    {completion !== undefined && <Info label="当前生效" value={effectiveLabel(completion)}/>}
-    {completion?.routeSource === 'env' && <Info tone="warn" label="环境变量覆盖" value={`DSH_COMPLETION_ROUTE=${completion.envRoute ?? ''} 正在覆盖这里设置的路由`}/>}
-    {completion?.fallbackSource === 'env' && <Info tone="warn" label="环境变量覆盖" value="DSH_COMPLETION_FALLBACK=local 正在覆盖这里的兜底开关"/>}
-    {completion?.lastFailure != null && <Info tone="warn" label="最近一次失败" value={completion.lastFailure}/>}
-    {completion?.file !== undefined && <Info label="设置文件" value={completion.file}/>}
-    {loadError !== undefined && <Info tone="warn" label="宿主设置不可用" value={`${loadError}。模型路由与兜底需要重启 DSH 后才能在这里改，界面偏好不受影响。`}/>}
-    {writeError !== undefined && <Info tone="error" label="保存失败" value={writeError}/>}
+    <Info label="模型" value="固定跟随 DSH 当前的默认模型。模型不可用时请直接在 DSH 设置里更换，插件不做兜底。"/>
+    {settings.loadError !== undefined && <Info tone="warn" label="宿主设置不可用" value={`${settings.loadError}。界面偏好不受影响。`}/>}
+    {settings.writeError !== undefined && <Info tone="error" label="保存失败" value={settings.writeError}/>}
   </section>
 }
 
@@ -434,47 +310,6 @@ function languageEnvOverrideText(env: NonNullable<LanguageSettingsView['env']>):
   // env 存在但三个字段都空（未来宿主可能的形状）：仍要提示优先级，避免拼出双空格。
   const source = names.length === 0 ? '环境变量' : `环境变量 ${names.join('、')}`
   return `${source} 正在覆盖此处的开关；要在这里改，先取消对应的环境变量再重启 DSH。`
-}
-
-/**
- * AI 修改分组：编辑器里 Ctrl+K 改写选中代码时使用的模型路由。
- *
- * 与补全分开：编辑是重任务，通常跟随默认模型或选更强的模型；补全才可能需要更小更快的模型。
- * 值只写宿主设置文件（与补全同一个文件，收在 inlineEdit 这个 bucket 下）。
- */
-export function InlineEditGroup({ settings }: { settings: WorkbenchSettingsState }) {
-  const { view, saving, modelRoutes, modelDefault, inlineRouteDraft, setInlineRouteDraft, commitInlineRoute } = settings
-  const inline = view?.inlineEdit
-  const unavailable = view === undefined || inline === undefined
-  const description = modelRoutes.length > 0
-    ? `Ctrl+K 改写选中代码时使用的模型。留空跟随 DSH 默认模型${modelDefault === undefined ? '' : `（当前为 ${modelDefault}）`}；回车或离开输入框即保存。`
-    : 'Ctrl+K 改写选中代码时使用的模型。留空跟随 DSH 默认模型；暂时读不到 DSH 的模型列表，可以直接手填 provider/model。'
-  return <section className="dvw-set-group">
-    <h3 className="dvw-set-group-title">AI 修改</h3>
-    <div className="dvw-set-row dvw-set-row-stack">
-      <div className="dvw-set-text">
-        <span className="dvw-set-title">模型路由</span>
-        <span className="dvw-set-desc">{description}</span>
-      </div>
-      <input className="dvw-set-input" list="dvw-set-inline-route-options" value={inlineRouteDraft} placeholder="跟随 DSH 默认模型" aria-label="AI 修改模型路由" spellCheck={false} autoComplete="off"
-        disabled={unavailable || saving}
-        onChange={event => setInlineRouteDraft(event.target.value)}
-        onBlur={commitInlineRoute}
-        onKeyDown={event => {
-          if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); return }
-          if (event.key !== 'Escape') return
-          event.preventDefault()
-          setInlineRouteDraft(inline?.route ?? '')
-          event.currentTarget.blur()
-        }}/>
-      <datalist id="dvw-set-inline-route-options">
-        {modelRoutes.map(choice => <option key={choice.route} value={choice.route}>{choice.label}</option>)}
-      </datalist>
-    </div>
-    {inline !== undefined && <Info label="当前生效" value={inline.route ?? `跟随 DSH 默认模型${modelDefault === undefined ? '' : `（${modelDefault}）`}`}/>}
-    {inline?.routeSource === 'env' && <Info tone="warn" label="环境变量覆盖" value={`DSH_INLINE_EDIT_ROUTE=${inline.envRoute ?? ''} 正在覆盖这里设置的路由`}/>}
-    {view === undefined && <Info tone="warn" label="宿主设置不可用" value="旧宿主没有返回 AI 修改设置；升级或重启 DSH 后这里才能保存。"/>}
-  </section>
 }
 
 /**
@@ -584,7 +419,7 @@ function AboutGroup({ settingsFile }: { settingsFile?: string }) {
     <div className="dvw-set-row">
       <div className="dvw-set-text">
         <span className="dvw-set-title">恢复默认设置</span>
-        <span className="dvw-set-desc">把这一页保存的界面偏好全部写回默认值。宿主侧的模型路由与兜底不在其中，不会被改动。</span>
+        <span className="dvw-set-desc">把这一页保存的界面偏好全部写回默认值。语言服务的宿主开关不在其中，不会被改动。</span>
       </div>
       <div className="dvw-set-control">
         {resetArmed
@@ -608,18 +443,17 @@ function AboutGroup({ settingsFile }: { settingsFile?: string }) {
  */
 export function SettingsPanel() {
   const preferences = usePreferences()
-  // 宿主设置只有一个 owner：AI 补全分组负责改，关于分组负责展示其中的设置文件路径。
+  // 宿主设置只有一个 owner：语言服务分组负责改，关于分组负责展示其中的设置文件路径。
   const settings = useWorkbenchSettings()
 
   return <div className="dvw-settings-panel">
     <EditorGroup preferences={preferences}/>
     <CompletionGroup preferences={preferences} settings={settings}/>
-    <InlineEditGroup settings={settings}/>
     <LanguageGroup preferences={preferences} settings={settings}/>
     <CommandsGroup preferences={preferences}/>
     <TerminalGroup preferences={preferences}/>
     <ShortcutsGroup/>
-    <AboutGroup settingsFile={settings.view?.completion.file}/>
-    <p className="dvw-set-footnote">界面偏好保存在本机浏览器里；补全与 AI 修改的模型路由、语言服务的开关写入 DSH 数据目录，重启后仍然有效。</p>
+    <AboutGroup settingsFile={settings.view?.language.file}/>
+    <p className="dvw-set-footnote">界面偏好保存在本机浏览器里；语言服务的开关写入 DSH 数据目录，重启后仍然有效。补全与 AI 修改固定使用 DSH 当前的默认模型。</p>
   </div>
 }

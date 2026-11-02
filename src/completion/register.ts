@@ -6,13 +6,11 @@
  */
 import { normalize } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { fallbackProvider } from './fallback.ts'
-import { completionSettings } from './settings.ts'
 import { DEFAULT_COMPLETION_PARAMS, type CompletionParams } from './params.ts'
 import { encodeSseEvent, type CompletionEvent, type CompletionRequest } from './protocol.ts'
 import { dshProvider, type DshDefaultModelService, type DshLlmService } from './dshProvider.ts'
-import { httpProvider, localProvider, type CompletionProvider } from './provider.ts'
-import { DEFAULT_PROMPT_PROFILE, INSTRUCTION_PROMPT_PROFILE, type PromptProfile } from './prompt.ts'
+import type { CompletionProvider } from './provider.ts'
+import { INSTRUCTION_PROMPT_PROFILE, type PromptProfile } from './prompt.ts'
 import { runCompletion } from './service.ts'
 import { noteCompletion } from './diagnostics.ts'
 import { WorkspaceIndex } from './workspaceIndex.ts'
@@ -28,65 +26,22 @@ interface CompletionContextLike { get(name: string): unknown }
 interface ResolvedCompletionProvider {
   provider: CompletionProvider
   profile: PromptProfile
-  source: 'dsh' | 'local' | 'http'
+  source: 'dsh'
   model: string
 }
 
 /**
- * 选提供方。三种来源，按部署条件挑一条：
+ * 补全只有一条路：DSH 的当前默认模型。
  *
- * - 显式要求本地兜底（`DSH_COMPLETION_PROVIDER=local`）：离线、或单独验证客户端链路时用；
- * - 配了 OpenAI 兼容的补全端点（`DSH_COMPLETION_ENDPOINT`）：不依赖 DSH 账号的部署通道；
- * - 其余情况用 DSH 的模型服务。模型不可用时**不会**自动回落：要回落得显式开启（见 settings.ts）。
- *
- * DSH 的两个服务分别探测而不是一起判：缺 `agentDefaultModel` 时仍可让配置里指定模型，
- * 但缺 `llm` 就一定没有模型可用。
+ * 自定义路由、OpenAI 兼容端点与本地兜底都已移除。模型不可用时直接报错，由用户自己在 DSH 里换模型；
+ * 插件不做静默降级，也不猜哪条路还能用。
  */
 export function resolveProvider(ctx: CompletionContextLike, params: CompletionParams = DEFAULT_COMPLETION_PARAMS): ResolvedCompletionProvider {
   const llm = ctx.get('llm') as DshLlmService | undefined
   const defaultModel = ctx.get('agentDefaultModel') as DshDefaultModelService | undefined
-  // 允许显式指定本地兜底：离线、或要单独验证客户端链路时用；不设则优先用 DSH 的模型服务。
-  const forced = (globalThis.process?.env?.['DSH_COMPLETION_PROVIDER'] ?? '').toLowerCase()
-  const endpoint = globalThis.process?.env?.['DSH_COMPLETION_ENDPOINT'] ?? ''
-  if (forced !== 'local' && endpoint !== '') {
-    const model = globalThis.process?.env?.['DSH_COMPLETION_MODEL'] ?? 'completion'
-    const apiKey = globalThis.process?.env?.['DSH_COMPLETION_API_KEY']
-    const provider = httpProvider({
-      baseUrl: endpoint, model,
-      ...(apiKey === undefined || apiKey === '' ? {} : { apiKey }),
-    })
-    return { provider, profile: DEFAULT_PROMPT_PROFILE, source: 'http', model }
-  }
-  if (forced !== 'local' && llm !== undefined && defaultModel !== undefined) {
-    // 补全可以单独指定路由：用户可能希望对话与补全用不同的模型（例如补全走免费模型）。
-    // 不设时沿用应用的默认模型，行为与以前一致。设置来源见 completion/settings.ts。
-    const route = completionSettings().route
-    const provider = dshProvider(llm, defaultModel, {
-      params,
-      ...(route === undefined ? {} : { selection: route }),
-    })
-    return { provider: withFallback(provider, params), profile: INSTRUCTION_PROMPT_PROFILE, source: 'dsh', model: provider.model }
-  }
-  const provider = localProvider(params)
-  return { provider, profile: DEFAULT_PROMPT_PROFILE, source: 'local', model: provider.model }
-}
-
-/**
- * 按开关决定是否给模型提供方套上本地兜底。
- *
- * 默认关闭：模型故障应当显式暴露，而不是悄悄降级。开启后编辑器至少还有候选可用，
- * 同时每次回落都写宿主日志 —— 回落不等于把故障藏起来。
- */
-function withFallback(provider: CompletionProvider, params: CompletionParams): CompletionProvider {
-  if (!completionSettings().fallback) return provider
-  return fallbackProvider(provider, localProvider(params), {
-    onFallback: failure => {
-      const line = `模型调用失败，已回落本地兜底：${failure.provider}/${failure.model} · ${failure.error}`
-      console.warn(`[dsh-completion] ${line}`)
-      // 同时写进诊断文件：应用侧的启动窗口日志拿不到，而这句失败原因是唯一的线索。
-      noteCompletion(line)
-    },
-  })
+  if (llm === undefined || defaultModel === undefined) throw new Error('DSH 模型服务不可用，请先在 DSH 设置里选择模型')
+  const provider = dshProvider(llm, defaultModel, { params })
+  return { provider, profile: INSTRUCTION_PROMPT_PROFILE, source: 'dsh', model: provider.model }
 }
 
 
@@ -153,7 +108,12 @@ export function registerCompletionRoute(ctx: CompletionContextLike & { effect(ru
       const experiment = groupForSession(request.sessionId)
       const tuned = { ...request, environment: { ...request.environment, experiment } }
       const groupParams = paramsForGroup(experiment)
-      const resolved = resolveProvider(ctx, groupParams)
+      let resolved: ResolvedCompletionProvider
+      try {
+        resolved = resolveProvider(ctx, groupParams)
+      } catch (error) {
+        return helpers.send(res, 503, { ok: false, error: { code: 'ai-unavailable', message: error instanceof Error ? error.message : String(error) } })
+      }
       const cwd = safeCwd(ctx, helpers, request.sessionId)
       // 解析不到工作区就不注入片段（文档把检索列为可选上下文来源）：好过索引错目录。
       //

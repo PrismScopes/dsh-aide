@@ -9,7 +9,6 @@
  */
 import type { HostContext } from './context.ts'
 import type { DshDefaultModelService, DshLlmService, DshStreamChunk } from './completion/dshProvider.ts'
-import { completionSettings } from './completion/settings.ts'
 import { WorkbenchError } from './wire.ts'
 
 /** 客户端提交的一次编辑请求。上下文由客户端按行裁剪，宿主不再读盘。 */
@@ -108,34 +107,18 @@ export function readInlineEditInput(body: Record<string, unknown>): InlineEditIn
 /**
  * 调用模型完成一次编辑。
  *
- * 模型选择：优先用补全设置里显式配置的路由（用户可能把补全指到更快/更便宜的模型），
- * 否则用 DSH 的当前默认模型 —— 编辑是重任务，默认模型更合适。
+ * 只用 DSH 当前的默认模型：不读任何路由设置，也不做兜底。模型不可用时直接报错，
+ * 由用户自己在 DSH 里换模型。
  */
 export async function runInlineEdit(ctx: HostContext, sessionId: string, input: InlineEditInput, signal?: AbortSignal): Promise<InlineEditResult> {
   if (input.selectionText.trim() === '') throw new WorkbenchError('invalid-argument', 'selection is empty', 400)
   if (input.instruction.trim() === '') throw new WorkbenchError('invalid-argument', 'instruction is empty', 400)
   const llm = ctx.get('llm') as DshLlmService | undefined
   const defaultModel = ctx.get('agentDefaultModel') as DshDefaultModelService | undefined
-  if (llm === undefined) throw new WorkbenchError('ai-unavailable', 'DSH 模型服务不可用', 503)
-  let provider: string
-  let model: string
-  // 路由优先级：设置页里给 AI 修改单独选的路由 > DSH 默认模型 > 补全路由。
-  // 编辑是重任务，默认模型才是合理落点；补全路由可能指向小模型，只作为最后的兜底。
-  const settings = completionSettings()
-  const configured = settings.inlineEditRoute
-  const selection = defaultModel?.currentSelection()
-  if (configured !== undefined) {
-    provider = configured.provider
-    model = configured.model
-  } else if (selection !== undefined) {
-    provider = selection.provider
-    model = selection.model
-  } else if (settings.route !== undefined) {
-    provider = settings.route.provider
-    model = settings.route.model
-  } else {
-    throw new WorkbenchError('ai-unavailable', 'DSH 没有可用的默认模型', 503)
-  }
+  if (llm === undefined || defaultModel === undefined) throw new WorkbenchError('ai-unavailable', 'DSH 模型服务不可用，请先在 DSH 设置里选择模型', 503)
+  const selection = defaultModel.currentSelection()
+  const provider = selection.provider
+  const model = selection.model
 
   const prompt = buildInlineEditPrompt(input)
   const request = {

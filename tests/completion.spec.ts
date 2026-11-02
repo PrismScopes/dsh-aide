@@ -30,7 +30,6 @@ import {
   truncateAfterCompleteBlock,
   type FilterState,
 } from '../src/completion/filter.ts'
-import { identifiersStartingWith, localCompletion, trailingIdentifier, unclosedClosers } from '../src/completion/provider.ts'
 import { buildQuery } from '../src/completion/retrieval.ts'
 import { runCompletion } from '../src/completion/service.ts'
 
@@ -420,33 +419,6 @@ describe('candidate post-processing', () => {
     // 这条用来钉住管线顺序 —— 去重复尾符号必须排在闭合括号之后，否则补上去的括号会重复。
     const call = 'const x = f(a'
     expect(postProcess('f(a, b(', baseState({ document: call + ')', offset: call.length }))).toBe(', b(')
-  })
-})
-
-describe('local fallback provider', () => {
-  it('finds the identifier fragment under the cursor', () => {
-    expect(trailingIdentifier('const value = useSt')).toBe('useSt')
-    expect(trailingIdentifier('const value = ')).toBe('')
-  })
-
-  it('suggests identifiers that start with the fragment', () => {
-    const document = 'useState(0)\nuseSyncExternalStore(subscribe, read)\nother()'
-    // 排序依据是离光标的距离：光标在文档开头时 useState 更近。
-    expect(identifiersStartingWith(document, 'useS', 0, 2)).toEqual(['useState', 'useSyncExternalStore'])
-    expect(identifiersStartingWith(document, 'useS', document.length, 2)).toEqual(['useSyncExternalStore', 'useState'])
-  })
-
-  it('completes the current word first and closes brackets second', () => {
-    expect(localCompletion('const a = useSt', 'ate(0)', DEFAULT_COMPLETION_PARAMS)).toEqual(['ate'])
-    expect(localCompletion('call(', ')', DEFAULT_COMPLETION_PARAMS)).toEqual([')'])
-    expect(localCompletion('', '', DEFAULT_COMPLETION_PARAMS)).toEqual([])
-  })
-
-  it('tracks unclosed brackets and quotes', () => {
-    expect(unclosedClosers('call(')).toEqual([')'])
-    expect(unclosedClosers('call(a')).toEqual([')'])
-    expect(unclosedClosers('const s = "abc')).toEqual(['"'])
-    expect(unclosedClosers('call(a)')).toEqual([])
   })
 })
 

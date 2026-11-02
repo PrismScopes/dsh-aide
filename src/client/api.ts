@@ -98,26 +98,6 @@ async function readAnswer<T>(response: Response): Promise<T> {
   return answer.value as T
 }
 
-/** 补全这一步最终由谁执行：DSH 的模型服务、本地兜底，还是自定义的 OpenAI 兼容端点。 */
-type CompletionSource = 'dsh' | 'local' | 'http'
-/** 某一项设置的来源，同时也是优先级：环境变量 > 设置文件 > 插件配置 > 默认值。 */
-export type SettingsSource = 'env' | 'file' | 'config' | 'default'
-
-export interface CompletionSettingsView {
-  /** 模型路由（`provider/model`）；null 表示跟随应用的默认模型。 */
-  route: string | null
-  fallback: boolean
-  routeSource: SettingsSource
-  fallbackSource: SettingsSource
-  /** 设置文件路径；宿主数据目录未知时缺省。 */
-  file?: string
-  envRoute: string | null
-  /** 请求实际会走的那条路（由宿主的 resolveProvider 给出）。 */
-  effective: { source: CompletionSource; model: string }
-  /** 最近一次补全失败原因，没有失败时为 null。 */
-  lastFailure: string | null
-}
-
 /**
  * 设置页能改的语言服务开关。
  *
@@ -130,18 +110,8 @@ export interface LanguageSettingsPatch {
 }
 
 export interface WorkbenchSettingsView {
-  completion: CompletionSettingsView
   /** 语言服务总开关、内置 TypeScript 开关、设置文件位置与已发现的服务器。 */
   language: LanguageSettingsView
-  /** 编辑器内 AI 修改的模型路由；旧宿主不返回时缺省，设置页据此禁用该控件。 */
-  inlineEdit?: InlineEditSettingsView
-}
-
-/** 编辑器内 AI 修改（Ctrl+K）的模型路由视图。 */
-export interface InlineEditSettingsView {
-  route: string | null
-  routeSource: SettingsSource
-  envRoute: string | null
 }
 
 /**
@@ -152,11 +122,7 @@ export interface InlineEditSettingsView {
  * 补全写 AIDE 设置文件，语言服务写 `%DSH_HOME%/language.settings.json`。
  */
 export interface WorkbenchSettingsPatch {
-  route?: string | null
-  fallback?: boolean
   language?: LanguageSettingsPatch
-  /** AI 修改的模型路由；`route: null` 表示回到跟随默认模型。 */
-  inlineEdit?: { route?: string | null }
 }
 
 /** 与 api() 不同：设置页不依赖会话，所以走独立的端点，也不做会话未就绪的重试。 */

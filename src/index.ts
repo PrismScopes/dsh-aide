@@ -2,7 +2,6 @@
 import type { HostContext } from './context.ts'
 import { registerWorkbenchRoutes } from './routes.ts'
 import { installTerminal } from './terminal.ts'
-import { setCompletionSettings } from './completion/settings.ts'
 import { setLanguageSettings } from './language/settings.ts'
 
 export { WorkbenchError } from './wire.ts'
@@ -23,14 +22,10 @@ export const inject = ['webServer', 'sessions', 'connection', 'workingDirectory'
  * 只做两件事：装终端、注册路由。方法分发在 api.ts，路由与文件监听在 routes.ts ——
  * 原先三者都挤在本文件里（177 行），拆开后入口只剩接线，改路由不必再翻一整个文件。
  *
- * 第二个参数是插件配置（profile 里那一行的 config，或应用里的插件设置）：补全用哪条模型路由、
- * 模型失败要不要回落本地兜底，都从这里读；环境变量可以覆盖它，便于排查与临时试验。
+ * 第二个参数是插件配置（profile 里那一行的 config，或应用里的插件设置）：语言服务的覆盖
+ * 从这里读；补全只使用 DSH 当前的默认模型，没有路由与兜底配置。
  */
 export function apply(ctx: HostContext, config?: unknown): void {
-  // 加载器未必把配置作为第二个参数传进来（实测如此）：再从 cordis 的 entry 选项里取一次。
-  // 两处都取不到就按没有配置处理，行为与之前一致。
-  setCompletionSettings(config ?? entryConfig(ctx))
-  // 语言服务与补全共用插件配置入口；设置文件与环境变量的覆盖在各自模块里处理。
   setLanguageSettings(config ?? entryConfig(ctx))
   installTerminal(ctx)
   registerWorkbenchRoutes(ctx)

@@ -77,8 +77,6 @@ const COMPLETION_STOP = ['\n\n\n', '<CURSOR>']
 
 interface DshProviderOptions {
   params?: CompletionParams
-  /** 覆盖默认模型选择；不传就用 DSH 的当前默认模型。 */
-  selection?: DshModelSelection
   maxTokens?: number
 }
 
@@ -117,12 +115,11 @@ async function openStream(llm: DshLlmService, request: DshGenerateOptions, chose
 export function dshProvider(llm: DshLlmService, defaultModel: DshDefaultModelService, options: DshProviderOptions = {}): CompletionProvider {
   const params = options.params ?? DEFAULT_COMPLETION_PARAMS
   const maxTokens = options.maxTokens ?? 256
-  const selection = (): DshModelSelection => options.selection ?? defaultModel.currentSelection()
   return {
     id: 'dsh',
-    get model(): string { return selection().model },
+    get model(): string { return defaultModel.currentSelection().model },
     async *complete(prompt: string, context: ProviderContext): AsyncIterable<CompletionChunk> {
-      const chosen = selection()
+      const chosen = defaultModel.currentSelection()
       const request: DshGenerateOptions = {
         provider: chosen.provider,
         model: chosen.model,
